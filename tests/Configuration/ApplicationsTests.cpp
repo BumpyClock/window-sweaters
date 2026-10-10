@@ -8,6 +8,7 @@
 #include <bit>
 #include <condition_variable>
 #include <fstream>
+#include <set>
 #include <mutex>
 
 using namespace window_sweaters;
@@ -342,14 +343,21 @@ void PresentationContracts() {
         Check(settings::ReconcileApplicationItems(order,many).empty(),"Matching identity order skips reconciliation");
         std::reverse(many.begin(),many.end()); many.erase(many.begin()+10); many.push_back(rowA);
         auto plan=settings::ReconcileApplicationItems(order,many);
+        std::set<applications::AppIdentity> rowControls;
+        for (auto const& row:many) rowControls.insert(row.identity);
+        for (auto const& identity:order) rowControls.insert(identity);
         for (auto edit:plan) {
-            if (edit.change==settings::AppItemChange::remove) order.erase(order.begin()+edit.index);
-            else if (edit.change==settings::AppItemChange::insert) order.insert(order.begin()+edit.index,many[edit.index].identity);
+            if (edit.change==settings::AppItemChange::remove) {
+                rowControls.erase(order[edit.index]); order.erase(order.begin()+edit.index);
+            } else if (edit.change==settings::AppItemChange::insert) order.insert(order.begin()+edit.index,many[edit.index].identity);
             else { auto moved=order[edit.index]; order.erase(order.begin()+edit.index); order.insert(order.begin()+edit.destination,moved); }
         }
         bool same=order.size()==many.size();
         for (std::size_t i=0;same && i<order.size();++i) same=order[i]==many[i].identity;
         Check(same,"Reorder, removal and insertion plan converges to the desired identity order");
+        same=rowControls.size()==many.size();
+        for (std::size_t i=0;same && i<many.size();++i) same=rowControls.contains(many[i].identity);
+        Check(same,"Remove edits alone retire exactly the keyed controls absent from the snapshot");
     }
     settings::ConnectionState initial;
     initial.connected=true; initial.configuration_authoritative=true;

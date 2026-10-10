@@ -24,7 +24,6 @@
 #include <cstring>
 #include <limits>
 #include <optional>
-#include <set>
 #include <cwchar>
 
 using namespace winrt;
@@ -446,6 +445,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             auto index=static_cast<std::uint32_t>(edit.index);
             if (edit.change==settings::AppItemChange::remove) {
                 apps_list_.Items().RemoveAt(index);
+                app_rows_.erase(app_item_order_[edit.index]);
                 app_item_order_.erase(app_item_order_.begin()+edit.index);
             } else if (edit.change==settings::AppItemChange::insert) {
                 auto const& key=snapshot.applications[edit.index].identity;
@@ -458,11 +458,6 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                 apps_list_.Items().InsertAt(static_cast<std::uint32_t>(edit.destination),item);
                 app_item_order_.insert(app_item_order_.begin()+edit.destination,std::move(key));
             }
-        }
-        if (app_rows_.size()!=snapshot.applications.size()) {
-            std::set<applications::AppIdentity> desired;
-            for (auto const& row:snapshot.applications) desired.insert(row.identity);
-            std::erase_if(app_rows_,[&](auto const& pair) { return !desired.contains(pair.first); });
         }
         presentation_stage_=L"apps-row-properties";
         for (auto const& row:snapshot.applications) {
