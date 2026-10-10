@@ -41,10 +41,12 @@
   <ItemGroup>
     <ClCompile Include="AppIdentity.cpp" />
     <ClCompile Include="ProcessMetadata.cpp" />
+    <ClCompile Include="WindowOwnerMetadata.cpp" />
     <ClCompile Include="MetadataWorker.cpp" />
     <ClCompile Include="EligibilityPreferences.cpp" />
     <ClInclude Include="AppIdentity.h" />
     <ClInclude Include="ProcessMetadata.h" />
+    <ClInclude Include="WindowOwnerMetadata.h" />
     <ClInclude Include="MetadataWorker.h" />
     <ClInclude Include="EligibilityPreferences.h" />
   </ItemGroup>

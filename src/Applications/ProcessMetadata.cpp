@@ -35,7 +35,7 @@ ExecutablePathQuery QueryImage(HANDLE process) {
 }
 } // namespace
 
-MetadataResult QueryProcessMetadata(HANDLE process, const ProcessInstance& expected) {
+std::optional<MetadataUnavailable> ValidateProcessLifetime(HANDLE process, const ProcessInstance& expected) {
     const DWORD pid = GetProcessId(process);
     if (pid == 0) return Failure(QueryStage::ProcessTimes, GetLastError());
     FILETIME creation{}, exit{}, kernel{}, user{};
@@ -44,10 +44,19 @@ MetadataResult QueryProcessMetadata(HANDLE process, const ProcessInstance& expec
     const std::uint64_t start = (std::uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime;
     if (pid != expected.Pid() || start != expected.CreationTime())
         return MetadataUnavailable{UnavailableReason::LifetimeMismatch, QueryStage::ProcessTimes};
-    // A held handle and verified creation time prevent a recycled PID from binding a new process.
+    if (exit.dwHighDateTime != 0 || exit.dwLowDateTime != 0)
+        return MetadataUnavailable{UnavailableReason::ProcessUnavailable, QueryStage::ProcessTimes};
+    return std::nullopt;
+}
+
+MetadataResult QueryProcessMetadata(HANDLE process, const ProcessInstance& expected) {
+    if (const auto failure = ValidateProcessLifetime(process, expected)) return *failure;
     const auto packaged = QueryAumid(process);
-    if (const auto* failure = std::get_if<MetadataUnavailable>(&packaged)) return *failure;
-    return ResolveMetadata(packaged, QueryImage(process));
+    const auto image = std::holds_alternative<MetadataUnavailable>(packaged) ?
+        ExecutablePathQuery{MetadataUnavailable{UnavailableReason::QueryFailed, QueryStage::ExecutablePath}} :
+        QueryImage(process);
+    if (const auto failure = ValidateProcessLifetime(process, expected)) return *failure;
+    return ResolveMetadata(packaged, image);
 }
 
 MetadataResult QueryProcessMetadata(const ProcessInstance& expected) {

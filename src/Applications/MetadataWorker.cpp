@@ -1,7 +1,7 @@
 #include "MetadataWorker.h"
-#include "ProcessMetadata.h"
 
 #include <algorithm>
+#include <objbase.h>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -18,16 +18,6 @@ void ValidateLimits(const WorkerLimits& limits) {
 }
 } // namespace
 
-TargetToken::TargetToken(tracking::TargetId target, std::uint64_t configurationRevision)
-    : target_(target), configurationRevision_(configurationRevision) {}
-std::optional<TargetToken> TargetToken::FromTarget(tracking::TargetId target, std::uint64_t revision) {
-    if (target.hwnd == 0 || target.generation == 0 ||
-        !ProcessInstance::FromValues(target.pid, target.processStart)) return std::nullopt;
-    return TargetToken(target, revision);
-}
-ProcessInstance TargetToken::Process() const {
-    return *ProcessInstance::FromValues(target_.pid, target_.processStart);
-}
 MetadataRequest::MetadataRequest(TargetToken token, std::uint64_t sequence)
     : token_(std::move(token)), sequence_(sequence) {}
 
@@ -65,11 +55,16 @@ void CompletionGate::SetConfigurationRevision(std::uint64_t revision) {
     pending_.clear();
 }
 
-MetadataWorker::MetadataWorker(WorkerLimits limits, Query query)
-    : limits_(limits), query_(query ? std::move(query) : Query([](const ProcessInstance& process) {
-        return QueryProcessMetadata(process);
-    })) {
+MetadataWorker::MetadataWorker(WorkerLimits limits, Query query, LifetimeQuery lifetime)
+    : limits_(limits) {
     ValidateLimits(limits_);
+    if (query) {
+        query_ = std::move(query);
+        lifetime_ = std::move(lifetime);
+    } else {
+        query_ = [](const TargetToken& token) { return QueryWindowOwnerMetadata(token); };
+        lifetime_ = QueryWindowOwnerLifetime;
+    }
     thread_ = std::jthread([this](std::stop_token stop) { Run(stop); });
 }
 MetadataWorker::~MetadataWorker() { (void)Stop(); }
@@ -138,7 +133,7 @@ std::vector<MetadataRequest> MetadataWorker::Stop() {
     return cancelled;
 }
 
-ImmutableMetadata MetadataWorker::FindCached(const ProcessInstance& process) {
+std::optional<MetadataWorker::CacheEntry> MetadataWorker::FindCached(const TargetToken& token) {
     const auto now = std::chrono::steady_clock::now();
     for (auto entry = cache_.begin(); entry != cache_.end();) {
         if (entry->expires <= now) {
@@ -149,14 +144,13 @@ ImmutableMetadata MetadataWorker::FindCached(const ProcessInstance& process) {
         }
     }
     const auto found = std::find_if(cache_.begin(), cache_.end(),
-        [&process](const CacheEntry& entry) { return entry.process == process; });
+        [&token](const CacheEntry& entry) { return entry.token == token; });
     if (found == cache_.end()) return {};
-    auto metadata = found->metadata;
+    auto entry = *found;
     cache_.splice(cache_.begin(), cache_, found);
-    ++statistics_.cacheHits;
-    return metadata;
+    return entry;
 }
-void MetadataWorker::Cache(const ProcessInstance& process, ImmutableMetadata metadata) {
+void MetadataWorker::Cache(const TargetToken& token, const WindowOwnerLifetime& lifetime, ImmutableMetadata metadata) {
     const auto* value = std::get_if<AppMetadata>(metadata.get());
     if (!value || limits_.cacheEntries == 0 || limits_.cacheLifetime.count() == 0) return;
     const auto bytes = sizeof(CacheEntry) + 2 * sizeof(void*) + value->RetainedBytes() +
@@ -167,12 +161,16 @@ void MetadataWorker::Cache(const ProcessInstance& process, ImmutableMetadata met
         statistics_.cacheBytes -= cache_.back().bytes;
         cache_.pop_back();
     }
-    cache_.push_front({process, std::move(metadata), bytes,
+    cache_.push_front({token, lifetime, std::move(metadata), bytes,
         std::chrono::steady_clock::now() + limits_.cacheLifetime});
     statistics_.cacheBytes += bytes;
 }
 
 void MetadataWorker::Run(std::stop_token stop) {
+    struct Apartment final {
+        HRESULT result{CoInitializeEx(nullptr, COINIT_MULTITHREADED)};
+        ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); }
+    } apartment;
     while (!stop.stop_requested()) {
         std::unique_lock lock(mutex_);
         if (!wake_.wait(lock, stop, [this] {
@@ -181,21 +179,65 @@ void MetadataWorker::Run(std::stop_token stop) {
         MetadataRequest request = queued_.front();
         queued_.pop_front();
         inFlight_ = request;
-        auto metadata = FindCached(request.Token().Process());
-        if (!metadata) {
-            ++statistics_.queries;
-            lock.unlock();
-            MetadataResult result = MetadataUnavailable{UnavailableReason::QueryException, QueryStage::Worker};
-            try {
-                result = query_(request.Token().Process());
-            } catch (...) {
-                // A failing injected backend cannot escape the worker or publish guessed identity.
+        const auto cached = lifetime_ ? FindCached(request.Token()) : std::nullopt;
+        lock.unlock();
+        MetadataResult result = MetadataUnavailable{UnavailableReason::QueryException, QueryStage::Worker};
+        ImmutableMetadata metadata;
+        std::optional<WindowOwnerLifetime> lifetime;
+        bool queried{};
+        bool cacheHit{};
+        const auto query = [&] {
+            {
+                std::lock_guard queryLock(mutex_);
+                ++statistics_.queries;
             }
-            metadata = std::make_shared<const MetadataResult>(std::move(result));
-            lock.lock();
-            if (std::holds_alternative<MetadataUnavailable>(*metadata)) ++statistics_.unavailableQueries;
-            if (!stopping_) Cache(request.Token().Process(), metadata);
+            queried = true;
+            return query_(request.Token());
+        };
+        try {
+            if (FAILED(apartment.result)) {
+                result = MetadataUnavailable{UnavailableReason::QueryFailed, QueryStage::Worker,
+                    static_cast<std::uint32_t>(apartment.result)};
+            } else if (!lifetime_) {
+                result = query();
+            } else {
+                const auto before = lifetime_(request.Token());
+                if (const auto* failure = std::get_if<MetadataUnavailable>(&before)) {
+                    result = *failure;
+                } else {
+                    lifetime = std::get<WindowOwnerLifetime>(before);
+                    const bool matches = lifetime->process == request.Token().Process() &&
+                        lifetime->threadId != 0 && lifetime->classAtom != 0;
+                    if (!matches || (cached && cached->lifetime != *lifetime)) {
+                        result = MetadataUnavailable{UnavailableReason::LifetimeMismatch, QueryStage::WindowLifetime};
+                    } else if (cached) {
+                        metadata = cached->metadata;
+                        cacheHit = true;
+                    } else {
+                        result = query();
+                    }
+                    const auto after = lifetime_(request.Token());
+                    if (const auto* afterFailure = std::get_if<MetadataUnavailable>(&after)) {
+                        result = *afterFailure;
+                        metadata.reset();
+                        cacheHit = false;
+                    } else if (after != before) {
+                        result = MetadataUnavailable{UnavailableReason::LifetimeMismatch, QueryStage::WindowLifetime};
+                        metadata.reset();
+                        cacheHit = false;
+                    }
+                }
+            }
+        } catch (...) {
+            result = MetadataUnavailable{UnavailableReason::QueryException, QueryStage::Worker};
+            metadata.reset();
+            cacheHit = false;
         }
+        if (!metadata) metadata = std::make_shared<const MetadataResult>(std::move(result));
+        lock.lock();
+        if (cacheHit) ++statistics_.cacheHits;
+        if (std::holds_alternative<MetadataUnavailable>(*metadata)) ++statistics_.unavailableQueries;
+        if (!stopping_ && queried && lifetime_ && lifetime) Cache(request.Token(), *lifetime, metadata);
         inFlight_.reset();
         if (stopping_ || stop.stop_requested()) return;
         completed_.push_back({std::move(request), std::move(metadata)});

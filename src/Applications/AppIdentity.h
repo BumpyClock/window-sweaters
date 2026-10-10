@@ -50,9 +50,12 @@ private:
 
 enum class UnavailableReason {
     AccessDenied, ProcessUnavailable, LifetimeMismatch, QueryFailed, InvalidMetadata,
-    ResourceLimit, QueryException
+    ResourceLimit, QueryException, OwnerUnverified, ConflictingOwner
 };
-enum class QueryStage { OpenProcess, ProcessTimes, ApplicationId, ExecutablePath, Resolver, Worker };
+enum class QueryStage {
+    OpenProcess, ProcessTimes, ApplicationId, ExecutablePath, Resolver, Worker,
+    WindowLifetime, WindowApplicationId
+};
 struct MetadataUnavailable {
     UnavailableReason reason;
     QueryStage stage;
@@ -66,10 +69,10 @@ struct ExecutablePath { std::wstring value; };
 using PackagedIdentityQuery = std::variant<NoPackagedIdentity, PackagedAumid, MetadataUnavailable>;
 using ExecutablePathQuery = std::variant<ExecutablePath, MetadataUnavailable>;
 
-enum class MetadataProvenance { ProcessApplicationId, ProcessImageName };
+enum class MetadataProvenance { ProcessApplicationId, ProcessImageName, WindowApplicationId };
 enum class DisplayNameProvenance { ExecutableBasename, PackageRelativeApplicationId };
 
-// "Verified" means returned process metadata, not verified publisher, theme mapping or unique alias.
+// "Verified" means public process/window metadata, not verified publisher, theme mapping or unique alias.
 // DisplayName is a bounded fallback label, not a localized resource/title/product-name query.
 class AppMetadata final {
 public:
@@ -83,6 +86,8 @@ public:
 private:
     friend std::variant<AppMetadata, MetadataUnavailable> ResolveMetadata(
         const PackagedIdentityQuery&, const ExecutablePathQuery&);
+    friend std::variant<AppMetadata, MetadataUnavailable> ResolveWindowOwnerMetadata(
+        const PackagedIdentityQuery&, const std::variant<AppMetadata, MetadataUnavailable>&);
     AppMetadata(AppIdentity identity, MetadataProvenance provenance, std::wstring displayName,
                 DisplayNameProvenance displayProvenance, std::optional<std::wstring> executableAlias);
     AppIdentity identity_;
@@ -96,7 +101,7 @@ using MetadataResult = std::variant<AppMetadata, MetadataUnavailable>;
 
 // Facts must come from the process query boundary, not window titles or user-supplied aliases.
 // Only a definitive NoPackagedIdentity permits executable fallback; AUMID query errors fail closed.
-// A process host is identified as its owner executable, not guessed to be its hosted content.
+// Process-only API for genuine standalone processes; window callers use WindowOwnerMetadata.h.
 MetadataResult ResolveMetadata(const PackagedIdentityQuery& packaged, const ExecutablePathQuery& image);
 
 } // namespace window_sweaters::applications

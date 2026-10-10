@@ -2,11 +2,14 @@
 #include "..\..\src\Applications\ProcessMetadata.h"
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <mutex>
+#include <objbase.h>
 #include <stdexcept>
 #include <type_traits>
 
@@ -42,6 +45,18 @@ TargetToken Token(std::uintptr_t hwnd = 10, std::uint32_t pid = 20, std::uint64_
 }
 MetadataResult Metadata(std::wstring path = L"C:\\One\\Editor.exe") {
     return ResolveMetadata(NoPackagedIdentity{}, ExecutablePath{std::move(path)});
+}
+WindowLifetimeResult StableLifetime(const TargetToken& token) {
+    return WindowOwnerLifetime{token.Process(), 42, 7};
+}
+std::wstring FrameHostPath() {
+    std::array<wchar_t, MAX_PATH> directory{};
+    const auto size = GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
+    Check(size != 0 && size < directory.size(), "fixture system path available");
+    return std::wstring(directory.data(), size) + L"\\ApplicationFrameHost.exe";
+}
+MetadataResult HostedMetadata(std::wstring_view aumid) {
+    return ResolveWindowOwnerMetadata(PackagedAumid{std::wstring(aumid)}, Metadata(FrameHostPath()));
 }
 ImmutableMetadata Shared(MetadataResult result = Metadata()) {
     return std::make_shared<const MetadataResult>(std::move(result));
@@ -150,6 +165,137 @@ void MetadataTests() {
         ExecutablePath{L"C:\\One\\Editor.exe"})), "invalid packaged identity never falls back to path");
     Check(std::holds_alternative<MetadataUnavailable>(Metadata(L"Editor.exe")),
         "basename-only fact is not persistent metadata");
+}
+
+class FixtureOwnerSource final : public WindowOwnerSource {
+public:
+    explicit FixtureOwnerSource(const TargetToken& token)
+        : before(StableLifetime(token)), after(before), root(Metadata(FrameHostPath())) {}
+    WindowLifetimeResult before;
+    WindowLifetimeResult after;
+    PackagedIdentityQuery application{PackagedAumid{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}};
+    MetadataResult root;
+    unsigned lifetimeReads{};
+    unsigned applicationReads{};
+    unsigned processReads{};
+    WindowLifetimeResult ReadLifetime(const TargetToken&) override {
+        return lifetimeReads++ == 0 ? before : after;
+    }
+    PackagedIdentityQuery ReadApplicationId(const TargetToken&) override {
+        ++applicationReads;
+        return application;
+    }
+    MetadataResult ReadProcessMetadata(const ProcessInstance&) override {
+        ++processReads;
+        return root;
+    }
+};
+
+void WindowOwnerTests() {
+    const auto token = Token();
+    FixtureOwnerSource first(token);
+    const auto calculator = QueryWindowOwnerMetadata(token, first);
+    const auto& one = std::get<AppMetadata>(calculator);
+    Check(one.Identity() == Package() && one.Provenance() == MetadataProvenance::WindowApplicationId,
+        "root window property has explicit supported per-window identity provenance");
+    Check(one.DisplayName() == L"App" && !one.ExecutableAlias() &&
+        one.DisplayProvenance() == DisplayNameProvenance::PackageRelativeApplicationId,
+        "frame host executable is not fabricated hosted-app display or alias");
+    Check(first.lifetimeReads == 2 && first.applicationReads == 1 && first.processReads == 1,
+        "root lifetime validation brackets property and process lookup");
+
+    FixtureOwnerSource second(token);
+    second.application = PackagedAumid{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!Other"};
+    const auto other = QueryWindowOwnerMetadata(token, second);
+    Check(std::get<AppMetadata>(other).Identity() != one.Identity(),
+        "same host process can identify two unrelated window owners");
+    const auto exactCase = HostedMetadata(L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!app");
+    Check(std::get<AppMetadata>(exactCase).Identity() != one.Identity(),
+        "window packaged identity retains exact ordinal case instead of path case-folding");
+    Check(std::get<AppMetadata>(HostedMetadata(L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App")).Identity() ==
+        one.Identity(), "window identity remains stable independently of lookup source");
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(
+        PackagedAumid{one.Identity().Key()}, calculator)).reason == UnavailableReason::InvalidMetadata,
+        "window-scoped fact cannot masquerade as root process provenance");
+
+    const auto unavailable = ResolveWindowOwnerMetadata(NoPackagedIdentity{}, first.root);
+    Check(std::get<MetadataUnavailable>(unavailable).reason == UnavailableReason::OwnerUnverified,
+        "frame host without verified window AUMID never becomes system-host identity");
+    Check(std::get<AppMetadata>(ResolveWindowOwnerMetadata(NoPackagedIdentity{},
+        Metadata(L"C:\\Other\\ApplicationFrameHost.exe"))).Identity() ==
+        Path(L"C:\\Other\\ApplicationFrameHost.exe"), "basename alone never classifies a process host");
+    const MetadataUnavailable denied{UnavailableReason::AccessDenied, QueryStage::WindowApplicationId,
+        static_cast<std::uint32_t>(E_ACCESSDENIED)};
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(denied, Metadata())) == denied,
+        "property failure does not downgrade to root process executable");
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{L"bad"}, first.root)).reason ==
+        UnavailableReason::InvalidMetadata, "unverified malformed shell property fails closed");
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{std::wstring(131, L'a')},
+        first.root)).reason == UnavailableReason::InvalidMetadata, "oversized property identity is bounded");
+    const auto packagedRoot = ResolveMetadata(PackagedAumid{Package().Key()},
+        ExecutablePath{L"C:\\Packages\\Calculator.exe"});
+    const auto agreed = ResolveWindowOwnerMetadata(PackagedAumid{Package().Key()}, packagedRoot);
+    Check(std::get<AppMetadata>(agreed).ExecutableAlias() == L"Calculator.exe",
+        "matching packaged process retains genuinely known executable alias");
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(
+        PackagedAumid{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!Other"}, packagedRoot)).reason ==
+        UnavailableReason::ConflictingOwner, "conflicting packaged process/window facts remain ambiguous");
+    const MetadataUnavailable processDenied{UnavailableReason::AccessDenied, QueryStage::ApplicationId, ERROR_ACCESS_DENIED};
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(
+        PackagedAumid{Package().Key()}, processDenied)) == processDenied,
+        "failed process lookup does not assert a verified matching owner");
+    Check(std::get<AppMetadata>(ResolveWindowOwnerMetadata(NoPackagedIdentity{}, packagedRoot)).Provenance() ==
+        MetadataProvenance::ProcessApplicationId, "standalone packaged process still uses supported process fact");
+
+    for (const auto& changed : {WindowOwnerLifetime{Process(20, 101), 42, 7},
+        WindowOwnerLifetime{Process(21, 100), 42, 7}, WindowOwnerLifetime{token.Process(), 43, 7},
+        WindowOwnerLifetime{token.Process(), 42, 8}}) {
+        FixtureOwnerSource reused(token);
+        reused.after = changed;
+        Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(token, reused)).reason ==
+            UnavailableReason::LifetimeMismatch, "PID/birth/thread/class changes during lookup cannot publish owner");
+    }
+    FixtureOwnerSource initiallyReused(token);
+    initiallyReused.before = WindowOwnerLifetime{Process(21, 100), 42, 7};
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(token, initiallyReused)).reason ==
+        UnavailableReason::LifetimeMismatch && initiallyReused.applicationReads == 0,
+        "mismatching initial owner prevents metadata lookup");
+    FixtureOwnerSource destroyed(token);
+    destroyed.after = MetadataUnavailable{UnavailableReason::ProcessUnavailable, QueryStage::WindowLifetime};
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(token, destroyed)).reason ==
+        UnavailableReason::ProcessUnavailable, "destroyed owner after lookup cannot return stale success");
+    FixtureOwnerSource failedAndReused(token);
+    failedAndReused.application = denied;
+    failedAndReused.after = WindowOwnerLifetime{Process(21, 100), 42, 7};
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(token, failedAndReused)).reason ==
+        UnavailableReason::LifetimeMismatch, "failed lookup also performs final lifetime validation");
+
+    const auto unicodeRoot = Metadata(L"C:\\\u00c4pp\\\u7f16\u8f91.exe");
+    const auto unicode = ResolveWindowOwnerMetadata(NoPackagedIdentity{}, unicodeRoot);
+    Check(std::get<AppMetadata>(unicode).Identity() == Path(L"c:\\\u00e4pp\\\u7f16\u8f91.EXE") &&
+        std::get<AppMetadata>(unicode).DisplayName() == L"\u7f16\u8f91.exe",
+        "Unicode window-owner path identity and display retain ordinal normalization");
+    const std::wstring invalidUnicode = L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!" +
+        std::wstring(1, wchar_t(0xD800));
+    Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{invalidUnicode}, first.root)).reason ==
+        UnavailableReason::InvalidMetadata, "invalid UTF16 property never forms a persistent package key");
+
+    const auto disabled = Apply(EligibilityPreferences{},
+        {{}, false, {SetApplicationPreference{one.Identity(), false}}});
+    const std::vector<RunningApplicationWindow> windows{
+        {Token(1), Shared(calculator)}, {Token(2), Shared(other)}, {Token(3), Shared(calculator)},
+        {Token(4), Shared(unavailable)}, {Token(1), Shared(calculator)}};
+    const auto snapshot = std::get<ApplicationSnapshot>(BuildApplicationSnapshot(disabled, 0, windows));
+    Check(snapshot.applications.size() == 2 && snapshot.applications[0].windowCount == 2 &&
+        snapshot.applications[0].processCount == 1 && !snapshot.applications[0].enabled &&
+        snapshot.applications[1].windowCount == 1 && snapshot.applications[1].processCount == 1 &&
+        snapshot.applications[1].enabled, "hosted identities group windows independently with shared root process counts");
+    Check(snapshot.unavailableOwners.size() == 1 && snapshot.unavailableOwners[0].windowCount == 1,
+        "verified and unavailable window owners may coexist in one host process");
+    const std::vector<RunningApplicationWindow> duplicateConflict{
+        {Token(1), Shared(calculator)}, {Token(1), Shared(other)}};
+    Check(std::get<SnapshotError>(BuildApplicationSnapshot(disabled, 0, duplicateConflict)) ==
+        SnapshotError::ConflictingMetadata, "distinct identities cannot conceal conflict on the same window lifetime");
 }
 
 void PreferenceTests() {
@@ -280,14 +426,14 @@ void CacheTests() {
     WorkerLimits limits;
     limits.cacheEntries = 2;
     CompletionGate gate;
-    MetadataWorker worker(limits, [&](const ProcessInstance& process) {
+    MetadataWorker worker(limits, [&](const TargetToken& token) {
         ++queries;
-        return Metadata(process.CreationTime() == 200 ? L"C:\\Two\\Editor.exe" : L"C:\\One\\Editor.exe");
-    });
+        return Metadata(token.Process().CreationTime() == 200 ? L"C:\\Two\\Editor.exe" : L"C:\\One\\Editor.exe");
+    }, StableLifetime);
     const auto first = Complete(worker, Request(gate, Token(1)));
-    const auto second = Complete(worker, Request(gate, Token(2)));
+    const auto second = Complete(worker, Request(gate, Token(1)));
     Check(first.metadata == second.metadata && queries == 1 && worker.Statistics().cacheHits == 1,
-        "multiple windows share immutable process metadata cache");
+        "same verified target lifetime shares immutable metadata cache");
     const auto oneEntryBytes = worker.Statistics().cacheBytes;
     const auto recycled = Complete(worker, Request(gate, Token(1, 20, 200, 2)));
     Check(queries == 2 && std::get<AppMetadata>(*recycled.metadata).Identity() == Path(L"C:\\Two\\Editor.exe"),
@@ -298,7 +444,7 @@ void CacheTests() {
     Check(std::get<AppMetadata>(*first.metadata).Identity() == Path(L"C:\\One\\Editor.exe"),
         "cache eviction does not invalidate outstanding immutable metadata");
     Complete(worker, Request(gate, Token(4)));
-    Check(queries == 4, "least recently used process was evicted");
+    Check(queries == 4, "least recently used target lifetime was evicted");
     Check(worker.Stop().empty(), "stop with drained completions has no unreported requests");
     const auto afterStop = Request(gate, Token(9));
     Check(worker.Statistics().cached == 0 && worker.Statistics().cacheBytes == 0 &&
@@ -308,7 +454,7 @@ void CacheTests() {
 
     WorkerLimits tiny;
     tiny.cacheBytes = 1;
-    MetadataWorker noCache(tiny, [](const ProcessInstance&) { return Metadata(); });
+    MetadataWorker noCache(tiny, [](const TargetToken&) { return Metadata(); }, StableLifetime);
     Complete(noCache, Request(gate, Token(11)));
     Complete(noCache, Request(gate, Token(12)));
     Check(noCache.Statistics().cached == 0 && noCache.Statistics().queries == 2,
@@ -316,30 +462,30 @@ void CacheTests() {
 
     WorkerLimits byteLimited;
     byteLimited.cacheBytes = oneEntryBytes;
-    MetadataWorker exactBudget(byteLimited, [](const ProcessInstance&) { return Metadata(); });
+    MetadataWorker exactBudget(byteLimited, [](const TargetToken&) { return Metadata(); }, StableLifetime);
     Complete(exactBudget, Request(gate, Token(21)));
     Complete(exactBudget, Request(gate, Token(22, 22, 200)));
     Check(exactBudget.Statistics().cached == 1 && exactBudget.Statistics().cacheBytes == oneEntryBytes,
         "byte budget evicts even when cache entry-count limit has space");
     Complete(exactBudget, Request(gate, Token(23)));
-    Check(exactBudget.Statistics().queries == 3, "byte-evicted process must resolve again");
+    Check(exactBudget.Statistics().queries == 3, "byte-evicted target must resolve again");
 
     WorkerLimits expires;
     expires.cacheLifetime = 1ms;
-    MetadataWorker expiring(expires, [](const ProcessInstance&) { return Metadata(); });
+    MetadataWorker expiring(expires, [](const TargetToken&) { return Metadata(); }, StableLifetime);
     Complete(expiring, Request(gate, Token(13)));
     std::this_thread::sleep_for(5ms);
-    Complete(expiring, Request(gate, Token(14)));
+    Complete(expiring, Request(gate, Token(13)));
     Check(expiring.Statistics().queries == 2, "cache TTL permits refresh without lifetime guessing");
 
-    MetadataWorker unavailable({}, [](const ProcessInstance&) -> MetadataResult {
+    MetadataWorker unavailable({}, [](const TargetToken&) -> MetadataResult {
         return MetadataUnavailable{UnavailableReason::AccessDenied, QueryStage::OpenProcess};
-    });
+    }, StableLifetime);
     Complete(unavailable, Request(gate, Token(15)));
     Complete(unavailable, Request(gate, Token(16)));
     Check(unavailable.Statistics().cached == 0 && unavailable.Statistics().unavailableQueries == 2,
         "transient unavailable metadata is not cached as authoritative identity");
-    MetadataWorker throwing({}, [](const ProcessInstance&) -> MetadataResult { throw std::runtime_error("injected"); });
+    MetadataWorker throwing({}, [](const TargetToken&) -> MetadataResult { throw std::runtime_error("injected"); });
     const auto failed = Complete(throwing, Request(gate, Token(17)));
     Check(std::get<MetadataUnavailable>(*failed.metadata).reason == UnavailableReason::QueryException,
         "backend exception produces explicit failure rather than worker escape");
@@ -352,6 +498,109 @@ void CacheTests() {
     Check(rejected, "invalid worker budgets rejected before starting thread");
 }
 
+void OwnerWorkerTests() {
+    const auto root = Metadata(FrameHostPath());
+    const std::wstring firstId = L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
+    const std::wstring secondId = L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!Other";
+    std::atomic<unsigned> queries{};
+    std::atomic<bool> mta{true};
+    std::atomic<unsigned> lifetimeMode{};
+    std::atomic<unsigned> lifetimeReads{};
+    WorkerLimits limits;
+    limits.cacheEntries = 2;
+    CompletionGate gate;
+    MetadataWorker worker(limits, [&](const TargetToken& token) {
+        APTTYPE type{};
+        APTTYPEQUALIFIER qualifier{};
+        if (FAILED(CoGetApartmentType(&type, &qualifier)) || type != APTTYPE_MTA) mta = false;
+        ++queries;
+        return ResolveWindowOwnerMetadata(PackagedAumid{token.Target().hwnd == 1 ? firstId : secondId}, root);
+    }, [&](const TargetToken& token) -> WindowLifetimeResult {
+        ++lifetimeReads;
+        if (lifetimeMode == 1)
+            return MetadataUnavailable{UnavailableReason::LifetimeMismatch, QueryStage::WindowLifetime};
+        if (lifetimeMode == 2 && lifetimeReads % 2 == 0)
+            return WindowOwnerLifetime{token.Process(), 43, 7};
+        if (lifetimeMode == 3) return WindowOwnerLifetime{token.Process(), 43, 7};
+        if (lifetimeMode == 4) throw std::runtime_error("injected lifetime failure");
+        return StableLifetime(token);
+    });
+    const auto first = Complete(worker, Request(gate, Token(1)));
+    Check(gate.Accept(first, first.request.Token()), "first verified owner completion accepted");
+    const auto second = Complete(worker, Request(gate, Token(2)));
+    Check(gate.Accept(second, second.request.Token()) && queries == 2 && worker.Statistics().cacheHits == 0 &&
+        std::get<AppMetadata>(*first.metadata).Identity() == Package(firstId) &&
+        std::get<AppMetadata>(*second.metadata).Identity() == Package(secondId),
+        "worker queries different windows in one host process independently");
+    const auto cached = Complete(worker, Request(gate, Token(1)));
+    Check(gate.Accept(cached, cached.request.Token()) && cached.metadata == first.metadata && queries == 2 &&
+        worker.Statistics().cacheHits == 1 && lifetimeReads == 6,
+        "cache hit repeats before/after root lifetime validation on MTA worker");
+    Check(mta, "all application-property work executes on the one initialized MTA");
+    for (unsigned mode = 1; mode <= 4; ++mode) {
+        lifetimeMode = mode;
+        lifetimeReads = 0;
+        const auto invalid = Complete(worker, Request(gate, Token(1)));
+        Check(gate.Accept(invalid, invalid.request.Token()) &&
+            std::holds_alternative<MetadataUnavailable>(*invalid.metadata) && queries == 2 &&
+            worker.Statistics().cacheHits == 1, "failed/changed lifetime cannot publish a cached owner identity");
+        Check(worker.Statistics().cached <= limits.cacheEntries &&
+            worker.Statistics().cacheBytes <= limits.cacheBytes, "cache validation failure preserves count/byte bounds");
+    }
+    lifetimeMode = 0;
+    const auto generation = Complete(worker, Request(gate, Token(1, 20, 100, 2)));
+    Check(gate.Accept(generation, generation.request.Token()) && queries == 3,
+        "recycled HWND tracker generation never shares previous window-owner cache");
+    const auto recycledPid = Complete(worker, Request(gate, Token(1, 20, 200, 3)));
+    Check(gate.Accept(recycledPid, recycledPid.request.Token()) && queries == 4,
+        "process birth change never shares previous window-owner cache");
+    gate.SetConfigurationRevision(1);
+    const auto revision = Complete(worker, Request(gate, Token(1, 20, 200, 3, 1)));
+    Check(gate.Accept(revision, revision.request.Token()) && queries == 5,
+        "configuration revision cannot reuse old target authority");
+    Check(worker.Stop().empty() && worker.Statistics().cacheBytes == 0, "owner worker shutdown frees validated cache");
+
+    MetadataWorker unvalidated(limits, [](const TargetToken&) { return Metadata(); });
+    gate.SetConfigurationRevision(0);
+    Complete(unvalidated, Request(gate, Token(9)));
+    Complete(unvalidated, Request(gate, Token(9)));
+    Check(unvalidated.Statistics().queries == 2 && unvalidated.Statistics().cached == 0,
+        "injected query without lifetime validator cannot create owner cache authority");
+
+    WorkerLimits pressureLimits;
+    pressureLimits.completedRequests = 1;
+    pressureLimits.queuedRequests = 1;
+    pressureLimits.cacheEntries = 2;
+    CompletionGate pressureGate(0, 2);
+    MetadataWorker pressure(pressureLimits, [&](const TargetToken& token) {
+        return ResolveWindowOwnerMetadata(PackagedAumid{token.Target().hwnd == 1 ? firstId : secondId}, root);
+    }, StableLifetime);
+    const auto pendingFirst = Request(pressureGate, Token(1));
+    Check(pressure.Submit(pendingFirst) == SubmitResult::Accepted, "hosted pressure first window accepted");
+    Wait([&] { return pressure.Statistics().completed == 1; }, "hosted first completion timed out");
+    const auto pendingSecond = Request(pressureGate, Token(2));
+    Check(pressure.Submit(pendingSecond) == SubmitResult::Accepted &&
+        pressure.Statistics().completionBackpressure && pressure.Statistics().queries == 1 &&
+        pressure.Statistics().coalesced == 0, "host process sharing never coalesces separate window-owner requests");
+    const auto deliveredFirst = pressure.DrainCompletions();
+    Check(deliveredFirst.size() == 1 && pressureGate.Accept(deliveredFirst[0], pendingFirst.Token()),
+        "completion pressure delivers first hosted owner exactly");
+    Wait([&] { return pressure.Statistics().completed == 1; }, "hosted second completion timed out");
+    const auto deliveredSecond = pressure.DrainCompletions();
+    Check(deliveredSecond.size() == 1 && pressureGate.Accept(deliveredSecond[0], pendingSecond.Token()) &&
+        pressureGate.Size() == 0 && pressure.Statistics().queries == 2,
+        "completion pressure delivers second distinct hosted owner and recovers exact gate capacity");
+    const std::vector<RunningApplicationWindow> windows{
+        {pendingFirst.Token(), deliveredFirst[0].metadata}, {pendingSecond.Token(), deliveredSecond[0].metadata}};
+    const auto snapshot = std::get<ApplicationSnapshot>(BuildApplicationSnapshot(EligibilityPreferences{}, 0, windows));
+    Check(snapshot.applications.size() == 2 && snapshot.applications[0].windowCount == 1 &&
+        snapshot.applications[1].windowCount == 1 && snapshot.applications[0].processCount == 1 &&
+        snapshot.applications[1].processCount == 1, "worker completions build distinct hosted application snapshot rows");
+    std::vector<RunningApplicationWindow> tooMany(4097, windows.front());
+    Check(std::get<SnapshotError>(BuildApplicationSnapshot(EligibilityPreferences{}, 0, tooMany)) ==
+        SnapshotError::TooManyWindows, "window-owner snapshot count remains bounded before grouping duplicates");
+}
+
 void QueueTests() {
     std::mutex mutex;
     std::condition_variable wake;
@@ -362,7 +611,7 @@ void QueueTests() {
     limits.completedRequests = 1;
     limits.cacheEntries = 0;
     CompletionGate gate(0, 3);
-    MetadataWorker worker(limits, [&](const ProcessInstance&) {
+    MetadataWorker worker(limits, [&](const TargetToken&) {
         std::unique_lock lock(mutex);
         entered = true;
         wake.notify_all();
@@ -433,7 +682,7 @@ void ShutdownTests() {
     limits.completedRequests = 1;
     limits.cacheEntries = 0;
     CompletionGate gate(0, 2);
-    MetadataWorker worker(limits, [](const ProcessInstance&) { return Metadata(); });
+    MetadataWorker worker(limits, [](const TargetToken&) { return Metadata(); });
     const auto completed = Request(gate, Token(1));
     Check(worker.Submit(completed) == SubmitResult::Accepted, "shutdown fixture accepts first request");
     Wait([&] { return worker.Statistics().completed == 1; }, "shutdown completion timed out");
@@ -449,7 +698,7 @@ void ShutdownTests() {
         Check(gate.Retire(request), "each accepted current shutdown request is explicitly retired");
     Check(gate.Size() == 0 && worker.Stop().empty(),
         "shutdown recovers all gate capacity without duplicate cancellation");
-    MetadataWorker replacement(limits, [](const ProcessInstance&) { return Metadata(); });
+    MetadataWorker replacement(limits, [](const TargetToken&) { return Metadata(); });
     const auto retry = Request(gate, Token(3));
     const auto retried = Complete(replacement, retry);
     Check(gate.Accept(retried, retry.Token()) && gate.Size() == 0,
@@ -459,7 +708,7 @@ void ShutdownTests() {
     std::condition_variable wake;
     bool entered = false;
     bool released = false;
-    MetadataWorker inFlight(limits, [&](const ProcessInstance&) {
+    MetadataWorker inFlight(limits, [&](const TargetToken&) {
         std::unique_lock lock(mutex);
         entered = true;
         wake.notify_all();
@@ -513,26 +762,99 @@ void NativeTests() {
     Check(std::get<MetadataUnavailable>(QueryProcessMetadata(GetCurrentProcess(),
         Process(GetCurrentProcessId(), start + 1))).reason == UnavailableReason::LifetimeMismatch,
         "native process creation-time mismatch cannot bind recycled PID");
+    std::wstring command = L"\"" + std::wstring(expected.data(), size) + L"\" --owner-lifetime-fixture";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    Check(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+        nullptr, nullptr, &startup, &child) != FALSE, "own lifetime fixture process starts without a visible console");
+    struct FixtureProcess final {
+        PROCESS_INFORMATION value;
+        ~FixtureProcess() { CloseHandle(value.hThread); CloseHandle(value.hProcess); }
+    } childScope{child};
+    Check(WaitForSingleObject(child.hProcess, 5000) == WAIT_OBJECT_0,
+        "own lifetime fixture exits before process validation");
+    FILETIME childCreation{};
+    Check(GetProcessTimes(child.hProcess, &childCreation, &exit, &kernel, &user) != FALSE,
+        "held exited fixture process retains creation-time facts");
+    const auto childStart = (std::uint64_t{childCreation.dwHighDateTime} << 32) | childCreation.dwLowDateTime;
+    Check(std::get<MetadataUnavailable>(QueryProcessMetadata(child.hProcess,
+        Process(child.dwProcessId, childStart))).reason == UnavailableReason::ProcessUnavailable,
+        "exited process with correct PID and birth cannot publish metadata");
+    struct HiddenFixture final {
+        HINSTANCE instance{GetModuleHandleW(nullptr)};
+        ATOM atom{};
+        HWND hwnd{};
+        HiddenFixture() {
+            WNDCLASSW type{};
+            type.hInstance = instance;
+            type.lpfnWndProc = DefWindowProcW;
+            type.lpszClassName = L"WindowSweaters.Applications.HiddenOwnerTest";
+            atom = RegisterClassW(&type);
+            Check(atom != 0, "own hidden fixture class registered");
+            hwnd = CreateWindowExW(0, MAKEINTATOM(atom), L"", WS_OVERLAPPEDWINDOW,
+                0, 0, 100, 100, nullptr, nullptr, instance, nullptr);
+            Check(hwnd != nullptr && !IsWindowVisible(hwnd), "own top-level fixture created without visibility");
+        }
+        ~HiddenFixture() {
+            if (hwnd) DestroyWindow(hwnd);
+            if (atom) UnregisterClassW(MAKEINTATOM(atom), instance);
+        }
+    } fixture;
+    const auto apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    Check(SUCCEEDED(apartment), "native owner probe initializes its own MTA");
+    struct Apartment final { ~Apartment() { CoUninitialize(); } } apartmentScope;
+    const auto token = Token(reinterpret_cast<std::uintptr_t>(fixture.hwnd), process.Pid(), start);
+    const auto owner = QueryWindowOwnerMetadata(token);
+    const auto borrowedOwner = QueryWindowOwnerMetadata(token, GetCurrentProcess());
+    Check(std::holds_alternative<AppMetadata>(owner) &&
+        std::get<AppMetadata>(owner).Identity() == std::get<AppMetadata>(pidResult).Identity(),
+        "hidden standalone root resolves exact own-process identity through window adapter");
+    Check(std::holds_alternative<AppMetadata>(borrowedOwner) &&
+        std::get<AppMetadata>(borrowedOwner).Identity() == std::get<AppMetadata>(owner).Identity(),
+        "borrowed and opened process handles agree for own hidden root");
+    Check(std::holds_alternative<WindowOwnerLifetime>(QueryWindowOwnerLifetime(token)),
+        "public root/PID/birth/live lifetime probe accepts only own hidden root");
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(token, nullptr)).reason ==
+        UnavailableReason::ProcessUnavailable, "window adapter invalid process handle fails closed");
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(
+        Token(token.Target().hwnd, process.Pid(), start + 1))).reason == UnavailableReason::LifetimeMismatch,
+        "window adapter refuses process-birth mismatch before property lookup");
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(
+        Token(1, process.Pid(), start))).reason == UnavailableReason::LifetimeMismatch,
+        "invalid root HWND cannot fall back to valid own process identity");
     CompletionGate gate;
     MetadataWorker worker;
-    const auto completion = Complete(worker, Request(gate, Token(1, process.Pid(), start)));
-    Check(gate.Accept(completion, completion.request.Token()) && std::holds_alternative<AppMetadata>(*completion.metadata),
-        "production worker queries only own process and completion is accepted");
+    const auto completion = Complete(worker, Request(gate, token));
+    Check(gate.Accept(completion, token) && std::holds_alternative<AppMetadata>(*completion.metadata),
+        "production MTA worker queries only hidden own root and completion is accepted");
+    const auto cached = Complete(worker, Request(gate, token));
+    Check(gate.Accept(cached, token) && cached.metadata == completion.metadata &&
+        worker.Statistics().cacheHits == 1, "native owner cache hit revalidates hidden root lifetime");
+    DestroyWindow(fixture.hwnd);
+    fixture.hwnd = nullptr;
+    const auto destroyed = Complete(worker, Request(gate, token));
+    Check(gate.Accept(destroyed, token) && std::holds_alternative<MetadataUnavailable>(*destroyed.metadata) &&
+        worker.Statistics().cacheHits == 1, "destroyed hidden root cannot reuse production cached process identity");
+    Check(worker.Stop().empty(), "native worker COM and query lifetime shut down with no unreported work");
 }
 } // namespace
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc == 2 && std::strcmp(argv[1], "--owner-lifetime-fixture") == 0) return EXIT_SUCCESS;
     try {
         IdentityTests();
         MetadataTests();
+        WindowOwnerTests();
         PreferenceTests();
         SnapshotTests();
         CompletionTests();
         CacheTests();
+        OwnerWorkerTests();
         QueueTests();
         ShutdownTests();
         NativeTests();
-        std::cout << "Applications: " << checks << " checks passed (model + own-process/invalid-handle native queries).\n";
+        std::cout << "Applications: " << checks << " checks passed (owner model + hidden-root/own-process/invalid-handle native queries).\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "Applications test failure: " << error.what() << '\n';

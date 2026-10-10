@@ -44,6 +44,8 @@ private:
 // Input is the central tracker's supported ordinary-window set, including preference-disabled owners.
 // Host supplies only accepted, lifetime-current metadata at this revision. No window enumeration or
 // eligibility evaluation occurs here. Metadata-unavailable owners get no persistent mutation key.
+// Verified window properties may identify different applications within the same host process;
+// processCount is distinct root process lifetimes per application, not exclusive process ownership.
 struct RunningApplicationWindow {
     TargetToken token;
     ImmutableMetadata metadata;

@@ -1,7 +1,6 @@
 #pragma once
 
-#include "AppIdentity.h"
-#include "..\Tracking\TrackingModel.h"
+#include "WindowOwnerMetadata.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -15,20 +14,6 @@
 #include <vector>
 
 namespace window_sweaters::applications {
-
-class TargetToken final {
-public:
-    static std::optional<TargetToken> FromTarget(tracking::TargetId target, std::uint64_t configurationRevision);
-    const tracking::TargetId& Target() const noexcept { return target_; }
-    std::uint64_t ConfigurationRevision() const noexcept { return configurationRevision_; }
-    ProcessInstance Process() const;
-    bool operator==(const TargetToken&) const = default;
-
-private:
-    TargetToken(tracking::TargetId target, std::uint64_t configurationRevision);
-    tracking::TargetId target_;
-    std::uint64_t configurationRevision_;
-};
 
 class MetadataRequest final {
 public:
@@ -91,7 +76,8 @@ struct WorkerStatistics {
 };
 enum class SubmitResult { Accepted, Coalesced, Full, Obsolete, Stopped };
 
-// One local worker; no HWND operations, UI callbacks, icon/resource loading or external service.
+// One local MTA worker; read-only expected-root HWND operations, no UI callbacks, resource loading
+// or external service. Window facts cache only by complete target token, never by process alone.
 // One CompletionGate supplies its monotonic sequences. Submit/Drain/Statistics are thread-safe;
 // Stop/destruction belong to one owner and must not run in Query. Query owns its dependencies.
 // Queue/completion counts and cache count/charged retained bytes are bounded, including negative
@@ -99,13 +85,16 @@ enum class SubmitResult { Accepted, Coalesced, Full, Obsolete, Stopped };
 // A full completion queue blocks dequeue, never drops accepted current requests. Drain wakes it.
 // Stop returns request-specific cancellations for queued/completed/in-flight work and joins the
 // current query. Caller retires those requests on its owner-thread gate; destruction without Stop
-// is only safe when the gate is also discarded. Documented synchronous process
+// is only safe when the gate is also discarded. Documented synchronous shell/process
 // APIs have no cancellable hard deadline. Custom Query must be local and bounded, not arbitrary I/O.
 // Allocator overhead/process-wide memory is not the cache byte statistic. No recurring timer runs.
 class MetadataWorker final {
 public:
-    using Query = std::function<MetadataResult(const ProcessInstance&)>;
-    explicit MetadataWorker(WorkerLimits limits = {}, Query query = {});
+    using Query = std::function<MetadataResult(const TargetToken&)>;
+    using LifetimeQuery = std::function<WindowLifetimeResult(const TargetToken&)>;
+    // Custom Query owns before/after validation. Without LifetimeQuery its results are not cached.
+    // Supplying LifetimeQuery permits target-scoped caching with matching before/after live facts.
+    explicit MetadataWorker(WorkerLimits limits = {}, Query query = {}, LifetimeQuery lifetime = {});
     ~MetadataWorker();
     MetadataWorker(const MetadataWorker&) = delete;
     MetadataWorker& operator=(const MetadataWorker&) = delete;
@@ -116,16 +105,18 @@ public:
 
 private:
     struct CacheEntry {
-        ProcessInstance process;
+        TargetToken token;
+        WindowOwnerLifetime lifetime;
         ImmutableMetadata metadata;
         std::size_t bytes;
         std::chrono::steady_clock::time_point expires;
     };
-    ImmutableMetadata FindCached(const ProcessInstance& process);
-    void Cache(const ProcessInstance& process, ImmutableMetadata metadata);
+    std::optional<CacheEntry> FindCached(const TargetToken& token);
+    void Cache(const TargetToken& token, const WindowOwnerLifetime& lifetime, ImmutableMetadata metadata);
     void Run(std::stop_token stop);
     WorkerLimits limits_;
     Query query_;
+    LifetimeQuery lifetime_;
     mutable std::mutex mutex_;
     std::condition_variable_any wake_;
     std::deque<MetadataRequest> queued_;

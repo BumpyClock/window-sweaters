@@ -45,30 +45,33 @@ SnapshotResult BuildApplicationSnapshot(const EligibilityPreferences& preference
     };
     std::map<AppIdentity, Running> running;
     std::map<ProcessInstance, UnavailableOwner> unavailable;
-    std::map<tracking::WindowHandle, TargetToken> observed;
+    std::map<tracking::WindowHandle, const RunningApplicationWindow*> observed;
     std::map<ProcessInstance, ImmutableMetadata> processMetadata;
     for (const auto& window : windows) {
         if (window.token.ConfigurationRevision() != configurationRevision) return SnapshotError::StaleRevision;
         if (!window.metadata) return SnapshotError::MissingMetadata;
         const auto process = window.token.Process();
-        const auto knownProcess = processMetadata.find(process);
-        if (knownProcess != processMetadata.end()) {
-            const auto* previousMetadata = std::get_if<AppMetadata>(knownProcess->second.get());
+        const auto hwnd = window.token.Target().hwnd;
+        const auto previous = observed.find(hwnd);
+        if (previous != observed.end()) {
+            if (previous->second->token != window.token) return SnapshotError::ConflictingWindowLifetime;
+            const auto* previousMetadata = std::get_if<AppMetadata>(previous->second->metadata.get());
             const auto* currentMetadata = std::get_if<AppMetadata>(window.metadata.get());
             if ((previousMetadata == nullptr) != (currentMetadata == nullptr) ||
                 (previousMetadata && currentMetadata && previousMetadata->Identity() != currentMetadata->Identity()))
                 return SnapshotError::ConflictingMetadata;
-        } else {
-            processMetadata.emplace(process, window.metadata);
-        }
-        const auto hwnd = window.token.Target().hwnd;
-        const auto previous = observed.find(hwnd);
-        if (previous != observed.end()) {
-            if (previous->second != window.token) return SnapshotError::ConflictingWindowLifetime;
             continue;
         }
-        observed.emplace(hwnd, window.token);
+        observed.emplace(hwnd, &window);
         if (const auto* metadata = std::get_if<AppMetadata>(window.metadata.get())) {
+            // A process fact is shared; a verified window property is not.
+            if (metadata->Provenance() != MetadataProvenance::WindowApplicationId) {
+                const auto known = processMetadata.find(process);
+                if (known != processMetadata.end() &&
+                    std::get<AppMetadata>(*known->second).Identity() != metadata->Identity())
+                    return SnapshotError::ConflictingMetadata;
+                processMetadata.try_emplace(process, window.metadata);
+            }
             auto& owner = running[metadata->Identity()];
             owner.metadata = window.metadata;
             ++owner.count;
