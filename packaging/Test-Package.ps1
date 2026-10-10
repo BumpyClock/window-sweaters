@@ -75,6 +75,14 @@ foreach ($exe in @('WindowSweaters.Host.exe', 'WindowSweaters.Settings.exe')) {
         Assert-Package ($encoding.GetString($bytes) -notmatch '(?i)[A-Z]:\\Users\\|/Users/|/home/') "Private home path in packaged application: $exe"
     }
 }
+$resourceDump = Join-Path $PSScriptRoot 'obj\packaged-settings-resources.xml'
+& (Join-Path $sdk 'makepri.exe') dump /if (Join-Path $unpacked 'resources.pri') /of $resourceDump /dt detailed /o | Out-Null
+Assert-Package ($LASTEXITCODE -eq 0) 'SDK could not inspect the packaged Settings resource index.'
+$resourceText = [IO.File]::ReadAllText($resourceDump)
+foreach ($theme in @('Microsoft.UI.Xaml/Themes/themeresources.xbf', 'Microsoft.UI.Xaml/Themes/generic.xbf')) {
+    Assert-Package ($resourceText.Contains($theme)) "Packaged application PRI lacks WinUI theme resource: $theme"
+}
+Remove-Item -LiteralPath $resourceDump -Force
 $sourceZip = Join-Path $ArtifactDirectory $report.SourceArchive
 Assert-Package ((Get-FileHash -LiteralPath $sourceZip).Hash -eq $report.SourceSHA256) 'Corresponding source archive hash mismatch.'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -88,7 +96,7 @@ try {
     }
 } finally { $source.Dispose() }
 & (Join-Path $PSScriptRoot 'Test-SourceArchive.ps1') -SourceZip $sourceZip
-foreach ($exe in @('WindowSweaters.Host.exe', 'WindowSweaters.Settings.exe')) {
+foreach ($exe in @('WindowSweaters.Host.exe', 'WindowSweaters.Settings.exe', 'resources.pri')) {
     $current = Join-Path (Split-Path $PSScriptRoot -Parent) "out\x64\Release\$exe"
     $expectedInput = $report.ApplicationInputSHA256.PSObject.Properties[$exe].Value
     Assert-Package ((Get-FileHash -LiteralPath $current).Hash -eq $expectedInput) "Native input changed before final package validation: $exe"
@@ -102,6 +110,7 @@ $result = [ordered]@{
     ContentFiles = $files.Count; SourceArchive = $report.SourceArchive
     AssetDimensionsVerified = $true; PrivateApplicationHomePaths = 0
     NoGitSourceRoundtripVerified = $true
+    SettingsThemeResourcesVerified = $true
 }
 $result | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $ArtifactDirectory 'validation-report.json') -Encoding UTF8
 Write-Host "Validated unsigned $($package.Name): x64, Windows 11 22000+, two mediumIL apps, disabled Host startup, runFullTrust only."

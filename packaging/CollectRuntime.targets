@@ -10,12 +10,16 @@
       <Output TaskParameter="Result" PropertyName="CollectedCppWinRTVersion" />
     </XmlPeek>
     <Error Condition="'$(CollectedAppSDKVersion)' != '2.5.1' or '$(CollectedCppWinRTVersion)' != '2.0.240405.15'" Text="Package runtime collection requires Windows App SDK 2.5.1 and C++/WinRT 2.0.240405.15." />
+    <Error Condition="!Exists('$(OutDir)resources.pri')" Text="Settings Release must generate its application resources.pri before packaging. Build the native Settings resource-merge target; do not package only the named runtime PRI files." />
     <ItemGroup>
       <WindowSweatersRuntime Include="@(MicrosoftWindowsAppSDKFiles);@(MicrosoftWindowsAppSDKFilesRes)">
         <PackagePath>%(RecursiveDir)%(Filename)%(Extension)</PackagePath>
       </WindowSweatersRuntime>
       <WindowSweatersRuntime Include="$(FoundationDir)runtimes\win-x64\native\Microsoft.WindowsAppRuntime.Bootstrap.dll">
         <PackagePath>Microsoft.WindowsAppRuntime.Bootstrap.dll</PackagePath>
+      </WindowSweatersRuntime>
+      <WindowSweatersRuntime Include="$(OutDir)resources.pri">
+        <PackagePath>resources.pri</PackagePath>
       </WindowSweatersRuntime>
     </ItemGroup>
     <WriteLinesToFile File="$(PackageRuntimeList)" Lines="@(WindowSweatersRuntime->'%(FullPath)|%(PackagePath)')" Overwrite="true" Encoding="UTF-8" />

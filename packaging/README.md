@@ -84,6 +84,16 @@ Each must already exist in the project's output and match the pinned dependency
 hash. WinMD design metadata, test/fixture executables, PDBs, private user files
 and probe logs are not copied. PE architecture/imports are inspected; OS import
 availability is measured on the build machine, not a clean minimum-OS machine.
+The native Settings build must also produce its merged application index
+`out\x64\Release\resources.pri`; named framework PRI files alone do not satisfy
+the app's `ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml` lookup.
+Packaging includes this explicit generated output at package root, keeps its
+hash unchanged, and rejects missing or concurrently changing resource output.
+WAP must not regenerate or merge this application PRI.
+The package verifier uses SDK MakePRI to inspect the packaged index and requires
+both embedded `Microsoft.UI.Xaml/Themes/themeresources.xbf` and `generic.xbf`.
+This is resource-content validation, not proof that installed WinUI startup or
+theme changes succeed; those require the separately authorized UI check.
 
 ## Artifacts, validation and licensing
 

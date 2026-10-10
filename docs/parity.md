@@ -7,20 +7,20 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | Issue | Contract | Implementation | Qualification |
 | --- | --- | --- | --- |
 | [#2](https://github.com/BumpyClock/window-sweaters/issues/2) | Native tray host and noninteractive exterior border | Implemented and independently reviewed | Clean-source Debug/Release builds, Computer Use targeted input, caption controls, and graceful shutdown verified; foreground pixel, resize-handle, and taskbar/Alt-Tab qualification pending |
-| [#3](https://github.com/BumpyClock/window-sweaters/issues/3) | Target discovery, lifetime safety, move/resize settlement | Integrated and independently reviewed | Debug/Release host regressions and nine tracker scenarios pass; controlled desktop lifecycle qualification pending |
-| [#4](https://github.com/BumpyClock/window-sweaters/issues/4) | Below-target stacking, dialogs, topmost bands | Pending | Pending visible ordering and input evidence |
+| [#3](https://github.com/BumpyClock/window-sweaters/issues/3) | Target discovery, lifetime safety, move/resize settlement | Integrated and independently reviewed | Eleven tracker scenarios pass; real Computer Use move/resize/minimize/restore fixture completes with stable lifetime and no pure-move redraw |
+| [#4](https://github.com/BumpyClock/window-sweaters/issues/4) | Below-target stacking, dialogs, topmost bands | Helper and host wiring independently reviewed | 2,296 private-desktop checks pass per configuration; Computer Use captured modal occlusion and band changes; final live-host matrix pending |
 | [#5](https://github.com/BumpyClock/window-sweaters/issues/5) | Faithful stockinette, shading, oriented edges, corners | Source math and native perimeter raster independently reviewed; live upload pending | Debug/Release: 131 checks pass; corrected same-chart texture comparison MAE 3.86/255; complete live parity pending |
 | [#6](https://github.com/BumpyClock/window-sweaters/issues/6) | Native settings, host-owned persistence, secure revisioned IPC | Native WinUI and revisioned IPC/storage independently reviewed; host binding pending | Debug/Release: 412 real Session/IPC/storage assertions pass; integrated UI-host verification pending |
-| [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Exact 37-theme, 47-chart source data ported; material and settings integration pending | C17/C++20 data tests and pinned-source verifier pass; visual parity pending |
-| [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Pending | Pending identity and relaunch tests |
-| [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Pending | Pending resolver and native app evidence |
-| [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Pending | Pending synthetic icons and stale-work tests |
-| [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Pending | Pending imports, precedence, and restart tests |
-| [#12](https://github.com/BumpyClock/window-sweaters/issues/12) | Physical geometry, mixed DPI, Snap, clipping | Geometry module implemented; host integration pending | Debug/Release: 290 deterministic checks pass; physical monitor matrix pending |
-| [#13](https://github.com/BumpyClock/window-sweaters/issues/13) | Desktop, session, and power visibility | Pending | Pending transitions and conservative recovery |
-| [#14](https://github.com/BumpyClock/window-sweaters/issues/14) | Shared-device loss and generation-safe recovery | Pending | Pending fault injection; real driver reset separate |
-| [#15](https://github.com/BumpyClock/window-sweaters/issues/15) | Bounded perimeter rendering and idle/movement invariants | Pending | Pending named resource fixture and measured budgets |
-| [#16](https://github.com/BumpyClock/window-sweaters/issues/16) | Reversible packaged startup and resilient tray/shutdown | Pending | Pending isolated StartupTask and operation tests |
+| [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Catalogue rendering, host appearance wiring, and persisted WinUI controls independently reviewed | 971 renderer checks and 43 production appearance comparisons pass; real Spotify selection, live width/pause, preview, persistence and restart verified through Computer Use |
+| [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Identity, preference, and metadata models independently reviewed; host/UI persistence pending | Debug/Release: 566 checks pass, including completion-pressure retirement |
+| [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Resolver independently reviewed; host integration pending | Debug/Release: 444 checks pass, including Unicode identity stability; installed-app demonstration pending |
+| [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Source palette math and bounded icon preparation independently reviewed; host integration pending | Synthetic and own-executable icon checks pass; cross-feature runtime qualification pending |
+| [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Native import model independently reviewed; host/UI persistence pending | Debug/Release: 1,618 checks pass, including removal/reimport revision safety; real restart qualification pending |
+| [#12](https://github.com/BumpyClock/window-sweaters/issues/12) | Physical geometry, mixed DPI, Snap, clipping | Geometry and GPU corner policy integrated and independently reviewed | 1,645 focused geometry checks and actual GPU rounded-mask readback pass; normal fixture corners inspected at 100%; physical mixed-monitor matrix pending |
+| [#13](https://github.com/BumpyClock/window-sweaters/issues/13) | Desktop, session, and power visibility | Public-API visibility and host wiring independently reviewed | Ten native/model groups pass; current-desktop tool-window publication verified; actual switching/lock/sleep transitions pending |
+| [#14](https://github.com/BumpyClock/window-sweaters/issues/14) | Shared-device loss and generation-safe recovery | Bounded shared-device recovery integrated and independently reviewed | Injected real D3D/DComp reconstruction verified through Computer Use, with stable target and reused CPU yarn; actual driver reset remains unverified |
+| [#15](https://github.com/BumpyClock/window-sweaters/issues/15) | Bounded perimeter rendering and idle/movement invariants | Bounded preparation independently reviewed; four-surface host publication implemented | 23 native tests, 382 assertions pass per configuration; aggregate live compositor budgets pending |
+| [#16](https://github.com/BumpyClock/window-sweaters/issues/16) | Reversible packaged startup and resilient tray/shutdown | Native StartupTask controller independently reviewed; settings/tray persistence pending | State/cancellation checks pass; installed-package startup and Explorer restart pending |
 | [#17](https://github.com/BumpyClock/window-sweaters/issues/17) | Native MSIX and Microsoft Store preparation | In progress under the user's Store scope change | Development identity only; Partner Center identity, packaged execution, and Store submission pending |
 | [#18](https://github.com/BumpyClock/window-sweaters/issues/18) | Cross-feature parity and final qualification | Pending | Not release-qualified |
 
@@ -81,3 +81,43 @@ channel difference of 3.86/255 against the pinned renderer-generated collection
 crop, versus 16.81 before the orientation correction. Its measured edge-energy
 ratio is 0.923. These crop metrics support texture fidelity; they do not establish
 all catalogue variants, full-frame pixel identity, or live desktop parity.
+
+## Native runtime corrections
+
+Computer Use exposed a fixture redraw loop that model/build checks did not catch.
+The fixture previously rewrote status while handling paint and read messages.
+It now changes cached text only when state changes; native idle-query evidence
+records zero status writes, and the rebuilt fixture's controls remain accessible.
+
+Real Settings activation then failed in `Microsoft.UI.Xaml.dll`. Stage diagnostics
+identified the missing application resource index:
+`Cannot locate resource from 'ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml'`.
+The resource existed in the framework PRI, but no canonical application
+`resources.pri` connected the lookup. Native MakePRI now builds that index.
+Computer Use subsequently inspected the actual native Settings window, including
+the appearance controls and production preview. Host-connected mutations still
+have separate qualification from activation. Subsequent native checks selected
+Spotify, saved width and pause changes, restored the selected sweater after
+restart, and closed Settings without stopping decoration.
+
+## Native corners and device recovery
+
+The Windows 11 default-corner policy now distinguishes eligible standard frames
+from layered/custom-region or unsupported shapes. Normal eligible frames use an
+8-DIP target-radius policy; small rounded hints use 4 DIP. Explicit square and
+Snap-edge policies remain square. These values are documented policies, not
+universal discovery of every application's custom outline.
+
+GPU publication previously subtracted a rectangular content area, removing the
+rounded corner yarn produced by the knitting core. It now uses the rounded hole
+and retained one-DIP tuck beneath the verified target order. Actual GPU readback
+checks cover square, normal, small-radius and fractional-scale masks,
+premultiplied alpha, transparent central content, and continuous corner arcs.
+Computer Use inspected the rebuilt normal fixture instead of relying only on
+offscreen artwork.
+
+A fixture-only injected graphics failure also rebuilt the actual shared
+D3D/DirectComposition resources. The device generation advanced, the old overlay
+was replaced, the full target lifetime stayed unchanged, the current sweater
+returned, and CPU yarn-generation count remained constant. This does not claim
+an actual driver reset.

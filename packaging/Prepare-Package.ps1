@@ -103,8 +103,12 @@ foreach ($line in $runtimeRows) {
         throw "Runtime output differs from the pinned dependency: $relative. Rebuild Settings."
     }
     Add-Payload $built $relative 'WindowsAppSDK project runtime item'
+    if ($relative -eq 'resources.pri') {
+        $payload[$relative].Origin = 'Settings generated application resource index'
+        $applicationInputs[$relative] = $payload[$relative].SHA256
+    }
 }
-foreach ($required in @('Microsoft.ui.xaml.dll', 'Microsoft.UI.Xaml.Controls.pri', 'Microsoft.WindowsAppRuntime.dll', 'Microsoft.WindowsAppRuntime.pri', 'Microsoft.WindowsAppRuntime.Bootstrap.dll')) {
+foreach ($required in @('resources.pri', 'Microsoft.ui.xaml.dll', 'Microsoft.UI.Xaml.Controls.pri', 'Microsoft.WindowsAppRuntime.dll', 'Microsoft.WindowsAppRuntime.pri', 'Microsoft.WindowsAppRuntime.Bootstrap.dll')) {
     if (!$payload.ContainsKey($required)) { throw "Missing self-contained runtime: $required" }
 }
 $licenseRoots = @($runtimeRows | ForEach-Object { $_.Split('|', 2)[0] } |
