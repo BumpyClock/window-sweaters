@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Frame geometry adapted from upstream src/knit.c:505-731 at
+// a49dff52483dafdbe27f972bd271cd28d37cef1c. No CoreGraphics compatibility layer.
+#include "KnitRaster.h"
+#include "..\Knitting\WicSurface.h"
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
+namespace window_sweaters::rendering {
+namespace {
+using knitting::detail::Check;
+using knitting::detail::ComPtr;
+using knitting::detail::WicSurface;
+
+KnitFrameSpec Normalize(KnitFrameSpec f) {
+    if (!std::isfinite(f.widthDip) || !std::isfinite(f.heightDip)
+        || !std::isfinite(f.radiusDip) || !std::isfinite(f.bandDip)
+        || !std::isfinite(f.tuckDip) || !std::isfinite(f.deviceScale)
+        || !std::isfinite(f.dim) || f.widthDip <= 0.f || f.heightDip <= 0.f
+        || f.bandDip > 256.f || f.deviceScale < knitting::MinimumDeviceScale
+        || f.deviceScale > knitting::MaximumDeviceScale
+        || f.dim < 0.f || f.dim > 1.f
+        || ((f.contentWidthPixels == 0) != (f.contentHeightPixels == 0))
+        || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre))
+        throw std::invalid_argument("Invalid knit frame specification");
+    if (f.contentWidthPixels) {
+        f.widthDip = static_cast<float>(f.contentWidthPixels) / f.deviceScale;
+        f.heightDip = static_cast<float>(f.contentHeightPixels) / f.deviceScale;
+    }
+    if (!std::isfinite(f.widthDip) || !std::isfinite(f.heightDip))
+        throw std::invalid_argument("Derived knit frame dimensions are nonfinite");
+    f.bandDip = std::max(2.f, f.bandDip);
+    f.radiusDip = std::clamp(f.radiusDip, 0.f, std::min(f.widthDip, f.heightDip) * 0.5f);
+    f.tuckDip = std::max(1.f, f.tuckDip);
+    float half = std::min(f.widthDip, f.heightDip) * 0.5f - 2.f;
+    if (f.tuckDip > half) f.tuckDip = half > 1.f ? half : 1.f;
+    return f;
+}
+
+ComPtr<ID2D1Geometry> Ring(ID2D1Factory* factory, const KnitFrameSpec& f) {
+    ComPtr<ID2D1RoundedRectangleGeometry> outer, inner;
+    float band = f.bandDip, tuck = f.tuckDip;
+    float ow = f.widthDip + 2.f * band, oh = f.heightDip + 2.f * band;
+    Check(factory->CreateRoundedRectangleGeometry(
+        D2D1::RoundedRect(D2D1::RectF(0, 0, ow, oh), f.radiusDip + band, f.radiusDip + band), &outer),
+        "Create outer rounded ring");
+    // Upstream tiny-window tuck can invert the inner rectangle. Its hole is
+    // then empty, not a reflected negative-sized rectangle.
+    if (f.widthDip <= 2.f * tuck || f.heightDip <= 2.f * tuck) return outer;
+    float radius = std::max(0.f, f.radiusDip - tuck);
+    Check(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(
+        D2D1::RectF(band + tuck, band + tuck, band + f.widthDip - tuck,
+                   band + f.heightDip - tuck), radius, radius), &inner), "Create inner rounded ring");
+    ComPtr<ID2D1GeometryGroup> ring;
+    ID2D1Geometry* contours[] = {outer.Get(), inner.Get()};
+    Check(factory->CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, contours, 2, &ring),
+          "Create even-odd rounded ring");
+    return ring;
+}
+
+ComPtr<ID2D1PathGeometry> Mitre(ID2D1Factory* factory, float length, float depth) {
+    ComPtr<ID2D1PathGeometry> path;
+    ComPtr<ID2D1GeometrySink> sink;
+    Check(factory->CreatePathGeometry(&path), "Create mitre path");
+    Check(path->Open(&sink), "Open mitre path");
+    sink->BeginFigure(D2D1::Point2F(0, 0), D2D1_FIGURE_BEGIN_FILLED);
+    const D2D1_POINT_2F points[] = {{length, 0}, {length - depth, depth}, {depth, depth}};
+    sink->AddLines(points, 3);
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    Check(sink->Close(), "Close mitre path");
+    return path;
+}
+
+KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, int side,
+                           std::uint32_t width, std::uint32_t height, float depth, float gutterDip) {
+    float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
+    float right = std::floor((gutterDip + ow - depth) * f.deviceScale);
+    float bottom = std::floor((gutterDip + oh - depth) * f.deviceScale);
+    float narrow = std::ceil((gutterDip + depth) * f.deviceScale);
+    if (!std::isfinite(right) || !std::isfinite(bottom) || !std::isfinite(narrow)
+        || right < 0.f || right > width || bottom < 0.f || bottom > height
+        || narrow < 0.f || narrow > std::max(width, height))
+        throw std::invalid_argument("Derived knit piece bounds are invalid");
+    auto dx = static_cast<std::uint32_t>(right);
+    auto dy = static_cast<std::uint32_t>(bottom);
+    auto dw = static_cast<std::uint32_t>(narrow);
+    KnitRasterPiece piece;
+    std::uint32_t pw = width, ph = height;
+    if (side == 0) ph = std::min(dw, height);
+    if (side == 1) { piece.x = dx; pw = width - dx; }
+    if (side == 2) { piece.y = dy; ph = height - dy; }
+    if (side == 3) pw = std::min(dw, width);
+    WicSurface surface(pw, ph, f.deviceScale);
+    auto ring = Ring(surface.factory.Get(), f);
+    float length = side % 2 ? oh : ow;
+    auto mitre = Mitre(surface.factory.Get(), length, depth);
+    const D2D1::Matrix3x2F orientations[] = {
+        D2D1::Matrix3x2F::Identity(),
+        D2D1::Matrix3x2F(0, 1, -1, 0, ow, 0),
+        D2D1::Matrix3x2F(-1, 0, 0, -1, ow, oh),
+        D2D1::Matrix3x2F(0, -1, 1, 0, 0, oh)
+    };
+    auto placement = D2D1::Matrix3x2F::Translation(
+        gutterDip - static_cast<float>(piece.x) / f.deviceScale,
+        gutterDip - static_cast<float>(piece.y) / f.deviceScale);
+    ComPtr<ID2D1Bitmap> bitmap;
+    const auto& image = tile.image;
+    auto properties = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.f * tile.layout.raster_scale, 96.f * tile.layout.raster_scale);
+    Check(surface.target->CreateBitmap(D2D1::SizeU(image.width, image.height),
+        image.pixels.data(), image.stride, properties, &bitmap), "Upload software periodic tile");
+    ComPtr<ID2D1BitmapBrush> brush;
+    auto sampling = tile.spec.sampling == knitting::Sampling::Nearest
+        ? D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
+    auto brushProperties = D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, sampling);
+    Check(surface.target->CreateBitmapBrush(bitmap.Get(), brushProperties, &brush), "Create periodic yarn brush");
+    float px = f.anchor == KnitAnchor::Centre ? length * 0.5f - tile.layout.width_dip * 0.5f : 0.f;
+    float py = f.bandDip * 0.5f - tile.layout.height_dip * 0.5f;
+    brush->SetTransform(D2D1::Matrix3x2F::Translation(px, py));
+    ComPtr<ID2D1SolidColorBrush> backing, black;
+    Check(surface.target->CreateSolidColorBrush(knitting::detail::OpaqueColor(tile.spec.baseArgb, 0.96f), &backing),
+          "Create opaque yarn backing");
+    Check(surface.target->CreateSolidColorBrush(D2D1::ColorF(0.f, 0.f, 0.f, f.dim), &black), "Create dim overlay");
+    surface.target->BeginDraw();
+    surface.target->Clear(D2D1::ColorF(0.f, 0.f, 0.f, 0.f));
+    surface.target->SetTransform(placement);
+    surface.target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), ring.Get()), nullptr);
+    surface.target->SetTransform(orientations[side] * placement);
+    auto mask = D2D1::LayerParameters(D2D1::InfiniteRect(), mitre.Get(), D2D1_ANTIALIAS_MODE_ALIASED);
+    surface.target->PushLayer(mask, nullptr);
+    auto rectangle = D2D1::RectF(0.f, 0.f, length, depth);
+    surface.target->FillRectangle(rectangle, backing.Get());
+    surface.target->FillRectangle(rectangle, brush.Get());
+    if (f.dim > 0.001f) surface.target->FillRectangle(D2D1::RectF(-depth, -depth, length + 2.f*depth, 3.f*depth), black.Get());
+    surface.target->PopLayer();
+    surface.target->PopLayer();
+    Check(surface.target->EndDraw(), "Render knit perimeter side");
+    piece.image = surface.Read();
+    return piece;
+}
+}
+
+KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
+                                         knitting::TileSpec tileSpec, knitting::TileCache& cache) {
+    auto f = Normalize(requested);
+    float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
+    auto naturalInset = static_cast<std::uint32_t>(std::ceil(f.bandDip * f.deviceScale));
+    auto inset = f.physicalPaddingPixels ? f.physicalPaddingPixels : naturalInset;
+    if (inset + 1u < naturalInset || inset > naturalInset + 1u)
+        throw std::invalid_argument("Authoritative physical padding differs by more than one pixel");
+    double contentWidth = f.contentWidthPixels ? f.contentWidthPixels
+        : std::ceil(static_cast<double>(f.widthDip) * f.deviceScale);
+    double contentHeight = f.contentHeightPixels ? f.contentHeightPixels
+        : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
+    double width = contentWidth + 2. * inset, height = contentHeight + 2. * inset;
+    if (width > 32768 || height > 32768) throw std::invalid_argument("Frame dimensions exceed limits");
+    float irad = std::max(0.f, f.radiusDip - f.tuckDip);
+    float depth = f.bandDip + f.tuckDip + irad * (1.f - 0.7071067811865475244f) + 1.f;
+    depth = std::min(depth, std::min(ow, oh) * 0.5f);
+    // Bound the complete allocation before generating a tile or any surface.
+    double narrow = std::ceil(depth * f.deviceScale) + 2.;
+    if (2. * narrow * (width + height) > 16. * 1024. * 1024.)
+        throw std::invalid_argument("Perimeter byte limit exceeded");
+    tileSpec.bandDip = f.bandDip;
+    tileSpec.deviceScale = f.deviceScale;
+    KnitPerimeter perimeter;
+    perimeter.width = static_cast<std::uint32_t>(width);
+    perimeter.height = static_cast<std::uint32_t>(height);
+    perimeter.contentInsetPixels = inset;
+    perimeter.bandDip = f.bandDip;
+    perimeter.deviceScale = f.deviceScale;
+    perimeter.tile = cache.Get(tileSpec);
+    float gutterDip = static_cast<float>(inset) / f.deviceScale - f.bandDip;
+    for (int side = 0; side < 4; ++side)
+        perimeter.pieces[side] = RenderSide(f, *perimeter.tile, side, perimeter.width, perimeter.height, depth, gutterDip);
+    return perimeter;
+}
+
+knitting::RasterImage KnitRaster::Compose(const KnitPerimeter& p) {
+    if (!p.width || !p.height || p.width > 32768 || p.height > 32768
+        || static_cast<std::uint64_t>(p.width) * p.height > 16u * 1024u * 1024u)
+        throw std::invalid_argument("Fixture image exceeds limits");
+    knitting::RasterImage image{p.width, p.height, p.width * 4, {}};
+    image.pixels.resize(static_cast<std::size_t>(p.width) * p.height);
+    for (const auto& piece : p.pieces) {
+        const auto& src = piece.image;
+        if (piece.x > p.width || piece.y > p.height || src.width > p.width - piece.x
+            || src.height > p.height - piece.y || src.stride != src.width * 4u
+            || src.pixels.size() != static_cast<std::size_t>(src.width) * src.height)
+            throw std::invalid_argument("Invalid perimeter piece");
+        for (std::uint32_t y = 0; y < src.height; ++y)
+            for (std::uint32_t x = 0; x < src.width; ++x) {
+                auto s = src.pixels[static_cast<std::size_t>(y) * src.width + x];
+                auto& d = image.pixels[static_cast<std::size_t>(y + piece.y) * p.width + x + piece.x];
+                std::uint32_t inverse = 255 - (s >> 24), out = 0;
+                for (int shift = 0; shift < 32; shift += 8) {
+                    auto channel = ((s >> shift) & 255) + (((d >> shift) & 255) * inverse + 127) / 255;
+                    out |= std::min(255u, channel) << shift;
+                }
+                d = out;
+            }
+    }
+    return image;
+}
+
+knitting::RasterImage KnitRaster::RenderFrame(const KnitFrameSpec& frame,
+                                             knitting::TileSpec tile, knitting::TileCache& cache) {
+    return Compose(RenderPerimeter(frame, tile, cache));
+}
+}

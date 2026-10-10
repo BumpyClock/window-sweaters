@@ -1,0 +1,90 @@
+app-05.png is an actual renderer-generated collection plate, not promotional art.
+Source: https://github.com/saragordic/window-sweaters
+Pinned commit: a49dff52483dafdbe27f972bd271cd28d37cef1c
+Source path: docs/collection/app-05.png
+SHA256: D4E52C78024D287BB0729D7F696FA2FE09A552ED89F32C43A4E8B86C79A9AC4E
+License: GPL-3.0; preserved repository LICENSE.
+Attribution: Window Sweaters derives from JankyBorders by Felix Kratz.
+The upstream NOTICE.md identifies collection plates as renderer output.
+
+Plate generator: tests/render.c:233-279, individual_review().
+Geometry: 720x530 DIP canvas at 2x; content x48/y112, 620x140 DIP,
+radius10/band10/tuck1. Crop x76/y204/w1280/h320 physical pixels.
+CoreText captions are excluded. White application content is masked out.
+
+The plate contains Spotify's authored two-yarn chart; this #5 slice is plain
+stockinette, not a claim to port that chart. Tests compare exterior ring geometry
+at <=1% coverage disagreement and assert exact pinned stockinette quadratic
+control points, 5-level ridge constants, blur kernel, gauge, opacity, periodic
+sampling and four edge rotations separately. Full catalogue frames/cuffs/corners
+are not rendered by this #5 plain-stockinette slice.
+The enlarged upstream detail crop x76/y602/w1280/h80 contains only stitches.
+For a separate horizontal stitch-pitch check, tests normalize its literal
+green/butter palette and omit mixed-colour pixels, then measure autocorrelation.
+Both the source plate and native raised-stockinette detail have an 18-physical-
+pixel horizontal stitch pitch at 8 px/DIP (2.25 DIP), tolerance +/-1 pixel.
+Measured correlations: source 0.937469, native 1.0; acceptance requires >0.5.
+Measured exterior disagreement: 140/59724 pixels, 0.234412%, below 1%.
+This is geometry/pitch evidence, not complete visual or pixel parity.
+The plain 8x8 repeat rounds to 18x13 DIP; Spotify's 12x6 chart rounds to
+27x10 DIP. Their row-step rounding and across-band phase differ by design.
+D2D and CoreGraphics differ in curve coverage, stroke AA and image interpolation;
+pixel identity is neither expected nor used as an acceptance criterion.
+Native linear bitmap sampling at +/-90 degrees differs from the horizontal
+sample by at most 1/255 per channel (measured); tests enforce this limit.
+Nearest sampling at matched tile/output scale is tested for exact rotation.
+Unmatched nearest scales can put sample coordinates on texel ties, so their
+rotations are not used as a pixel-identity criterion. PNG stores straight alpha;
+WIC unpremultiply/re-premultiply rounding changes at most 1/255 per channel,
+with unchanged alpha (measured and enforced).
+No macOS execution was available for a new chart-free reference at this revision.
+
+Texture-fidelity regression isolated with the actual immutable Designs Spotify
+12x6 chart and its literal green/butter colours. The diagnostic uses the SAME
+production RasterizeTile path/ridge/blur/shader, with exact source27x10 DIP repeat,
+row_step10/6, yarn0.9 DIP, sampling4x, and a640x80 detail at8physicalpixels/DIP.
+The authored fixture is not a claim that catalogue themes are live-wired.
+Controlled native/source grayscale MAE before correction16.8085, RMSE20.5058.
+Root cause: WIC rows are top-down while upstream shader bitmap rows are bottom-up.
+The native adapter now reverses both colour and height rows before the unmodified
+source shader and reverses output afterwards. This preserves source normal/light
+and fibre-grain coordinates without changing material/contrast constants.
+Corrected detail MAE3.86242, RMSE5.64123, edge-energy ratio0.922976.
+Regression gates: grayscale MAE<6, RMSE<8, edge-energy ratio0.85..1.10; these
+bound the observed D2D/CoreGraphics coverage/interpolation differences without
+claiming pixel identity. A path-Y-flip probe was substantially worse (MAE68.8225)
+and rejected; the production path remains in the correct edge-inward direction.
+The earlier plain-vs-two-yarn blinded pair could not isolate this shader defect;
+source-matched Spotify detail now permits a genuine same-palette/repeat review.
+
+Native placement contract: contentInsetPixels=ceil(bandDip*deviceScale).
+Supported logical-to-physical scale range is deliberately1/8x..8x. Finite but
+near-zero positive scales are rejected before physical-to-DIP division. Derived
+DIP dimensions and piece offset/extents are also validated before integer casts;
+tests cover deviceScale1e-38f with physical1000x241 and the supported minimum.
+Optional physical content dimensions avoid physical->DIP->ceil off-by-one.
+An optional authoritative physicalPaddingPixels accepts the native geometry's
+double-precision padding when conversion to the source float band/scale crosses
+an integer. It must be within one pixel of the renderer's natural padding.
+Tests cover band10.00000001 at 1x: float source band remains10, native padding11
+creates a transparent one-pixel gutter rather than stretching yarn.
+The fractional difference between the integer canvas padding and true logical
+band is transparent coverage gutter; it does not move the target content.
+For 620x140 DIP at 1.25x the integer canvas is 801x201, inset13, while the
+actual band remains 12.5 physical pixels. At 2x the fixture remains 1280x320.
+Tuck is preserved under the content; the host must exclude content in its
+compositor clip or place decoration below its target. PNGs do not emulate this
+live compositor policy. No live host wiring or desktop parity is claimed here.
+
+Native validation: MSBuild tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj
+/p:Configuration=Debug /p:Platform=x64 (repeat with Configuration=Release).
+Run out\x64\Debug\WindowSweaters.Knitting.Tests.exe from the repository root,
+or the Release executable. Both pass 131 checks with v145/C17/C++20,
+SDK10.0.26100.0, W4/WX. Generated PNGs persist under tests\Knitting\outputs
+(ignored); the static library is out\x64\<configuration>\WindowSweaters.Knitting.lib.
+Outputs: stockinette-620x140-2x.png, stockinette-dim-2x.png,
+stockinette-1.25x.png, raised-stockinette-620x140-2x.png,
+plain-periodic-tile.png, raised-stitch-detail-4x.png.
+Controlled source-texture outputs: spotify-source-detail.png,
+spotify-corrected-detail.png, spotify-diagnostic-tile.png,
+spotify-diagnostic-height.png, raised-solid-matched-phase.png.
