@@ -4,5 +4,6 @@ out/
 **/bin/
 artifacts/
 tests/**/outputs/
+tests/**/.run-*/
 *.user
 *.suo
