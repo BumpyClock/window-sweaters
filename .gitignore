@@ -1,4 +1,8 @@
 .vs/
 out/
+**/obj/
+**/bin/
+artifacts/
+tests/**/outputs/
 *.user
 *.suo
