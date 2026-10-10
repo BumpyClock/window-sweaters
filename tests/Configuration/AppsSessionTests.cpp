@@ -1,5 +1,6 @@
 #include "..\..\src\Settings\Session.h"
 #include "..\..\src\Configuration\Pipe.h"
+#include "StallPipe.h"
 #include <atomic>
 #include <condition_variable>
 #include <fstream>
@@ -74,7 +75,7 @@ void SessionCases(std::filesystem::path const& root) {
     std::atomic<bool> block=true,lose=false;
     settings::SessionTransport transport;
     transport.start_host=[&]{++launches; return false;};
-    transport.exchange=[&](Message const& request) {
+    transport.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::eligibility) {
             ++commands;
             if (block.exchange(false)) gate.Block();
@@ -203,7 +204,7 @@ void RecoveryCases(std::filesystem::path const& root,bool newer) {
     Views appsViews;
     std::atomic<unsigned> launches{};
     settings::SessionTransport transport;
-    transport.exchange=[&](Message const& request){return Exchange(server.Endpoint(),Self(),request);};
+    transport.exchange=[&](Message const& request,HANDLE){return Exchange(server.Endpoint(),Self(),request);};
     transport.start_host=[&]{++launches; return false;};
     settings::AppsSession apps(options,[&](auto state){appsViews.Publish(std::move(state));},transport);
     auto recovery=appsViews.Wait([](auto const& state) {
@@ -260,7 +261,26 @@ void RecoveryCases(std::filesystem::path const& root,bool newer) {
     }
     Check(preserved && launches==0,"Recovery retains exact corrupt/newer source bytes and neither session restarts Host");
 }
+void StalledExchangeStopsPromptly(std::filesystem::path const& root,bool busy) {
+    settings::Options options{true,root/L"apps-stall-stop",L"apps-stall-"+std::to_wstring(GetCurrentProcessId())};
+    StallPipe peer(busy);
+    std::atomic<unsigned> calls{};
+    settings::SessionTransport transport;
+    transport.exchange=[&](Message const& request,HANDLE cancel){ ++calls; return Exchange(peer.name,Self(),request,cancel); };
+    transport.start_host=[]{return false;};
+    settings::AppsSession session(options,[](settings::AppsConnectionState){},transport);
+    for (int i=0;i<500 && !calls;++i) Sleep(10);
+    Check(calls==1,"Apps session reaches the stalled exchange");
+    Sleep(100);
+    auto began=GetTickCount64();
+    session.RequestStop(); session.RequestStop(); session.Stop();
+    Check(GetTickCount64()-began<500,"Stop cancels a stalled or busy Apps exchange promptly");
+    session.Stop();
+    Sleep(300);
+    Check(calls==1,"No exchange starts after Apps session stop");
+}
 }
 int RunAppsSessionTests(std::filesystem::path const& root) {
-    checks=0; SessionCases(root); RecoveryCases(root,false); RecoveryCases(root,true); return checks;
+    checks=0; SessionCases(root); RecoveryCases(root,false); RecoveryCases(root,true);
+    StalledExchangeStopsPromptly(root,false); StalledExchangeStopsPromptly(root,true); return checks;
 }

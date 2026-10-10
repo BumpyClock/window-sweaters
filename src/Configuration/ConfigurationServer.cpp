@@ -56,6 +56,9 @@ struct ConfigurationServer::Impl {
     Configuration committed{};
     std::vector<applications::RunningApplicationWindow> application_windows;
     ApplicationsSnapshot application_snapshot;
+    // The snapshot is a pure function of committed and application_windows; publication rebuilds eagerly.
+    std::optional<std::uint64_t> application_revision;
+    std::uint64_t application_builds{};
     std::map<applications::AppIdentity,std::uint64_t> eligibility_revisions;
     StorageState storage_state=StorageState::ready;
     DWORD storage_error=ERROR_SUCCESS;
@@ -85,7 +88,8 @@ struct ConfigurationServer::Impl {
             storage_state==StorageState::io_error?Status::storage_error:Status::recovery_required;
         response.configuration=committed; response.error=storage_error;
         if (request.operation==Operation::applications_snapshot) {
-            RefreshApplications(); response.applications=application_snapshot;
+            if (application_revision!=committed.revision) RefreshApplications();
+            response.applications=application_snapshot;
         }
         if (request.client_lease != 0) {
             if (request.server != server) {
@@ -142,6 +146,7 @@ struct ConfigurationServer::Impl {
             if (next.observation_generation==UINT64_MAX) throw std::overflow_error("Application observations exhausted");
             ++next.observation_generation; application_snapshot=std::move(next);
         }
+        application_revision=committed.revision; ++application_builds;
     }
     std::future<MutationResult> Enqueue(Message const& request,bool pause_width_only=false) {
         auto job=std::make_unique<Job>(); job->request=request; job->pause_width_only=pause_width_only;
@@ -356,6 +361,9 @@ void ConfigurationServer::PublishApplications(std::vector<applications::RunningA
     }
     impl_->eligibility_revisions=std::move(revisions);
     impl_->application_windows=std::move(windows); impl_->RefreshApplications(true);
+}
+std::uint64_t ConfigurationServer::ApplicationBuilds() const {
+    std::lock_guard lock(impl_->mutex); return impl_->application_builds;
 }
 std::wstring ConfigurationServer::Endpoint() const { return impl_->endpoint; }
 std::future<MutationResult> ConfigurationServer::SubmitLocal(bool paused,float width,std::uint64_t expected_revision) {

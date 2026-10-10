@@ -3,6 +3,7 @@
 #include "WicSurface.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -14,14 +15,16 @@ void Check(HRESULT result, const char* operation) {
     if (FAILED(result)) throw std::system_error(static_cast<int>(result), std::system_category(), operation);
 }
 
-WicSurface::WicSurface(std::uint32_t width, std::uint32_t height, float scale, ID2D1Factory* sharedFactory)
+WicSurface::WicSurface(std::uint32_t width, std::uint32_t height, float scale, ID2D1Factory* sharedFactory,
+                       IWICImagingFactory* sharedWic)
     : width_(width), height_(height) {
     if (!width || !height || width > 32768 || height > 32768
         || static_cast<std::uint64_t>(width) * height > 16u * 1024u * 1024u
         || !std::isfinite(scale) || scale < MinimumDeviceScale || scale > MaximumDeviceScale)
         throw std::invalid_argument("WIC surface dimensions/scale exceed limits");
-    Check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                           IID_PPV_ARGS(&wic)), "Create WIC factory");
+    if (sharedWic) wic = sharedWic;
+    else Check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&wic)), "Create WIC factory");
     if (sharedFactory) factory = sharedFactory;
     else Check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory.GetAddressOf()), "Create D2D factory");
     Check(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA,
@@ -307,7 +310,9 @@ RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l, RasterImag
 }
 
 std::shared_ptr<const Tile> MakeTile(const TileSpec& spec) {
+    static std::atomic<std::uint64_t> nextSerial{0};
     auto tile = std::make_shared<Tile>();
+    tile->serial = ++nextSerial;
     tile->spec = spec;
     auto material = spec.material == Material::Raised ? ws_knit_raised_material(spec.gauge) : spec.gauge;
     if (spec.chart) tile->layout = ChartLayout(spec, material);

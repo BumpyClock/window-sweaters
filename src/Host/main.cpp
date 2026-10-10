@@ -634,6 +634,7 @@ private:
         std::uint64_t uploads{}, renderErrors{}, staleResults{};
         std::uint64_t appearanceResolutions{}, appearanceErrors{};
         std::uint64_t iconAccepted{}, iconStale{}, iconRecolors{}, iconFull{}, iconInvalid{};
+        std::uint64_t visibilityObservations{}, workValidations{}, geometryQueries{}, applicationPublications{};
     };
     static constexpr std::uint64_t DeviceGeneration = 1;
 
@@ -1004,6 +1005,7 @@ private:
         const auto token = entry->visibility.BeginProbe(policy);
         const HWND overlay = entry->overlay.Window();
         window_sweaters::visibility::Observation observation;
+        ++counters_.visibilityObservations;
         if (contract_) {
             if (contract_->duringVisibilityProbe) {
                 auto callback = std::move(contract_->duringVisibilityProbe);
@@ -1104,7 +1106,8 @@ private:
             if (VisibilityAllows(target) && !shown) {
                 entry = Find(target);
                 if (!entry) continue;
-                const HRESULT result = PlaceAndShow(target);
+                // Nothing pumps between this accepted probe and reactivation; Prepare still validates after it.
+                const HRESULT result = PlaceAndShow(target, entry->visibilityToken);
                 if (FAILED(result)) {
                     if (auto remaining = Find(target)) Hide(*remaining);
                     LogError(L"visibility reactivation publication", result);
@@ -1116,6 +1119,7 @@ private:
 
     bool Validate(const Action& action) {
         const WorkToken token{action.target, action.appearanceRevision};
+        ++counters_.workValidations;
         if (contract_) {
             if (contract_->suppressDuringValidation == token.target) {
                 contract_->suppressDuringValidation.reset();
@@ -1239,7 +1243,9 @@ private:
     }
 
     void PublishApplications() {
-        if (contract_ || stopped_) return;
+        if (stopped_) return;
+        ++counters_.applicationPublications;
+        if (contract_) return;
         std::vector<window_sweaters::applications::RunningApplicationWindow> windows;
         windows.reserve(entries_.size());
         for (auto const& [hwnd,entry]:entries_) {
@@ -1480,6 +1486,7 @@ private:
 
     std::optional<window_sweaters::geometry::RenderInput> CurrentGeometry(Entry& entry) {
         using namespace window_sweaters::geometry;
+        ++counters_.geometryQueries;
         const WindowQuery query = contract_ ? WindowQuery{contract_->geometry.at(entry.state.target.hwnd)}
             : QueryWindowGeometry(reinterpret_cast<HWND>(entry.state.target.hwnd));
         const auto geometry = BuildRenderInput(query,
@@ -1512,13 +1519,16 @@ private:
         if (!Validate(action)) return S_FALSE;
         current = Find(target);
         if (stopped_ || !current) return S_FALSE;
-        const auto fresh = CurrentGeometry(*current);
-        if (!EligibleNow(*current) || !fresh || !current->visibilityToken ||
-            !current->visibility.CanPublish(VisibilityPolicy(), *current->visibilityToken)) {
-            Hide(*current);
+        return MoveCurrent(*current, CurrentGeometry(*current));
+    }
+
+    // Caller owns the probe and validation; no pumping boundary may separate them from this move.
+    HRESULT MoveCurrent(Entry& entry, const std::optional<window_sweaters::geometry::RenderInput>& fresh) {
+        if (!EligibleNow(entry) || !fresh || !entry.visibilityToken ||
+            !entry.visibility.CanPublish(VisibilityPolicy(), *entry.visibilityToken)) {
+            Hide(entry);
             return S_FALSE;
         }
-        auto& entry = *current;
         const auto& input = *fresh;
         if (!entry.render.prepared || !Matches(*entry.render.prepared, entry, input)) {
             Hide(entry);
@@ -1541,12 +1551,15 @@ private:
         return S_OK;
     }
 
-    HRESULT Prepare(TargetId target) {
+    // probed: the caller's accepted probe with no pumping boundary since; reused only while still current.
+    HRESULT Prepare(TargetId target, std::optional<window_sweaters::geometry::RenderInput>* matched = nullptr,
+        const std::optional<window_sweaters::visibility::ProbeToken>& probed = {}) {
         auto current = Find(target);
         if (stopped_ || !current || !recovery_.CanRender(recovery_.Generation())) return S_FALSE;
         auto& entry = *current;
         if (!EligibleNow(entry)) { Hide(entry); return S_FALSE; }
-        if (!entry.overlay.Window()) {
+        const bool created = !entry.overlay.Window();
+        if (created) {
             const HRESULT creation = CreateOverlay(entry);
             if (FAILED(creation)) {
                 if (window_sweaters::rendering::GraphicsRecovery::IsRecoverable(creation))
@@ -1566,7 +1579,9 @@ private:
             ++counters_.creates;
         }
         if (committed_.paused || !entry.state.requestedVisible || queueFaulted_) { Hide(entry); return S_FALSE; }
-        if (!VisibilityAllows(target)) return S_FALSE;
+        const bool reuse = probed && !created && entry.visibilityToken == probed &&
+            entry.visibility.CanPublish(VisibilityPolicy(), *probed);
+        if (!reuse && !VisibilityAllows(target)) return S_FALSE;
         current = Find(target);
         if (stopped_ || !current || !queue_) return S_FALSE;
         const Action action{ActionKind::Move, target, current->state.pendingRect, current->state.dpi,
@@ -1574,10 +1589,10 @@ private:
         if (!Validate(action)) return S_FALSE;
         current = Find(target);
         if (stopped_ || !current || !queue_) return S_FALSE;
-        return PrepareCurrent(*current);
+        return PrepareCurrent(*current, matched);
     }
 
-    HRESULT PrepareCurrent(Entry& entry) {
+    HRESULT PrepareCurrent(Entry& entry, std::optional<window_sweaters::geometry::RenderInput>* matched = nullptr) {
         if (!EligibleNow(entry) || !recovery_.CanRender(recovery_.Generation()) || !entry.visibilityToken ||
             !entry.visibility.CanPublish(VisibilityPolicy(), *entry.visibilityToken)) {
             Hide(entry);
@@ -1585,8 +1600,10 @@ private:
         }
         const auto input = CurrentGeometry(entry);
         if (!input) return S_FALSE;
-        if (entry.render.prepared && Matches(*entry.render.prepared, entry, *input))
+        if (entry.render.prepared && Matches(*entry.render.prepared, entry, *input)) {
+            if (matched) matched->emplace(*input);
             return S_OK;
+        }
         Hide(entry);
         if (entry.render.pending && Matches(*entry.render.pending, entry, *input)) return S_FALSE;
         if (entry.render.failed && Matches(*entry.render.failed, entry, *input)) return S_FALSE;
@@ -1700,15 +1717,11 @@ private:
             ++counters_.uploads;
             ++counters_.draws;
             ++counters_.geometryUpdates;
-            // Revalidate again before making the newly attached visual visible.
-            if (Validate(action)) {
-                if (auto current = Find(request.token.target)) {
-                    result = PlaceAndShow(request.token.target);
-                    if (FAILED(result)) {
-                        if (auto remaining = Find(request.token.target)) Hide(*remaining);
-                        LogError(L"knit publication placement", result);
-                    }
-                }
+            // Upload neither pumps nor ends probe authority: the post-probe validation and geometry above show it.
+            result = ShowCurrent(request.token.target, publication);
+            if (FAILED(result)) {
+                if (auto remaining = Find(request.token.target)) Hide(*remaining);
+                LogError(L"knit publication placement", result);
             }
             probeDirty_ = true;
         }
@@ -1758,7 +1771,7 @@ private:
         }
     }
 
-    HRESULT PlaceAndShow(TargetId identity) {
+    HRESULT PlaceAndShow(TargetId identity, const std::optional<window_sweaters::visibility::ProbeToken>& probed = {}) {
         auto current = Find(identity);
         if (stopped_ || !current) return S_FALSE;
         if (!EligibleNow(*current) || queueFaulted_) {
@@ -1766,9 +1779,18 @@ private:
             return current->appearance && std::holds_alternative<AppearanceFailure>(current->appearance->result)
                 ? S_FALSE : S_OK;
         }
-        HRESULT result = Prepare(identity);
-        if (result != S_OK) return result;
-        result = MovePrepared(identity);
+        // Preparation's probe, post-pump validation and geometry read authorize this move too.
+        std::optional<window_sweaters::geometry::RenderInput> matched;
+        const HRESULT result = Prepare(identity, &matched, probed);
+        return result == S_OK ? ShowCurrent(identity, matched) : result;
+    }
+
+    // Caller owns the probe, post-probe validation and geometry read; no pumping boundary may follow them.
+    HRESULT ShowCurrent(TargetId identity, const std::optional<window_sweaters::geometry::RenderInput>& fresh) {
+        auto current = Find(identity);
+        if (stopped_ || !current) return S_FALSE;
+        if (committed_.paused || !current->state.requestedVisible || queueFaulted_) { Hide(*current); return S_FALSE; }
+        HRESULT result = MoveCurrent(*current, fresh);
         if (result != S_OK) return result;
         current = Find(identity);
         if (stopped_ || !current || !EligibleNow(*current) || !current->render.prepared) return S_FALSE;
@@ -1812,7 +1834,8 @@ private:
 
     HRESULT ApplyBatch(const ActionBatch& actions) {
         bool capacityFreed{};
-        bool lifecycleChanged{};
+        bool publish{}; // One application publication per batch, also before an early failure.
+        HRESULT failure = S_OK;
         for (auto action : actions) {
             if (stopped_ && action.kind != ActionKind::Remove) continue;
             Entry* entry = Find(action.target);
@@ -1822,7 +1845,7 @@ private:
                     continue;
                 }
                 if (!entry) {
-                    if (entries_.contains(action.target.hwnd)) return E_UNEXPECTED;
+                    if (entries_.contains(action.target.hwnd)) { failure = E_UNEXPECTED; break; }
                     auto created = std::make_unique<Entry>(action.target);
                     entry = created.get();
                     entries_.emplace(action.target.hwnd, std::move(created));
@@ -1839,8 +1862,8 @@ private:
                 entry = Find(action.target);
                 if (!entry) { ++counters_.staleActions; continue; }
                 const HRESULT result = Prepare(action.target);
-                if (FAILED(result)) return result;
-                PublishApplications();
+                if (FAILED(result)) { failure = result; break; }
+                publish = true;
             } else if (!entry) {
                 ++counters_.staleActions;
                 continue;
@@ -1854,10 +1877,10 @@ private:
                 ForgetIcon(*entry, true);
                 entries_.erase(action.target.hwnd);
                 metadataGate_.Forget(action.target.hwnd);
-                PublishApplications();
+                publish = true;
                 capacityFreed = true;
             } else if (action.kind == ActionKind::Hide) {
-                lifecycleChanged=true;
+                publish=true;
                 const WorkToken token{action.target, action.appearanceRevision};
                 if (!Synchronize(*entry, token)) {
                     ++counters_.staleActions;
@@ -1881,19 +1904,17 @@ private:
                     entry = Find(action.target);
                     if (!entry) continue;
                     const HRESULT result = PlaceAndShow(action.target);
-                    if (FAILED(result)) return result;
+                    if (FAILED(result)) { failure = result; break; }
                 } else if (entry->state.requestedVisible && !committed_.paused && entry->render.prepared) {
-                    const auto input = CurrentGeometry(*entry);
-                    if (input) {
-                        const HRESULT result = MovePrepared(action.target);
-                        if (FAILED(result)) return result;
-                        if (result == S_FALSE && !stopped_) {
-                            if (auto remaining = Find(action.target)) remaining->placementPending = true;
-                        }
+                    // MovePrepared reads geometry once, after its pumping probe; unavailable geometry hides and retries.
+                    const HRESULT result = MovePrepared(action.target);
+                    if (FAILED(result)) { failure = result; break; }
+                    if (result == S_FALSE && !stopped_) {
+                        if (auto remaining = Find(action.target)) remaining->placementPending = true;
                     }
                 }
             } else {
-                if (action.kind==ActionKind::Show) lifecycleChanged=true;
+                if (action.kind==ActionKind::Show) publish=true;
                 if (!Validate(action)) {
                     // The old work token is rejected. Retry current immutable input, not its result.
                     if (auto pending = Find(action.target)) pending->placementPending = true;
@@ -1903,11 +1924,12 @@ private:
                 entry = Find(action.target); // Revalidation can remove or replace a lifetime.
                 if (!entry) { ++counters_.staleActions; continue; }
                 const HRESULT result = PlaceAndShow(action.target);
-                if (FAILED(result)) return result;
+                if (FAILED(result)) { failure = result; break; }
             }
             probeDirty_ = true;
         }
-        if (lifecycleChanged) PublishApplications();
+        if (publish) PublishApplications();
+        if (FAILED(failure)) return failure;
         if (capacityFreed && !stopped_) RetryRenders();
         return S_OK;
     }
@@ -2169,7 +2191,13 @@ void Host::RunConsumerContracts() {
         }
     };
     change(false, 24.0f);
+    const auto beforeDrain = host.counters_;
     pump(prepared);
+    require(host.entries_.at(10001)->presentationVisible && host.counters_.uploads == beforeDrain.uploads + 1 &&
+        host.counters_.workValidations == beforeDrain.workValidations + 2 &&
+        host.counters_.visibilityObservations == beforeDrain.visibilityObservations + 1 &&
+        host.counters_.geometryQueries == beforeDrain.geometryQueries + 2,
+        "Drained result shows with its post-probe validation and geometry; only the pre-probe gate repeats them");
     require(host.counters_.uploads == firstUploads + 1 &&
         host.entries_.at(10001)->render.prepared->frame.bandDip == 24.0f &&
         host.entries_.at(10001)->overlay.Bounds().right - host.entries_.at(10001)->overlay.Bounds().left == 373,
@@ -2186,8 +2214,13 @@ void Host::RunConsumerContracts() {
     auto& moved = windows.at(10001);
     moved.rect = {120, 130, 421, 331};
     contract.geometry.at(10001).physicalTargetBounds = {120, 130, 421, 331};
-    require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(moved, Dirty::Geometry, GetTickCount64()))),
-        "Actual consumer pure-position Move");
+    const auto beforePureMove = host.counters_;
+    require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(moved, Dirty::Geometry, GetTickCount64()))) &&
+        host.counters_.pureMoves == beforePureMove.pureMoves + 1 &&
+        host.counters_.workValidations == beforePureMove.workValidations + 1 &&
+        host.counters_.visibilityObservations == beforePureMove.visibilityObservations + 1 &&
+        host.counters_.geometryQueries == beforePureMove.geometryQueries + 1,
+        "Actual consumer pure-position Move reads geometry once, after its probe and validation");
     const auto afterMove = host.queue_->Status();
     require(beforeMove.renderRequests == afterMove.renderRequests &&
         beforeMove.renderPreparations == afterMove.renderPreparations &&
@@ -2240,11 +2273,30 @@ void Host::RunConsumerContracts() {
         "Restore last suppressed retry without another ready capacity signal");
     pump(prepared);
 
+    ActionBatch retired;
     for (const auto& [handle, window] : windows) {
         if (handle != 10001)
-            require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{window.hwnd},
-                Dirty::Lifecycle, GetTickCount64()))), "Retire burst lifetimes before catalogue contracts");
+            for (const auto& action : contract.model.Observe(DestroyedWindow{window.hwnd}, Dirty::Lifecycle, GetTickCount64()))
+                retired.push_back(action);
     }
+    const auto publications = host.counters_.applicationPublications;
+    require(SUCCEEDED(host.ApplyBatch(retired)) && host.entries_.size() == 1 &&
+        host.counters_.applicationPublications == publications + 1,
+        "Retiring 64 burst lifetimes in one batch publishes running applications once");
+    add(10002);
+    const auto staleLifetime = host.entries_.at(10001)->state.target;
+    auto partial = contract.model.Observe(DestroyedWindow{10002}, Dirty::Lifecycle, GetTickCount64());
+    auto recovery = contract.model.Observe(DestroyedWindow{10001}, Dirty::Lifecycle, GetTickCount64());
+    const auto recreated = contract.model.Observe(windows.at(10001), Dirty::Lifecycle, GetTickCount64());
+    partial.insert(partial.end(), recreated.begin(), recreated.end());
+    recovery.insert(recovery.end(), recreated.begin(), recreated.end());
+    const auto beforePartial = host.counters_.applicationPublications;
+    require(host.ApplyBatch(partial) == E_UNEXPECTED && !host.entries_.contains(10002) &&
+        host.counters_.applicationPublications == beforePartial + 1,
+        "Batch failing after a Remove still publishes the partial lifecycle change once");
+    require(SUCCEEDED(host.ApplyBatch(recovery)) && host.entries_.size() == 1 &&
+        host.entries_.at(10001)->state.target != staleLifetime, "Replayed Remove/Create recovers the reused HWND");
+    pump(prepared);
     auto appearanceChange = [&](window_sweaters::contracts::Configuration snapshot) {
         snapshot.revision = host.committed_.revision + 1;
         host.ApplyConfiguration(snapshot);
@@ -2952,6 +3004,23 @@ void Host::RunConsumerContracts() {
     require(host.MovePrepared(publicationTarget) == S_FALSE &&
         host.entries_.at(10001)->overlay.Bounds().left == 124,
         "Pumping desktop probe moves to fresh B placement, never pre-query A");
+    {
+        auto& window = windows.at(10001);
+        const auto offset = host.entries_.at(10001)->overlay.Bounds().left - window.rect.left;
+        auto shift = [&](LONG dx) {
+            window.rect.left += dx; window.rect.right += dx;
+            contract.geometry.at(10001).physicalTargetBounds.left += dx;
+            contract.geometry.at(10001).physicalTargetBounds.right += dx;
+        };
+        contract.duringVisibilityProbe = [&] {
+            shift(30);
+            host.ApplyBatch(contract.model.Observe(window, Dirty::Geometry, GetTickCount64()));
+        };
+        shift(15);
+        require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(window, Dirty::Geometry, GetTickCount64()))) &&
+            !contract.duringVisibilityProbe && host.entries_.at(10001)->overlay.Bounds().left == window.rect.left + offset,
+            "Batch pure Move reads geometry only after its pumping probe, never the pre-probe position");
+    }
     require(host.PlaceAndShow(publicationTarget) == S_OK, "Establish current presentation before stale polling probe");
     const auto stalePollUploads = host.counters_.uploads;
     contract.duringVisibilityProbe = [&] {
@@ -2974,38 +3043,123 @@ void Host::RunConsumerContracts() {
     host.PollVisibility();
     require(host.entries_.at(10001)->presentationVisible && host.counters_.uploads == stalePollUploads,
         "Stable polls preserve newest presentation with no regeneration or external recovery event");
-    contract.duringVisibilityProbe = [&] {
-        contract.duringVisibilityProbe = [&] {
-            auto changed = host.committed_;
-            ++changed.revision;
-            changed.border_width_dip = 28;
-            host.ApplyConfiguration(changed);
-            host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Appearance, GetTickCount64()));
-        };
+    auto unshow = [&] {
+        contract.offDesktop = 10001;
+        require(!host.VisibilityAllows(host.entries_.at(10001)->state.target) &&
+            !host.entries_.at(10001)->visibility.Shown() && !host.entries_.at(10001)->presentationVisible,
+            "Off-desktop probe retires shown visibility before poll reactivation");
+        contract.offDesktop.reset();
+        host.visibilityPoll_ = {};
     };
-    require(host.PlaceAndShow(publicationTarget) == S_FALSE,
-        "Pumping final desktop probe rejects old prepared configuration before Show");
-    pump(prepared);
-    contract.duringVisibilityProbe = [&] {
+    unshow();
+    {
+        const auto before = host.counters_;
+        host.PollVisibility();
+        require(host.entries_.size() == 1 && host.entries_.at(10001)->presentationVisible &&
+            host.counters_.visibilityObservations == before.visibilityObservations + 1 &&
+            host.counters_.workValidations == before.workValidations + 1 &&
+            host.counters_.geometryQueries == before.geometryQueries + 1 && host.counters_.uploads == before.uploads,
+            "Poll reactivation reuses its accepted probe; post-probe validation and one geometry read remain");
+    }
+    for (const bool tracked : {false, true}) {
+        unshow();
         contract.duringVisibilityProbe = [&] {
             windows.at(10001).rect.right += 10;
             contract.geometry.at(10001).physicalTargetBounds.right += 10;
-            host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Geometry, GetTickCount64()));
+            if (tracked) host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Geometry, GetTickCount64()));
         };
+        const auto uploads = host.counters_.uploads;
+        host.PollVisibility();
+        require(!contract.duringVisibilityProbe && !host.entries_.at(10001)->presentationVisible &&
+            host.counters_.uploads == uploads, "Poll reactivation reads geometry after its pumping probe; resize never shows old pieces");
+        host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Geometry, GetTickCount64()));
+        host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Settlement, GetTickCount64() + 300));
+        host.PlaceAndShow(publicationTarget);
+        pump(prepared);
+    }
+    for (const auto kind : {ActionKind::Show, ActionKind::Reorder}) {
+        const auto before = host.counters_;
+        const auto& shown = *host.entries_.at(10001);
+        require(SUCCEEDED(host.ApplyBatch({{kind, shown.state.target, shown.state.pendingRect, shown.state.dpi,
+            shown.state.appearanceRevision}})) && host.entries_.at(10001)->presentationVisible &&
+            host.counters_.workValidations == before.workValidations + 2 &&
+            host.counters_.visibilityObservations == before.visibilityObservations + 1 &&
+            host.counters_.geometryQueries == before.geometryQueries + 1 && host.counters_.uploads == before.uploads,
+            "Prepared Show/Reorder shares one probe and one geometry read; outer and post-probe validation remain");
+    }
+    contract.duringVisibilityProbe = [&] {
+        auto changed = host.committed_;
+        ++changed.revision;
+        changed.border_width_dip = 28;
+        host.ApplyConfiguration(changed);
+        host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Appearance, GetTickCount64()));
     };
-    require(host.PlaceAndShow(publicationTarget) == S_FALSE,
-        "Pumping final desktop probe rejects same-lifetime resize before Show");
+    require(host.PlaceAndShow(publicationTarget) == S_FALSE && !host.entries_.at(10001)->presentationVisible,
+        "Pumping shared desktop probe rejects old prepared configuration before Show");
+    pump(prepared);
+    contract.duringVisibilityProbe = [&] {
+        windows.at(10001).rect.right += 10;
+        contract.geometry.at(10001).physicalTargetBounds.right += 10;
+        host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Geometry, GetTickCount64()));
+    };
+    require(host.PlaceAndShow(publicationTarget) == S_FALSE && !host.entries_.at(10001)->presentationVisible,
+        "Pumping shared desktop probe rejects same-lifetime resize before Show");
     host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Settlement, GetTickCount64() + 300));
     pump(prepared);
-    for (const auto consumer : {0, 1, 2}) {
+    auto resubmit = [&] {
+        host.entries_.at(10001)->render.prepared.reset();
+        require(host.Prepare(host.entries_.at(10001)->state.target) == S_FALSE &&
+            host.entries_.at(10001)->render.pending.has_value(), "Submit actual worker input before a pumped drain");
+    };
+    auto drainUntilProbe = [&] { // One ready message at a time: later completions must not mask the pumped one.
+        const auto deadline = GetTickCount64() + 30000;
+        while (contract.duringVisibilityProbe && GetTickCount64() < deadline) {
+            MsgWaitForMultipleObjectsEx(0, nullptr, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            MSG message{};
+            if (PeekMessageW(&message, host.window_, window_sweaters::rendering::RenderQueue::ReadyMessage,
+                window_sweaters::rendering::RenderQueue::ReadyMessage, PM_REMOVE)) DispatchMessageW(&message);
+        }
+    };
+    resubmit();
+    contract.duringVisibilityProbe = [&] {
+        windows.at(10001).rect.right += 10;
+        contract.geometry.at(10001).physicalTargetBounds.right += 10;
+        host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Geometry, GetTickCount64()));
+    };
+    {
+        const auto before = host.counters_;
+        drainUntilProbe();
+        require(!contract.duringVisibilityProbe && !host.entries_.at(10001)->presentationVisible &&
+            host.counters_.uploads == before.uploads && host.counters_.staleResults == before.staleResults + 1,
+            "Drained result reads geometry after its pumping probe; resize never uploads or shows old input");
+    }
+    host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Settlement, GetTickCount64() + 300));
+    host.PlaceAndShow(publicationTarget);
+    pump(prepared);
+    for (const auto consumer : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+        const bool reuse = consumer == 3 || (consumer > 3 && consumer % 2);
         const auto lifetime = host.entries_.at(10001)->state.target;
+        if (consumer == 6 || consumer == 7) unshow();
+        if (consumer >= 8) resubmit();
         contract.duringVisibilityProbe = [&] {
             host.ApplyBatch(contract.model.Observe(DestroyedWindow{10001}, Dirty::Lifecycle, GetTickCount64()));
+            if (reuse) host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Lifecycle, GetTickCount64()));
         };
-        const auto result = consumer == 0 ? host.Prepare(lifetime)
-            : consumer == 1 ? host.MovePrepared(lifetime) : host.PlaceAndShow(lifetime);
-        require(result == S_FALSE && !host.Find(lifetime),
-            "Actual Prepare/Move/Show consumer rejects pumped Remove without retained Entry/TargetId references");
+        HRESULT result = S_FALSE;
+        if (consumer == 0) result = host.Prepare(lifetime);
+        else if (consumer == 1) result = host.MovePrepared(lifetime);
+        else if (consumer <= 3) result = host.PlaceAndShow(lifetime);
+        else if (consumer <= 5) {
+            auto& window = windows.at(10001);
+            window.rect.left += 5; window.rect.right += 5;
+            contract.geometry.at(10001).physicalTargetBounds.left += 5;
+            contract.geometry.at(10001).physicalTargetBounds.right += 5;
+            if (FAILED(host.ApplyBatch(contract.model.Observe(window, Dirty::Geometry, GetTickCount64())))) result = E_FAIL;
+        } else if (consumer <= 7) host.PollVisibility();
+        else drainUntilProbe();
+        require(result == S_FALSE && !contract.duringVisibilityProbe && !host.Find(lifetime) && (!reuse ||
+            (host.entries_.at(10001)->state.target != lifetime && !host.entries_.at(10001)->presentationVisible)),
+            "Actual Prepare/Move/Show/batch Move/poll/drain consumer rejects pumped Remove or HWND reuse without retained Entry/TargetId references");
         host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Lifecycle, GetTickCount64()));
         host.entries_.at(10001)->metadata=appA;
         host.PlaceAndShow(host.entries_.at(10001)->state.target);

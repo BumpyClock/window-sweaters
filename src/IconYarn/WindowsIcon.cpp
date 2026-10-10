@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <utility>
 
 namespace window_sweaters::icon_yarn {
 namespace {
@@ -19,8 +21,11 @@ constexpr unsigned MaximumIconSide = 256;
 class Handle final {
 public:
     explicit Handle(HANDLE value) : value_(value) {}
+    Handle(const Handle&) = delete;
+    Handle& operator=(const Handle&) = delete;
     ~Handle() { if (value_ && value_ != INVALID_HANDLE_VALUE) CloseHandle(value_); }
     HANDLE Get() const noexcept { return value_; }
+    HANDLE Release() noexcept { return std::exchange(value_, nullptr); }
 private:
     HANDLE value_;
 };
@@ -89,8 +94,63 @@ bool LocalPath(std::wstring_view path) noexcept {
     return path.back() != L'\\';
 }
 
-using FileResult = std::variant<std::vector<std::uint8_t>, Fallback>;
-FileResult ReadExecutable(const std::wstring& path, std::stop_token stop,
+thread_local std::uint64_t bytesRead = 0;
+
+// Bounded range reads from the validated handle; no whole-file buffer.
+class Source final {
+public:
+    Source(HANDLE file, HANDLE event, std::uint64_t size, std::stop_token stop,
+           std::chrono::steady_clock::time_point deadline)
+        : file_(file), event_(event), size_(size), stop_(stop), deadline_(deadline) {}
+    std::uint64_t Size() const noexcept { return size_; }
+    const std::optional<Fallback>& Failure() const noexcept { return failure_; }
+    std::optional<std::vector<std::uint8_t>> Read(std::uint64_t offset, std::uint64_t length) {
+        if (failure_ || offset > size_ || length > size_ - offset || length > MaximumDirectoryBytes)
+            return std::nullopt;
+        if (auto interrupted = Interrupted(stop_, deadline_)) { failure_ = *interrupted; return std::nullopt; }
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
+        if (bytes.empty()) return bytes;
+        ResetEvent(event_.Get());
+        OVERLAPPED operation{};
+        operation.hEvent = event_.Get();
+        operation.Offset = static_cast<DWORD>(offset);
+        operation.OffsetHigh = static_cast<DWORD>(offset >> 32);
+        DWORD read = 0;
+        if (!ReadFile(file_.Get(), bytes.data(), static_cast<DWORD>(bytes.size()), &read, &operation) &&
+            GetLastError() != ERROR_IO_PENDING) {
+            failure_ = Fallback{FallbackReason::IconUnavailable, GetLastError()};
+            return std::nullopt;
+        }
+        for (;;) {
+            if (GetOverlappedResult(file_.Get(), &operation, &read, FALSE)) break;
+            const DWORD error = GetLastError();
+            if (error != ERROR_IO_INCOMPLETE) {
+                failure_ = Fallback{FallbackReason::IconUnavailable, error};
+                return std::nullopt;
+            }
+            if (auto interrupted = Interrupted(stop_, deadline_)) {
+                CancelIoEx(file_.Get(), &operation);
+                // OVERLAPPED and its buffer must outlive kernel cancellation completion.
+                GetOverlappedResult(file_.Get(), &operation, &read, TRUE);
+                failure_ = *interrupted;
+                return std::nullopt;
+            }
+            WaitForSingleObject(event_.Get(), 5);
+        }
+        bytesRead += read;
+        if (read != bytes.size()) return std::nullopt;
+        return bytes;
+    }
+private:
+    Handle file_, event_;
+    std::uint64_t size_;
+    std::stop_token stop_;
+    std::chrono::steady_clock::time_point deadline_;
+    std::optional<Fallback> failure_;
+};
+
+using FileResult = std::variant<std::unique_ptr<Source>, Fallback>;
+FileResult OpenExecutable(const std::wstring& path, std::stop_token stop,
                           std::chrono::steady_clock::time_point deadline) {
     if (path.empty()) return Fallback{FallbackReason::IconUnavailable};
     if (!LocalPath(path)) return Fallback{FallbackReason::UnsupportedSource};
@@ -137,30 +197,10 @@ FileResult ReadExecutable(const std::wstring& path, std::stop_token stop,
     if (size.QuadPart > MaximumExecutableBytes)
         return Fallback{FallbackReason::SourceTooLarge};
     if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size.QuadPart));
     Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!event.Get()) return Fallback{FallbackReason::ResourceLimit, GetLastError()};
-    OVERLAPPED operation{};
-    operation.hEvent = event.Get();
-    DWORD read = 0;
-    if (!ReadFile(file.Get(), bytes.data(), static_cast<DWORD>(bytes.size()), &read, &operation) &&
-        GetLastError() != ERROR_IO_PENDING)
-        return Fallback{FallbackReason::IconUnavailable, GetLastError()};
-    for (;;) {
-        if (GetOverlappedResult(file.Get(), &operation, &read, FALSE)) break;
-        const DWORD error = GetLastError();
-        if (error != ERROR_IO_INCOMPLETE)
-            return Fallback{FallbackReason::IconUnavailable, error};
-        if (auto interrupted = Interrupted(stop, deadline)) {
-            CancelIoEx(file.Get(), &operation);
-            // OVERLAPPED and its buffer must outlive kernel cancellation completion.
-            GetOverlappedResult(file.Get(), &operation, &read, TRUE);
-            return *interrupted;
-        }
-        WaitForSingleObject(event.Get(), 5);
-    }
-    if (read != bytes.size()) return Fallback{FallbackReason::InvalidResource};
-    return bytes;
+    return std::make_unique<Source>(file.Release(), event.Release(),
+                                    static_cast<std::uint64_t>(size.QuadPart), stop, deadline);
 }
 
 template<typename T>
@@ -173,40 +213,52 @@ std::optional<T> Read(std::span<const std::uint8_t> bytes, std::size_t offset) n
 
 class Resources final {
 public:
-    explicit Resources(std::span<const std::uint8_t> file) : file_(file) {}
-    bool Initialize() noexcept {
-        const auto dos = Read<IMAGE_DOS_HEADER>(file_, 0);
+    explicit Resources(Source& file) : file_(file) {}
+    bool Initialize() {
+        constexpr std::size_t MaximumHeaders = sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) +
+                                               sizeof(IMAGE_OPTIONAL_HEADER64);
+        const auto dosBytes = file_.Read(0, std::min<std::uint64_t>(sizeof(IMAGE_DOS_HEADER), file_.Size()));
+        if (!dosBytes) return false;
+        const auto dos = Read<IMAGE_DOS_HEADER>(*dosBytes, 0);
         if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0) return false;
-        const auto nt = static_cast<std::size_t>(dos->e_lfanew);
-        const auto signature = Read<DWORD>(file_, nt);
-        const auto header = Read<IMAGE_FILE_HEADER>(file_, nt + sizeof(DWORD));
+        const auto nt = static_cast<std::uint64_t>(dos->e_lfanew);
+        if (nt > file_.Size()) return false;
+        const auto headers = file_.Read(nt, std::min<std::uint64_t>(MaximumHeaders, file_.Size() - nt));
+        if (!headers) return false;
+        const auto signature = Read<DWORD>(*headers, 0);
+        const auto header = Read<IMAGE_FILE_HEADER>(*headers, sizeof(DWORD));
         if (!signature || *signature != IMAGE_NT_SIGNATURE || !header ||
             !header->NumberOfSections || header->NumberOfSections > 96) return false;
-        const auto optionalOffset = nt + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER);
-        const auto magic = Read<WORD>(file_, optionalOffset);
+        const std::size_t optionalOffset = sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER);
+        const auto magic = Read<WORD>(*headers, optionalOffset);
         IMAGE_DATA_DIRECTORY directory{};
         if (magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
-            const auto optional = Read<IMAGE_OPTIONAL_HEADER64>(file_, optionalOffset);
+            const auto optional = Read<IMAGE_OPTIONAL_HEADER64>(*headers, optionalOffset);
             if (!optional || header->SizeOfOptionalHeader < sizeof(*optional) ||
                 optional->NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_RESOURCE) return false;
             directory = optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE];
         } else if (magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-            const auto optional = Read<IMAGE_OPTIONAL_HEADER32>(file_, optionalOffset);
+            const auto optional = Read<IMAGE_OPTIONAL_HEADER32>(*headers, optionalOffset);
             if (!optional || header->SizeOfOptionalHeader < sizeof(*optional) ||
                 optional->NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_RESOURCE) return false;
             directory = optional->DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE];
         } else return false;
-        sections_ = optionalOffset + header->SizeOfOptionalHeader;
+        const auto sections = nt + optionalOffset + header->SizeOfOptionalHeader;
+        if (sections > file_.Size()) return false;
+        const auto available = std::min<std::uint64_t>(
+            header->NumberOfSections * sizeof(IMAGE_SECTION_HEADER), file_.Size() - sections);
+        const auto table = file_.Read(sections, available);
+        if (!table) return false;
+        sections_ = std::move(*table);
         sectionCount_ = header->NumberOfSections;
         if (!directory.Size || directory.Size > MaximumDirectoryBytes) return false;
-        const auto data = AtRva(directory.VirtualAddress, directory.Size);
+        auto data = AtRva(directory.VirtualAddress, directory.Size);
         if (!data) return false;
-        directory_ = *data;
+        directory_ = std::move(*data);
         return true;
     }
 
-    std::optional<std::span<const std::uint8_t>> Resource(WORD type,
-                                                         std::optional<WORD> id) const noexcept {
+    std::optional<std::vector<std::uint8_t>> Resource(WORD type, std::optional<WORD> id) {
         const auto typeEntry = Entry(0, type);
         if (!typeEntry || !typeEntry->DataIsDirectory) return std::nullopt;
         const auto name = Entry(typeEntry->OffsetToDirectory, id);
@@ -218,18 +270,16 @@ public:
         return AtRva(data->OffsetToData, data->Size);
     }
 private:
-    std::optional<std::span<const std::uint8_t>> AtRva(DWORD rva, DWORD length) const noexcept {
+    std::optional<std::vector<std::uint8_t>> AtRva(DWORD rva, DWORD length) {
         for (unsigned i = 0; i < sectionCount_; ++i) {
-            const auto section = Read<IMAGE_SECTION_HEADER>(
-                file_, sections_ + i * sizeof(IMAGE_SECTION_HEADER));
+            const auto section = Read<IMAGE_SECTION_HEADER>(sections_, i * sizeof(IMAGE_SECTION_HEADER));
             if (!section) return std::nullopt;
             if (rva < section->VirtualAddress) continue;
             const auto relative = static_cast<std::uint64_t>(rva) - section->VirtualAddress;
             if (relative > section->SizeOfRawData ||
                 length > section->SizeOfRawData - relative) continue;
             const auto offset = static_cast<std::uint64_t>(section->PointerToRawData) + relative;
-            if (offset > file_.size() || length > file_.size() - offset) return std::nullopt;
-            return file_.subspan(static_cast<std::size_t>(offset), length);
+            return file_.Read(offset, length);
         }
         return std::nullopt;
     }
@@ -249,8 +299,8 @@ private:
         }
         return std::nullopt;
     }
-    std::span<const std::uint8_t> file_, directory_;
-    std::size_t sections_{};
+    Source& file_;
+    std::vector<std::uint8_t> sections_, directory_;
     unsigned sectionCount_{};
 };
 
@@ -356,16 +406,22 @@ PixelResult PixelsFromOwnedIcon(HICON icon) {
     return pixels;
 }
 
+std::uint64_t ExecutableBytesRead() noexcept { return bytesRead; }
+
 PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
                                   std::chrono::steady_clock::time_point deadline) {
+    bytesRead = 0;
     if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
-    auto file = ReadExecutable(input.executablePath, stop, deadline);
-    if (const auto failure = std::get_if<Fallback>(&file)) return *failure;
-    if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
-    Resources resources(std::get<std::vector<std::uint8_t>>(file));
-    if (!resources.Initialize()) return Fallback{FallbackReason::InvalidResource};
+    auto opened = OpenExecutable(input.executablePath, stop, deadline);
+    if (const auto failure = std::get_if<Fallback>(&opened)) return *failure;
+    Source& file = *std::get<std::unique_ptr<Source>>(opened);
+    const auto failed = [&](FallbackReason otherwise) -> Fallback {
+        return file.Failure() ? *file.Failure() : Fallback{otherwise};
+    };
+    Resources resources(file);
+    if (!resources.Initialize()) return failed(FallbackReason::InvalidResource);
     const auto group = resources.Resource(14, std::nullopt);
-    if (!group) return Fallback{FallbackReason::IconUnavailable};
+    if (!group) return failed(FallbackReason::IconUnavailable);
     const auto reserved = Read<WORD>(*group, 0), type = Read<WORD>(*group, 2),
                count = Read<WORD>(*group, 4);
     if (!reserved || *reserved || type != 1 || !count || !*count || *count > 256 ||
@@ -384,7 +440,8 @@ PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
     }
     if (!best) return Fallback{FallbackReason::InvalidResource};
     const auto image = resources.Resource(3, best);
-    if (!image || !BoundedImage(*image)) return Fallback{FallbackReason::InvalidResource};
+    if (!image) return failed(FallbackReason::InvalidResource);
+    if (!BoundedImage(*image)) return Fallback{FallbackReason::InvalidResource};
     if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
     OwnedIcon icon(CreateIconFromResourceEx(const_cast<PBYTE>(image->data()),
         static_cast<DWORD>(image->size()), TRUE, 0x00030000,

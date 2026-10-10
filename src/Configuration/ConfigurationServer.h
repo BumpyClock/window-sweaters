@@ -29,6 +29,8 @@ public:
     std::uint64_t Revision() const;
     std::uint64_t EligibilityRevision(applications::AppIdentity const& identity) const;
     void PublishApplications(std::vector<applications::RunningApplicationWindow> windows);
+    // Diagnostic: application snapshot rebuilds (publication or configuration revision change).
+    std::uint64_t ApplicationBuilds() const;
     std::future<MutationResult> SubmitLocal(bool paused, float width, std::uint64_t expected_revision);
     std::future<MutationResult> SubmitLocal(contracts::Configuration const& expected);
     std::future<MutationResult> SubmitEligibility(applications::EligibilityMutation mutation,std::uint64_t expected_revision);

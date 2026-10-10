@@ -233,9 +233,11 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
     if (SUCCEEDED(result)) result = target_->SetRoot(nextRoot.Get());
     if (SUCCEEDED(result)) result = composition_->Commit();
     if (FAILED(result)) { Hide(); return result; }
+    ++commits_;
     visual_ = std::move(nextRoot);
     surfaces_ = std::move(surfaces);
     perimeter_ = std::move(perimeter);
+    clip_ = clip;
     return UpdatePlacement(bounds, clip);
 }
 
@@ -246,10 +248,14 @@ HRESULT Overlay::UpdatePlacement(const RECT& next, const RECT& clip) noexcept {
     if (width != perimeter_->width || height != perimeter_->height ||
         clip.left < 0 || clip.top < 0 || clip.right > width || clip.bottom > height ||
         clip.right <= clip.left || clip.bottom <= clip.top) return E_INVALIDARG;
-    HRESULT result = visual_->SetClip(D2D1::RectF(static_cast<float>(clip.left), static_cast<float>(clip.top),
-        static_cast<float>(clip.right), static_cast<float>(clip.bottom)));
-    if (SUCCEEDED(result)) result = composition_->Commit();
-    if (FAILED(result)) return result;
+    if (!EqualRect(&clip, &clip_)) {
+        HRESULT result = visual_->SetClip(D2D1::RectF(static_cast<float>(clip.left), static_cast<float>(clip.top),
+            static_cast<float>(clip.right), static_cast<float>(clip.bottom)));
+        if (SUCCEEDED(result)) result = composition_->Commit();
+        if (FAILED(result)) return result;
+        ++commits_;
+        clip_ = clip;
+    }
     if (!SetWindowPos(window_, nullptr, next.left, next.top, static_cast<int>(width), static_cast<int>(height),
         SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER)) return LastError();
     bounds_ = next;
@@ -282,7 +288,8 @@ void Overlay::Destroy() noexcept {
     composition_.Reset();
     if (window_) DestroyWindow(window_);
     window_ = nullptr;
-    bounds_ = {};
+    bounds_ = clip_ = {};
+    commits_ = 0;
 }
 
 }

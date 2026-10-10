@@ -35,6 +35,7 @@ struct AppItemEdit {
 inline std::vector<AppItemEdit> ReconcileApplicationItems(std::vector<applications::AppIdentity> current,
     std::span<contracts::ApplicationRow const> desired) {
     std::vector<AppItemEdit> edits;
+    if (std::ranges::equal(current,desired,{},{},&contracts::ApplicationRow::identity)) return edits;
     for (std::size_t index=0;index<desired.size();++index) {
         auto found=std::find(current.begin()+std::min(index,current.size()),current.end(),desired[index].identity);
         if (found==current.end()) {

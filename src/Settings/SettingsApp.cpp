@@ -24,6 +24,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <set>
 #include <cwchar>
 
 using namespace winrt;
@@ -298,6 +299,8 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         window_.Closed([weak](auto const&,auto const&) {
             if (auto app=weak.get()) {
                 app->closed_=true;
+                app->session_->RequestStop();
+                if (app->apps_session_) app->apps_session_->RequestStop();
                 app->session_->Stop();
                 if (app->apps_session_) app->apps_session_->Stop();
                 app->preview_->Stop();
@@ -399,8 +402,10 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         if (apps_default_.IsOn()!=snapshot.default_enabled) apps_default_.IsOn(snapshot.default_enabled);
         auto weak=get_weak();
         presentation_stage_=L"apps-row-construction";
+        bool layoutChanged=false;
         for (auto const& row:snapshot.applications) {
             if (app_rows_.contains(row.identity)) continue;
+            layoutChanged=true;
             AppRow controls;
             auto panel=StackPanel{}; panel.Spacing(4); panel.Margin(Thickness{0,8,0,8});
             auto label=row.display_name.empty()?row.identity.Key():row.display_name;
@@ -435,7 +440,9 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             app_rows_.emplace(row.identity,std::move(controls));
         }
         presentation_stage_=L"apps-items-reconcile";
-        for (auto const& edit:settings::ReconcileApplicationItems(app_item_order_,snapshot.applications)) {
+        auto edits=settings::ReconcileApplicationItems(app_item_order_,snapshot.applications);
+        layoutChanged|=!edits.empty();
+        for (auto const& edit:edits) {
             auto index=static_cast<std::uint32_t>(edit.index);
             if (edit.change==settings::AppItemChange::remove) {
                 apps_list_.Items().RemoveAt(index);
@@ -452,14 +459,17 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                 app_item_order_.insert(app_item_order_.begin()+edit.destination,std::move(key));
             }
         }
-        std::erase_if(app_rows_,[&](auto const& pair) {
-            return std::find(app_item_order_.begin(),app_item_order_.end(),pair.first)==app_item_order_.end();
-        });
+        if (app_rows_.size()!=snapshot.applications.size()) {
+            std::set<applications::AppIdentity> desired;
+            for (auto const& row:snapshot.applications) desired.insert(row.identity);
+            std::erase_if(app_rows_,[&](auto const& pair) { return !desired.contains(pair.first); });
+        }
         presentation_stage_=L"apps-row-properties";
         for (auto const& row:snapshot.applications) {
             auto& controls=app_rows_.at(row.identity);
             auto label=row.display_name.empty()?row.identity.Key():row.display_name;
             if (unbox_value<hstring>(controls.toggle.Header())!=label) {
+                layoutChanged=true;
                 controls.toggle.Header(box_value(label));
                 AutomationProperties::SetName(controls.toggle,label+L" sweater enabled");
                 AutomationProperties::SetName(controls.remove,L"Remove saved choice for "+label);
@@ -468,12 +478,13 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             auto presence=row.presence==applications::ApplicationPresence::Running?
                 L"Running · "+to_hstring(row.window_count)+L" windows · "+to_hstring(row.process_count)+L" processes":
                 hstring{L"Saved choice · not running"};
-            if (controls.presence.Text()!=presence) controls.presence.Text(presence);
+            if (controls.presence.Text()!=presence) { layoutChanged=true; controls.presence.Text(presence); }
             auto visibility=row.explicit_preference?Visibility::Visible:Visibility::Collapsed;
             if (controls.remove.Visibility()!=visibility) {
-                controls.remove.Visibility(visibility);
+                layoutChanged=true; controls.remove.Visibility(visibility);
             }
         }
+        layoutChanged|=app_diagnostics_.size()!=snapshot.unavailable.size();
         while (app_diagnostics_.size()>snapshot.unavailable.size()) {
             apps_list_.Items().RemoveAtEnd(); app_diagnostics_.pop_back();
         }
@@ -484,9 +495,10 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         for (std::size_t index=0;index<snapshot.unavailable.size();++index) {
             auto const& row=snapshot.unavailable[index];
             auto diagnostic=app_diagnostics_[index];
-            diagnostic.Text(L"Owner metadata unavailable · "+to_hstring(row.window_count)+
+            auto text=L"Owner metadata unavailable · "+to_hstring(row.window_count)+
                 L" windows · reason "+to_hstring(static_cast<unsigned>(row.unavailable.reason))+
-                L" · Win32 "+to_hstring(row.unavailable.nativeError)+L" · no mutable application identity");
+                L" · Win32 "+to_hstring(row.unavailable.nativeError)+L" · no mutable application identity";
+            if (diagnostic.Text()!=text) { layoutChanged=true; diagnostic.Text(text); }
         }
         rendered_apps_=snapshot; updating_apps_=false;
         presentation_stage_=L"apps-focus-restore";
@@ -501,7 +513,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                 retainedFocus.Focus(focusState==FocusState::Unfocused?FocusState::Programmatic:focusState);
         }
         presentation_stage_=L"apps-layout-restore";
-        if (preserveContext) scroll_.UpdateLayout();
+        if (preserveContext && layoutChanged) scroll_.UpdateLayout();
         presentation_stage_=L"apps-inner-viewport-restore";
         if (inner && inner.VerticalOffset()!=innerOffset)
             inner.ChangeView(nullptr,box_value(settings::PreservedViewportOffset(innerOffset,inner.ScrollableHeight())).as<Windows::Foundation::IReference<double>>(),nullptr,true);

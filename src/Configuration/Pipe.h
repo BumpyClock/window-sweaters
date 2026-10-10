@@ -37,6 +37,6 @@ bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write, HANDLE stop = nu
 bool Connect(HANDLE pipe, HANDLE stop) noexcept;
 bool ReadFrame(HANDLE pipe, std::vector<std::byte>& bytes, HANDLE stop = nullptr) noexcept;
 contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path const& host_path,
-                            contracts::Message const& request);
+                            contracts::Message const& request, HANDLE stop = nullptr);
 std::filesystem::path SiblingExecutable(wchar_t const* name);
 }

@@ -13,7 +13,11 @@ PixelResult PixelsFromOwnedIcon(HICON icon);
 // Rejects network/device/relative paths and reparse-point files; caps input to 64MiB,
 // resource directories to 1MiB and individual icon images to 256KiB/256x256.
 // Reads PE resources as data; never loads/executes an executable or invokes shell handlers.
+// Reads only bounded ranges (headers, section table, resource directory, selected icon data).
 PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
                                   std::chrono::steady_clock::time_point deadline);
+
+// Bytes read from disk by the last SampleExecutableIcon on this thread (test seam).
+std::uint64_t ExecutableBytesRead() noexcept;
 
 } // namespace window_sweaters::icon_yarn

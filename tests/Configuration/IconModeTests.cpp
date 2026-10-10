@@ -157,7 +157,7 @@ void NativeSessionPersistence(const std::filesystem::path& root) {
     configuration::ConfigurationServer server({directory,suffix,executable}); server.Start();
     Observed observed;
     settings::SessionTransport transport;
-    transport.exchange=[&](const Message& request) { return configuration::Exchange(server.Endpoint(),executable,request); };
+    transport.exchange=[&](const Message& request,HANDLE) { return configuration::Exchange(server.Endpoint(),executable,request); };
     transport.start_host=[] { return false; };
     settings::Session session({true,directory,suffix},[&](auto state){observed.Add(std::move(state));},transport);
     auto initial=observed.Wait([](const auto& state){return state.connected && !state.pending && state.configuration_authoritative;});

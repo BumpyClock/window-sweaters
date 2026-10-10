@@ -121,6 +121,7 @@ bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write, HANDLE stop,DWOR
     if (!event) return false;
     DWORD offset=0;
     while (offset<size) {
+        if (stop && WaitForSingleObject(stop,0)==WAIT_OBJECT_0) return false;
         auto elapsed=GetTickCount64()-began;
         if (elapsed>=timeout) return false;
         ResetEvent(event.get());
@@ -164,17 +165,28 @@ bool Connect(HANDLE pipe, HANDLE stop) noexcept {
     return error==ERROR_IO_PENDING && WaitIo(pipe,io,stop,transferred);
 }
 contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path const& host_path,
-                            contracts::Message const& request) {
-    if (!WaitNamedPipeW(endpoint.c_str(),contracts::io_timeout_ms)) throw std::runtime_error("Host is disconnected");
-    Handle pipe(CreateFileW(endpoint.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,
-        FILE_FLAG_OVERLAPPED|SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,nullptr));
-    if (!pipe || !VerifyPeer(pipe.get(),true,host_path)) throw std::runtime_error("Host identity verification failed");
+                            contracts::Message const& request, HANDLE stop) {
+    const auto began=GetTickCount64();
+    Handle pipe;
+    for (;;) {
+        if (stop && WaitForSingleObject(stop,0)==WAIT_OBJECT_0) throw std::runtime_error("Settings exchange cancelled");
+        pipe=Handle(CreateFileW(endpoint.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED|SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,nullptr));
+        if (pipe) break;
+        const auto error=GetLastError(); const auto elapsed=GetTickCount64()-began;
+        if (error!=ERROR_PIPE_BUSY) throw std::runtime_error(error==ERROR_FILE_NOT_FOUND?"Host is disconnected":
+            "Host identity verification failed");
+        if (elapsed>=contracts::io_timeout_ms) throw std::runtime_error("Host is disconnected");
+        // Short slices keep a busy pipe cancellable.
+        WaitNamedPipeW(endpoint.c_str(),static_cast<DWORD>(std::min<ULONGLONG>(25,contracts::io_timeout_ms-elapsed)));
+    }
+    if (!VerifyPeer(pipe.get(),true,host_path)) throw std::runtime_error("Host identity verification failed");
     DWORD mode=PIPE_READMODE_BYTE;
     if (!SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr)) throw std::runtime_error("Cannot configure settings pipe");
     auto bytes=contracts::Encode(request);
-    if (!Transfer(pipe.get(),bytes.data(),static_cast<DWORD>(bytes.size()),true))
+    if (!Transfer(pipe.get(),bytes.data(),static_cast<DWORD>(bytes.size()),true,stop))
         throw std::runtime_error("Settings request write failed");
-    if (!ReadFrame(pipe.get(),bytes))
+    if (!ReadFrame(pipe.get(),bytes,stop))
         throw std::runtime_error("Settings response timed out or was truncated");
     contracts::Message response;
     if (!contracts::Decode(bytes,response) || response.operation!=contracts::Operation::response ||
@@ -189,7 +201,7 @@ contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path 
         throw std::runtime_error("Invalid host response");
     // Receipt lets the server disconnect without discarding its buffered response.
     std::byte receipt{0xac};
-    Transfer(pipe.get(),&receipt,1,true);
+    Transfer(pipe.get(),&receipt,1,true,stop);
     return response;
 }
 std::filesystem::path SiblingExecutable(wchar_t const* name) {

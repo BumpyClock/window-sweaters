@@ -272,6 +272,7 @@ void NativePerimeterPublication() {
         static_cast<float>(current.deviceScale))), "Upload four real BGRA pieces with authoritative radius and source tuck");
     Check(EqualRect(&overlay.Bounds(), &bounds) && !IsWindowVisible(overlay.Window()),
         "Prepared upload remains hidden at today's physical position");
+    Check(overlay.CommitCount() == 1, "Upload publishes with a single DComp commit");
     Check(SUCCEEDED(graphics.Composition()->WaitForCommitCompletion()), "Actual DComp upload commits");
     const auto before = queue->Status();
     const RECT next{50, 60, 511, 421};
@@ -282,6 +283,12 @@ void NativePerimeterPublication() {
         "Native move preserves worker request, preparation and tile-generation counts");
     Check(overlay.UpdatePlacement({0, 0, 462, 361}, {0, 0, 461, 361}) == E_INVALIDARG,
         "Native placement rejects mismatched physical dimensions");
+    const auto commits = overlay.CommitCount();
+    const RECT originOnly{70, 80, 531, 441};
+    Check(SUCCEEDED(overlay.UpdatePlacement(originOnly, {0, 0, 461, 361})) && EqualRect(&overlay.Bounds(), &originOnly) &&
+        overlay.CommitCount() == commits, "Origin-only move with unchanged clip issues no DComp commit");
+    Check(SUCCEEDED(overlay.UpdatePlacement(originOnly, {1, 1, 460, 360})) && overlay.CommitCount() == commits + 1,
+        "Changed clip commits exactly once");
     for (const auto scale : {1.f, 1.25f, 1.5f, 2.f}) {
         for (const auto radiusDip : {0.f, 4.f, 8.f}) {
             rendering::KnitFrameSpec frame;

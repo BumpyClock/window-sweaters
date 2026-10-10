@@ -25,7 +25,8 @@ struct ConnectionState {
     std::wstring detail=L"Connecting to the host…";
 };
 struct SessionTransport {
-    std::function<contracts::Message(contracts::Message const&)> exchange;
+    // cancel: manual-reset event signalled by Stop; implementations must abandon blocking waits promptly.
+    std::function<contracts::Message(contracts::Message const&,HANDLE cancel)> exchange;
     std::function<bool()> start_host;
 };
 class DraftState {
@@ -53,6 +54,7 @@ public:
     std::uint64_t Change(ConnectionState const& displayed,bool paused,float width);
     std::uint64_t Change(ConnectionState const& displayed,contracts::Configuration const& appearance);
     std::uint64_t Reset(ConnectionState const& displayed);
+    void RequestStop() noexcept;
     void Stop() noexcept;
 private:
     struct Impl;
@@ -92,6 +94,7 @@ public:
     AppsSession(Options options,std::function<void(AppsConnectionState)> publish,SessionTransport transport={});
     ~AppsSession();
     std::uint64_t Change(AppsConnectionState const& displayed,applications::EligibilityMutation mutation);
+    void RequestStop() noexcept;
     void Stop() noexcept;
 private:
     struct Impl;

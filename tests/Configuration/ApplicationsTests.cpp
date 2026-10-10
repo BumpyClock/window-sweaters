@@ -147,7 +147,19 @@ void LiveIpc(std::filesystem::path const& root) {
         same_counts.applications.applications[0].window_count==changed.applications.applications[0].window_count &&
         same_counts.applications.observation_generation>changed.applications.observation_generation,
         "Owner lifetime changes advance observation generation even when identity and aggregate counts are unchanged");
-    changed=same_counts;
+    auto builds=server.ApplicationBuilds();
+    auto repeated=Read(server,same_counts); auto again=Read(server,repeated);
+    Check(server.ApplicationBuilds()==builds && repeated.applications==same_counts.applications &&
+        again.applications==same_counts.applications && again.request_id==same_counts.request_id+2 &&
+        again.client_lease==same_counts.client_lease && again.server==same_counts.server && again.status==Status::saved,
+        "Repeated reads reuse the built snapshot while per-response request, lease and server fields stay fresh");
+    server.PublishApplications({Window(11,21,301,5,L"C:\\One\\player.exe"),b});
+    auto relifed=Read(server,again);
+    Check(server.ApplicationBuilds()==builds+1 && relifed.applications.applications==same_counts.applications.applications &&
+        relifed.applications.observation_generation>same_counts.applications.observation_generation,
+        "Same-count lifetime replacement invalidates the reused snapshot and advances observation generation");
+    changed=relifed;
+    builds=server.ApplicationBuilds();
     applications::EligibilityMutation toggle;
     toggle.edits.emplace_back(applications::SetApplicationPreference{Path(L"C:\\One\\player.exe"),true});
     auto command=changed; command.operation=Operation::eligibility; command.status=Status::saved;
@@ -162,6 +174,9 @@ void LiveIpc(std::filesystem::path const& root) {
     command.eligibility.clearExceptions=true;
     Check(Exchange(server.Endpoint(),Self(),command).status==Status::invalid,"Reused eligibility request ID cannot change semantics");
     auto listed=Read(server,enabled);
+    Check(server.ApplicationBuilds()==builds+1 && listed.applications.configuration_revision==enabled.configuration.revision &&
+        Read(server,listed).applications==listed.applications && server.ApplicationBuilds()==builds+1,
+        "Configuration mutation invalidates the reused snapshot exactly once");
     Check(listed.applications.applications[0].enabled && listed.applications.applications[0].explicit_preference &&
         !listed.applications.applications[1].enabled,"Same basename different paths never share a saved toggle");
     auto stale_base=changed; stale_base.request_id=listed.request_id;
@@ -317,6 +332,25 @@ void PresentationContracts() {
     rows={rowB,rowA}; edits=settings::ReconcileApplicationItems({a},rows);
     Check(edits.size()==1 && edits[0].change==settings::AppItemChange::insert && edits[0].index==0,
         "New owner inserts only its native row while retaining existing control identity");
+    {
+        std::vector<ApplicationRow> many; std::vector<applications::AppIdentity> order;
+        for (unsigned i=0;i<64;++i) {
+            many.push_back({Path((L"C:\\Many\\app"+std::to_wstring(i)+L".exe").c_str()),L"app",applications::ApplicationPresence::Running,
+                true,false,1,1,applications::MetadataProvenance::ProcessImageName});
+            order.push_back(many.back().identity);
+        }
+        Check(settings::ReconcileApplicationItems(order,many).empty(),"Matching identity order skips reconciliation");
+        std::reverse(many.begin(),many.end()); many.erase(many.begin()+10); many.push_back(rowA);
+        auto plan=settings::ReconcileApplicationItems(order,many);
+        for (auto edit:plan) {
+            if (edit.change==settings::AppItemChange::remove) order.erase(order.begin()+edit.index);
+            else if (edit.change==settings::AppItemChange::insert) order.insert(order.begin()+edit.index,many[edit.index].identity);
+            else { auto moved=order[edit.index]; order.erase(order.begin()+edit.index); order.insert(order.begin()+edit.destination,moved); }
+        }
+        bool same=order.size()==many.size();
+        for (std::size_t i=0;same && i<order.size();++i) same=order[i]==many[i].identity;
+        Check(same,"Reorder, removal and insertion plan converges to the desired identity order");
+    }
     settings::ConnectionState initial;
     initial.connected=true; initial.configuration_authoritative=true;
     initial.publication_sequence=1; initial.server_instance=NewIdentity(); initial.client_lease=4;

@@ -71,6 +71,8 @@ struct Tile {
     // image is unlit albedo (occlusion only); height is a same-size periodic
     // greyscale stitch height (blue channel) for screen-space lighting.
     RasterImage image, height;
+    // Process-unique immutable identity (renderer resource caches key on it).
+    std::uint64_t serial = 0;
     std::size_t ByteSize() const noexcept {
         return image.ByteSize() + height.ByteSize() + (spec.chart ? spec.chart->ByteSize() : 0);
     }

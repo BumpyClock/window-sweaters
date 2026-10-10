@@ -708,6 +708,78 @@ TileSpec ThemeSpec(const char* id) {
     return spec;
 }
 
+std::string FrameDigest(const KnitPerimeter& p) {
+    std::string out;
+    for (const auto& piece : p.pieces) {
+        out.append(reinterpret_cast<const char*>(&piece.x), sizeof piece.x);
+        out.append(reinterpret_cast<const char*>(&piece.y), sizeof piece.y);
+        out.append(reinterpret_cast<const char*>(piece.image.pixels.data()), piece.image.ByteSize());
+    }
+    return out;
+}
+
+void ScratchContracts() {
+    TileCache cache;
+    KnitRasterScratch scratch;
+    struct Case { const char* name; KnitFrameSpec frame; TileSpec tile; };
+    auto frame = [](float w, float h, float scale, float dim = 0.f, KnitAnchor anchor = KnitAnchor::Corner) {
+        KnitFrameSpec f; f.widthDip = w; f.heightDip = h; f.deviceScale = scale; f.dim = dim; f.anchor = anchor;
+        return f;
+    };
+    const std::vector<Case> cases{
+        {"base", frame(620, 140, 2), ThemeSpec("spotify")},
+        {"resized", frame(300, 90, 2), ThemeSpec("spotify")},
+        {"base again", frame(620, 140, 2), ThemeSpec("spotify")},
+        {"scale", frame(620, 140, 1.5f), ThemeSpec("spotify")},
+        {"theme", frame(620, 140, 2), ThemeSpec("messages")},
+        {"anchor", frame(620, 140, 2, 0.f, KnitAnchor::Centre), ThemeSpec("messages")},
+        {"dim", frame(620, 140, 2, .5f), ThemeSpec("messages")},
+        {"plain", frame(620, 140, 2), TileSpec{}},
+        {"base after plain", frame(620, 140, 2), ThemeSpec("spotify")},
+        {"chrome", frame(620, 140, 2), ThemeSpec("google-chrome")},
+        {"notes", frame(320, 120, 1), ThemeSpec("notes")},
+        {"base last", frame(620, 140, 2), ThemeSpec("spotify")},
+    };
+    for (const auto& c : cases) {
+        const auto fresh = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache));
+        const auto reused = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch}));
+        Require(fresh == reused, c.name);
+    }
+    Require(scratch.GetStats().factories == 2, "One D2D and one WIC factory for the scratch lifetime");
+    const auto& c = cases[0];
+    auto first = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch}));
+    auto warm = scratch.GetStats();
+    auto second = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch}));
+    auto after = scratch.GetStats();
+    Require(first == second, "Repeated reused render is deterministic");
+    Require(after.targets == warm.targets && after.uploads == warm.uploads && after.factories == warm.factories
+        && after.reused == warm.reused + 4, "Repeated identical render creates no targets or uploads");
+    Require(scratch.ResidentBytes() > 0 && scratch.ResidentBytes() <= 16u * 1024u * 1024u, "Scratch bytes bounded");
+
+    KnitRasterScratch tiny(1);
+    Require(FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&tiny})) == first
+        && tiny.ResidentBytes() == 0, "Over-budget scratch renders identically and retains nothing");
+    KnitRasterScratch capped(512 * 1024);
+    for (const auto& k : cases)
+        KnitRaster::RenderPerimeter(k.frame, k.tile, cache, {&capped});
+    Require(capped.ResidentBytes() <= 512 * 1024, "Mid-sized budget evicts to its bound");
+
+    // Aborting at every stage leaves reusable, uncorrupted state.
+    std::uint32_t total = 0;
+    KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch, [&] { ++total; return false; }});
+    Require(total == 2 + 4 * 6, "Every stage polls for cancellation");
+    for (std::uint32_t stopAt = 1; stopAt <= total; ++stopAt) {
+        std::uint32_t polls = 0;
+        bool cancelled = false;
+        try {
+            KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch, [&] { return ++polls == stopAt; }});
+        } catch (const KnitRenderCancelled&) { cancelled = true; }
+        Require(cancelled && polls == stopAt, "Stop predicate aborts at the polled stage");
+        Require(FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch})) == first,
+                "Render after an abort matches fresh output");
+    }
+}
+
 void ChartContracts() {
     using namespace window_sweaters::designs;
     TileCache cache;
@@ -1310,12 +1382,17 @@ void RendererMetrics() {
         auto perimeter=KnitRaster::RenderPerimeter(f,spec,cache);
         double cold=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
         start=std::chrono::steady_clock::now();
-        constexpr int iterations=5;
+        constexpr int iterations=10;
         for(int i=0;i<iterations;++i) KnitRaster::RenderPerimeter(f,spec,cache);
         double warm=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/iterations;
+        KnitRasterScratch scratch;
+        KnitRaster::RenderPerimeter(f,spec,cache,{&scratch});
+        start=std::chrono::steady_clock::now();
+        for(int i=0;i<iterations;++i) KnitRaster::RenderPerimeter(f,spec,cache,{&scratch});
+        double reused=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/iterations;
         std::size_t bytes=0;for(const auto& piece:perimeter.pieces)bytes+=piece.image.ByteSize();
         std::cout<<"measured "<<id<<" 620x140@2x: cold="<<cold<<"ms, warm="<<warm
-            <<"ms, narrowBytes="<<bytes<<", tileOwnedBytes="<<perimeter.tile->ByteSize()
+            <<"ms, scratchWarm="<<reused<<"ms, scratchBytes="<<scratch.ResidentBytes()<<", narrowBytes="<<bytes<<", tileOwnedBytes="<<perimeter.tile->ByteSize()
             <<", cacheResident="<<cache.ResidentBytes()<<", generations="<<cache.GenerationCount()
             <<", hits="<<cache.HitCount()<<"\n";
     }
@@ -1341,8 +1418,10 @@ int wmain(int argc, wchar_t** argv) {
             CoUninitialize();
             return 0;
         }
+        if (argc > 2 && std::wstring(argv[2]) == L"--metrics") { RendererMetrics(); CoUninitialize(); return 0; }
         PortableMath();
         CacheAndInvalidInputs();
+        ScratchContracts();
         RenderBehavior(root);
         ChartContracts();
         CatalogueFixtures(root);

@@ -52,6 +52,8 @@ public:
 
     HWND Window() const noexcept { return window_; }
     const RECT& Bounds() const noexcept { return bounds_; }
+    // DComp commits issued by this overlay; moves with an unchanged clip add none.
+    std::uint32_t CommitCount() const noexcept { return commits_; }
 
 private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
@@ -60,6 +62,8 @@ private:
 
     HWND window_{};
     RECT bounds_{};
+    RECT clip_{}; // clip last committed on visual_
+    std::uint32_t commits_{};
     Microsoft::WRL::ComPtr<IDCompositionDevice> composition_;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> context_;
     Microsoft::WRL::ComPtr<IDCompositionTarget> target_;

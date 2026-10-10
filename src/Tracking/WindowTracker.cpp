@@ -11,6 +11,12 @@
 #include <utility>
 
 namespace window_sweaters::tracking {
+
+NativeQueryCounts& QueryCounts() noexcept {
+    static thread_local NativeQueryCounts counts;
+    return counts;
+}
+
 namespace {
 
 thread_local std::unordered_map<HWINEVENTHOOK, WindowTracker*> hookOwners;
@@ -35,6 +41,7 @@ void Append(ActionBatch& destination, ActionBatch source) {
 }
 
 std::uint64_t ProcessStart(DWORD pid, NativeQueryFailure* failure = nullptr) noexcept {
+    ++QueryCounts().processOpens;
     const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!process) {
         if (failure) *failure={NativeQueryStage::OpenProcess,GetLastError()};
@@ -62,6 +69,21 @@ bool ReadStyle(HWND hwnd, int index, LONG_PTR& style) noexcept {
     SetLastError(ERROR_SUCCESS);
     style = GetWindowLongPtrW(hwnd, index);
     return style != 0 || GetLastError() == ERROR_SUCCESS;
+}
+
+// Single definition of "ordinary" for Query and the Probe prefilter.
+bool OrdinaryTopLevel(HWND hwnd, LONG_PTR style, LONG_PTR extendedStyle) noexcept {
+    return !(style & (WS_CHILD | WS_POPUP)) && (style & WS_CAPTION) == WS_CAPTION
+        && !(extendedStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))
+        && GetAncestor(hwnd, GA_ROOT) == hwnd && !GetWindow(hwnd, GW_OWNER)
+        && hwnd != GetDesktopWindow() && hwnd != GetShellWindow();
+}
+
+// True only on a definite rejection; any unreadable fact defers to the full Query.
+bool PlainlyUnsupported(HWND hwnd) noexcept {
+    LONG_PTR style{}, extendedStyle{};
+    return ReadStyle(hwnd,GWL_STYLE,style) && ReadStyle(hwnd,GWL_EXSTYLE,extendedStyle)
+        && !OrdinaryTopLevel(hwnd,style,extendedStyle);
 }
 
 Observation FailedQuery(HWND hwnd) {
@@ -173,6 +195,7 @@ Observation WindowTracker::Query(HWND hwnd, NativeQueryFailure* failure) {
         return failed(NativeQueryStage::Class,GetLastError());
     if (!ReadStyle(hwnd,GWL_STYLE,style)) return failed(NativeQueryStage::Style,GetLastError());
     if (!ReadStyle(hwnd,GWL_EXSTYLE,extendedStyle)) return failed(NativeQueryStage::ExtendedStyle,GetLastError());
+    QueryCounts().dwmReads+=2;
     const auto frameResult=DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS,&rect,sizeof(rect));
     if (FAILED(frameResult)) return failed(NativeQueryStage::FrameBounds,0,frameResult);
     const auto cloakResult=DwmGetWindowAttribute(hwnd,DWMWA_CLOAKED,&cloaked,sizeof(cloaked));
@@ -201,10 +224,7 @@ Observation WindowTracker::Query(HWND hwnd, NativeQueryFailure* failure) {
     const auto& bounds = monitorInfo.rcMonitor;
     const bool fullscreen = outer.left <= bounds.left && outer.top <= bounds.top
         && outer.right >= bounds.right && outer.bottom >= bounds.bottom;
-    const bool ordinary = !(style & (WS_CHILD | WS_POPUP)) && (style & WS_CAPTION) == WS_CAPTION
-        && !(extendedStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))
-        && GetAncestor(hwnd, GA_ROOT) == hwnd && !GetWindow(hwnd, GW_OWNER)
-        && hwnd != GetDesktopWindow() && hwnd != GetShellWindow();
+    const bool ordinary = OrdinaryTopLevel(hwnd, style, extendedStyle);
     return AliveWindow{
         handle, {pid, processStart, ObservedIdentity(threadId, className)}, className,
         {rect.left, rect.top, rect.right, rect.bottom}, dpi, ordinary,
@@ -428,6 +448,12 @@ void WindowTracker::Probe(WindowHandle hwnd, const Pending& pending, Millisecond
     if (pending.reprobeTarget && model_.Current(hwnd) != pending.reprobeTarget) return;
     if (pending.destroyed) {
         Append(actions,model_.Observe(DestroyedWindow{hwnd},Dirty::Lifecycle,now));
+        geometryReprobe_.Cancel(hwnd);
+        return;
+    }
+    // Unknown plainly-unsupported windows would only yield Unsupported, which creates no model state.
+    if (config_.mode==TrackingMode::Production && !model_.Current(hwnd)
+        && PlainlyUnsupported(reinterpret_cast<HWND>(hwnd))) {
         geometryReprobe_.Cancel(hwnd);
         return;
     }

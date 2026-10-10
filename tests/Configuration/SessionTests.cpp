@@ -1,5 +1,6 @@
 #include "..\..\src\Settings\Session.h"
 #include "..\..\src\Configuration\Pipe.h"
+#include "StallPipe.h"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -70,7 +71,7 @@ void ConcurrentTrayIsNotRebased(std::filesystem::path const& directory) {
     Observations observed; Gate gate;
     std::atomic<unsigned> snapshots=0,launches=0;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::snapshot && ++snapshots==2) gate.Block();
         return Exchange(server.Endpoint(),Self(),request);
     };
@@ -97,7 +98,7 @@ void OwnPendingSliderIsChained(std::filesystem::path const& directory,bool after
     std::atomic<unsigned> mutations=0;
     std::atomic<bool> queue_after_reply=false;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::mutate && ++mutations==1 && !after_reply) gate.Block();
         return Exchange(server.Endpoint(),Self(),request);
     };
@@ -126,7 +127,7 @@ void OwnCommitDoesNotHideForeignCommit(std::filesystem::path const& directory) {
     Observations observed; Gate gate;
     std::atomic<bool> first_reply=false;
     SessionTransport io;
-    io.exchange=[&](Message const& request){return Exchange(server.Endpoint(),Self(),request);};
+    io.exchange=[&](Message const& request,HANDLE){return Exchange(server.Endpoint(),Self(),request);};
     io.start_host=[]{return false;};
     Session session(options,[&](ConnectionState state) {
         observed.Add(state);
@@ -151,7 +152,7 @@ void RetiredSessionDiscardsRequests(std::filesystem::path const& directory) {
     Observations observed; Gate gate;
     std::atomic<unsigned> snapshots=0,mutations=0;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::snapshot && ++snapshots==2) gate.Block();
         if (request.operation==Operation::mutate) ++mutations;
         return Exchange(server.Endpoint(),Self(),request);
@@ -184,7 +185,7 @@ void HostRestartDiscardsOldWork(std::filesystem::path const& directory) {
     Observations observed; Gate gate;
     std::atomic<unsigned> mutations=0,launches=0;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         auto response=Exchange(endpoint,Self(),request);
         if (request.operation==Operation::mutate && ++mutations==1) {
             gate.Block();
@@ -236,7 +237,7 @@ void LongOwnChainRetainsDisplayedRoot(std::filesystem::path const& directory,boo
         return value;
     };
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         auto result=Exchange(server.Endpoint(),Self(),request);
         for (unsigned attempt=0;request.operation==Operation::mutate && result.status==Status::storage_error &&
              (result.error==ERROR_SHARING_VIOLATION || result.error==ERROR_ACCESS_DENIED) && attempt<5;++attempt) {
@@ -285,7 +286,7 @@ void AllAppearanceInputsCoalesce(std::filesystem::path const& directory) {
     ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
     Observations observed; Gate gate; std::atomic<unsigned> mutations=0;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::mutate && ++mutations==1) gate.Block();
         return Exchange(server.Endpoint(),Self(),request);
     };
@@ -317,7 +318,7 @@ void SemanticDisplayedStateIsNotInvented(std::filesystem::path const& directory)
     ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
     Observations observed; Gate gate; std::atomic<bool> first=false;
     SessionTransport io;
-    io.exchange=[&](Message const& request){return Exchange(server.Endpoint(),Self(),request);};
+    io.exchange=[&](Message const& request,HANDLE){return Exchange(server.Endpoint(),Self(),request);};
     io.start_host=[]{return false;};
     Session session(options,[&](ConnectionState state) {
         observed.Add(state);
@@ -346,7 +347,7 @@ void QueuedPublicationPreservesNewDraft(std::filesystem::path const& directory) 
     Observations queued; Gate gate;
     std::atomic<unsigned> snapshots=0,mutations=0;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::snapshot && ++snapshots==3) gate.Block();
         if (request.operation==Operation::mutate) ++mutations;
         return Exchange(server.Endpoint(),Self(),request);
@@ -391,7 +392,7 @@ void EarlierAcknowledgmentPreservesLaterDraft(std::filesystem::path const& direc
     ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
     Observations queued; Gate gate; std::atomic<bool> first=false;
     SessionTransport io;
-    io.exchange=[&](Message const& request){return Exchange(server.Endpoint(),Self(),request);};
+    io.exchange=[&](Message const& request,HANDLE){return Exchange(server.Endpoint(),Self(),request);};
     io.start_host=[]{return false;};
     Session session(options,[&](ConnectionState state) {
         queued.Add(state);
@@ -429,7 +430,7 @@ void RenewedSnapshotSurvivesDisconnect(std::filesystem::path const& directory,bo
     auto endpoint=server->Endpoint();
     Observations queued; Gate gate; std::atomic<unsigned> snapshots=0,launches=0;
     SessionTransport io;
-    io.exchange=[&](Message const& request) {
+    io.exchange=[&](Message const& request,HANDLE) {
         if (request.operation==Operation::snapshot && ++snapshots==2) gate.Block();
         return Exchange(endpoint,Self(),request);
     };
@@ -479,6 +480,24 @@ void RenewedSnapshotSurvivesDisconnect(std::filesystem::path const& directory,bo
           "Disconnect after renewed admission retains the latest confirmed Finder appearance, not obsolete Spotify, without auto-launching host");
     session.Stop();
 }
+void StalledExchangeStopsPromptly(std::filesystem::path const& directory,bool busy) {
+    auto options=TestOptions(directory,busy?L"session-busy-stop":L"session-stall-stop");
+    StallPipe peer(busy);
+    std::atomic<unsigned> calls=0;
+    SessionTransport io;
+    io.exchange=[&](Message const& request,HANDLE cancel) { ++calls; return Exchange(peer.name,Self(),request,cancel); };
+    io.start_host=[]{return false;};
+    Session session(options,[](ConnectionState){},io);
+    for (int i=0;i<500 && !calls;++i) Sleep(10);
+    Check(calls==1,"Session reaches the stalled exchange");
+    Sleep(100);
+    auto began=GetTickCount64();
+    session.RequestStop(); session.RequestStop(); session.Stop();
+    Check(GetTickCount64()-began<500,"Stop cancels a stalled or busy Session exchange promptly");
+    session.Stop();
+    Sleep(300);
+    Check(calls==1,"No exchange starts after Session stop");
+}
 }
 int RunSessionTests(std::filesystem::path const& directory) {
     checks=0;
@@ -496,5 +515,7 @@ int RunSessionTests(std::filesystem::path const& directory) {
     EarlierAcknowledgmentPreservesLaterDraft(directory);
     RenewedSnapshotSurvivesDisconnect(directory,false);
     RenewedSnapshotSurvivesDisconnect(directory,true);
+    StalledExchangeStopsPromptly(directory,false);
+    StalledExchangeStopsPromptly(directory,true);
     return checks;
 }

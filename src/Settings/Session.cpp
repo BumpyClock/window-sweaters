@@ -60,12 +60,14 @@ struct Session::Impl {
     Impl(Options value,std::function<void(ConnectionState)> callback,SessionTransport io)
         : options(std::move(value)),publish(std::move(callback)),endpoint(EndpointName(options.endpoint_suffix)),
           host(SiblingExecutable(L"WindowSweaters.Host.exe")),client(NewIdentity()),transport(std::move(io)) {
-        if (!transport.exchange) transport.exchange=[name=endpoint,image=host](Message const& request) {
-            return Exchange(name,image,request);
+        if (!transport.exchange) transport.exchange=[name=endpoint,image=host](Message const& request,HANDLE cancel) {
+            return Exchange(name,image,request,cancel);
         };
         if (!transport.start_host) transport.start_host=[launch_options=options] {return StartHost(launch_options);};
         own_commits.reserve(32);
     }
+    Handle cancel{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
+    bool Stopped() const noexcept { return WaitForSingleObject(cancel.get(),0)==WAIT_OBJECT_0; }
     Options options;
     std::function<void(ConnectionState)> publish;
     std::wstring endpoint;
@@ -108,7 +110,7 @@ struct Session::Impl {
                 if (refresh) {
                     Message request; request.client=client; request.request_id=++request_id;
                     request.server=last_snapshot.server; request.client_lease=last_snapshot.client_lease;
-                    auto snapshot=transport.exchange(request);
+                    auto snapshot=transport.exchange(request,cancel.get());
                     if (snapshot.status==Status::client_expired || snapshot.status==Status::wrong_instance) {
                         DiscardRequests(); last_snapshot={};
                         view.connected=false; view.status=snapshot.status;
@@ -147,8 +149,9 @@ struct Session::Impl {
                     }
                 }
                 if (in_flight) {
+                    if (Stopped()) return;
                     view.pending=true; view.detail=L"Saving…"; Publish();
-                    auto result=transport.exchange(in_flight->request);
+                    auto result=transport.exchange(in_flight->request,cancel.get());
                     auto acknowledged=in_flight->request.operation==Operation::reset
                         ? Configuration{} : in_flight->request.configuration;
                     acknowledged.revision=in_flight->request.configuration.revision+1;
@@ -195,6 +198,7 @@ struct Session::Impl {
                 wake.wait_for(lock,std::chrono::milliseconds(850),[&]{return stop || desired.has_value();});
                 if (stop) return;
             } catch (...) {
+                if (Stopped()) return;
                 view.connected=false; view.pending=false; view.status=Status::disconnected;
                 view.configuration_authoritative=false;
                 view.detail=ever_connected?L"Host disconnected. Restart it explicitly; settings will reconnect.":
@@ -249,8 +253,12 @@ std::uint64_t Session::Reset(ConnectionState const& displayed) {
     impl_->due=std::chrono::steady_clock::now(); impl_->wake.notify_one();
     return generation;
 }
-void Session::Stop() noexcept {
+void Session::RequestStop() noexcept {
     { std::lock_guard lock(impl_->mutex); impl_->stop=true; impl_->wake.notify_one(); }
+    SetEvent(impl_->cancel.get());
+}
+void Session::Stop() noexcept {
+    RequestStop();
     if (impl_->worker.joinable()) impl_->worker.join();
 }
 DraftState::Update DraftState::Apply(ConnectionState const& state) {
@@ -272,12 +280,14 @@ struct AppsSession::Impl {
     Impl(Options const& options,std::function<void(AppsConnectionState)> callback,SessionTransport transport)
         :publish(std::move(callback)),exchange(std::move(transport.exchange)),client(NewIdentity()) {
         if (!exchange) exchange=[endpoint=EndpointName(options.endpoint_suffix),
-            image=SiblingExecutable(L"WindowSweaters.Host.exe")](Message const& request) {
-            return Exchange(endpoint,image,request);
+            image=SiblingExecutable(L"WindowSweaters.Host.exe")](Message const& request,HANDLE cancel) {
+            return Exchange(endpoint,image,request,cancel);
         };
     }
     std::function<void(AppsConnectionState)> publish;
-    std::function<Message(Message const&)> exchange;
+    std::function<Message(Message const&,HANDLE)> exchange;
+    Handle cancel{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
+    bool Stopped() const noexcept { return WaitForSingleObject(cancel.get(),0)==WAIT_OBJECT_0; }
     Identity client;
     std::mutex mutex;
     std::condition_variable wake;
@@ -306,7 +316,7 @@ struct AppsSession::Impl {
             try {
                 if (in_flight) {
                     view.connection.pending=true; view.connection.detail=L"Saving application choice…"; Publish();
-                    auto result=exchange(in_flight->request);
+                    auto result=exchange(in_flight->request,cancel.get());
                     if (result.operation!=Operation::response || result.response_to!=Operation::eligibility ||
                         result.client!=client || result.request_id!=in_flight->request.request_id ||
                         (result.server!=in_flight->request.server && result.status!=Status::wrong_instance) ||
@@ -346,11 +356,12 @@ struct AppsSession::Impl {
                     });
                     Publish();
                 }
+                if (Stopped()) return;
                 Message request; request.operation=Operation::applications_snapshot;
                 request.client=client;
                 { std::lock_guard lock(mutex); request.request_id=++request_id; }
                 request.server=last_snapshot.server; request.client_lease=last_snapshot.client_lease;
-                auto result=exchange(request);
+                auto result=exchange(request,cancel.get());
                 if (result.operation!=Operation::response || result.response_to!=Operation::applications_snapshot ||
                     result.request_id!=request.request_id || result.client!=client || EmptyIdentity(result.server) ||
                     result.applications.configuration_revision!=result.configuration.revision)
@@ -375,6 +386,7 @@ struct AppsSession::Impl {
                     Publish();
                 }
             } catch (...) {
+                if (Stopped()) return;
                 view.connection.connected=false; view.connection.configuration_authoritative=false;
                 view.connection.status=Status::disconnected;
                 view.connection.detail=L"Host disconnected. Application choices remain unchanged.";
@@ -409,8 +421,12 @@ std::uint64_t AppsSession::Change(AppsConnectionState const& displayed,applicati
     impl_->queued=Impl::Edit{std::move(request),generation}; impl_->busy=true; impl_->wake.notify_one();
     return generation;
 }
-void AppsSession::Stop() noexcept {
+void AppsSession::RequestStop() noexcept {
     { std::lock_guard lock(impl_->mutex); impl_->stop=true; impl_->wake.notify_one(); }
+    SetEvent(impl_->cancel.get());
+}
+void AppsSession::Stop() noexcept {
+    RequestStop();
     if (impl_->worker.joinable()) impl_->worker.join();
 }
 bool AppsDraftState::Apply(AppsConnectionState const& state) {

@@ -4,6 +4,8 @@
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <cstring>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -375,8 +377,71 @@ HICON MemoryIcon(bool legacy) {
     return icon;
 }
 
-void Native() {
-    Require(std::get<Fallback>(PixelsFromOwnedIcon(nullptr)).reason == FallbackReason::IconUnavailable,
+class TempFile final {
+public:
+    TempFile() {
+        std::array<wchar_t, MAX_PATH> dir{}, shortPath{}, longPath{};
+        Require(GetTempPathW(static_cast<DWORD>(dir.size()), dir.data()) &&
+                GetTempFileNameW(dir.data(), L"icn", 0, shortPath.data()) &&
+                GetLongPathNameW(shortPath.data(), longPath.data(), static_cast<DWORD>(longPath.size())),
+                "temp executable fixture path");
+        path_ = longPath.data();
+    }
+    ~TempFile() { DeleteFileW(path_.c_str()); }
+    const std::wstring& Path() const noexcept { return path_; }
+    void Write(const std::vector<char>& bytes) const {
+        std::ofstream file(path_, std::ios::binary | std::ios::trunc);
+        file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        Require(file.good(), "write temp executable fixture");
+    }
+private:
+    std::wstring path_;
+};
+
+void PaddedExecutable(const std::wstring& ownPath) {
+    std::ifstream source(ownPath, std::ios::binary);
+    std::vector<char> image((std::istreambuf_iterator<char>(source)), std::istreambuf_iterator<char>());
+    Require(image.size() > 1024 && image.size() < 8u * 1024 * 1024, "own executable is a small PE");
+    const auto deadline = [] { return std::chrono::steady_clock::now() + 10s; };
+    const auto sample = [&](const TempFile& file) {
+        return SampleExecutableIcon({"exe:Padded", 1, file.Path()}, {}, deadline());
+    };
+    TempFile plain;
+    plain.Write(image);
+    Require(Palette(sample(plain)) == SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "unpadded PE copy extraction");
+    const auto baseline = ExecutableBytesRead();
+    Require(baseline > 0 && baseline < 4u * 1024 * 1024, "extraction reads bounded ranges");
+
+    auto padded = image;
+    padded.resize(56u * 1024 * 1024, '\x5a');
+    TempFile large;
+    large.Write(padded);
+    Require(Palette(sample(large)) == SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "heavily padded PE extraction");
+    Require(ExecutableBytesRead() == baseline, "bytes read do not scale with file size");
+
+    padded.resize(64u * 1024 * 1024 + 1, '\x5a');
+    large.Write(padded);
+    Failure(sample(large), FallbackReason::SourceTooLarge);
+    Require(ExecutableBytesRead() == 0, "oversize file rejected before any read");
+
+    auto malformed = image;
+    const std::int32_t beyond = 0x7ffffff0;
+    std::memcpy(malformed.data() + offsetof(IMAGE_DOS_HEADER, e_lfanew), &beyond, sizeof beyond);
+    TempFile bad;
+    bad.Write(malformed);
+    Failure(sample(bad), FallbackReason::InvalidResource);
+    malformed = image;
+    malformed.resize(1024);
+    bad.Write(malformed);
+    Failure(sample(bad), FallbackReason::InvalidResource);
+
+    std::stop_source stop;
+    stop.request_stop();
+    Failure(SampleExecutableIcon({"exe:Padded", 1, large.Path()}, stop.get_token(), deadline()),
+            FallbackReason::Cancelled);
+}
+
+void Native() {    Require(std::get<Fallback>(PixelsFromOwnedIcon(nullptr)).reason == FallbackReason::IconUnavailable,
             "null HICON explicit fallback");
     const HICON icon = reinterpret_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr),
         MAKEINTRESOURCEW(1), IMAGE_ICON, 48, 48, LR_DEFAULTCOLOR));
@@ -446,6 +511,7 @@ void Native() {
     stop.request_stop();
     Failure(SampleExecutableIcon(own, stop.get_token(), std::chrono::steady_clock::now() + 1s),
             FallbackReason::Cancelled);
+    PaddedExecutable(own.executablePath);
     std::cout << "PASS native own-executable resource and WIC mask/alpha probe; no desktop apps\n";
 }
 

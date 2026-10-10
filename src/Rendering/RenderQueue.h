@@ -45,6 +45,9 @@ struct RenderQueueLimits {
     std::size_t maxPerimeterBytes{64u * 1024u * 1024u};
     std::size_t maxTransientBytes{128u * 1024u * 1024u};
     std::size_t cacheBytes{8u * 1024u * 1024u};
+    // Retained worker-owned D2D/WIC targets and uploaded tile bitmaps, reported
+    // as Status.scratchBytes. Not part of any transient reservation.
+    std::size_t scratchBytes{16u * 1024u * 1024u};
     // Bounded lifetime high-water ledger. Exhaustion rejects new HWND keys,
     // rather than forgetting tombstones and resurrecting cancelled work.
     std::size_t maxTargetKeys{4096};
@@ -59,7 +62,8 @@ struct RenderQueueStatus {
     std::size_t active{};
     // Reservations bound pixel buffers, tile scratch, retained tiles and input.
     // They exclude opaque D2D/WIC allocator overhead, not a measured heap total.
-    std::size_t transientBytes{}, maxTransientBytes{}, residentCacheBytes{};
+    std::size_t transientBytes{}, maxTransientBytes{}, residentCacheBytes{}, scratchBytes{};
+    std::uint64_t scratchFactories{}, scratchTargets{}, scratchUploads{};
     std::uint64_t renderRequests{}, acceptedRequests{}, renderPreparations{};
     std::uint64_t coalesced{}, staleCancelled{}, quotaRejected{};
     std::uint64_t tileGenerations{}, cacheHits{}, notifications{}, notificationFailures{};
@@ -73,6 +77,9 @@ struct RenderQueueTestHooks {
     std::function<void(std::stop_token)> beforeFirstDequeue;
     std::function<void(const RenderRequest&, std::stop_token)> beforeRender;
     std::function<void(const RenderRequest&, std::stop_token)> afterRender;
+    // Runs on the worker at each stop poll inside the renderer (1-based count),
+    // before the current-ness check, so a test can supersede at a chosen stage.
+    std::function<void(const RenderRequest&, std::uint32_t poll, std::stop_token)> duringRender;
 };
 #endif
 

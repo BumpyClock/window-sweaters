@@ -37,7 +37,7 @@ bool ValidLimits(const RenderQueueLimits& l) noexcept {
         && l.maxReadyBytes <= 256 * MiB
         && l.maxPerimeterBytes && l.maxPerimeterBytes <= 64 * MiB
         && l.maxTransientBytes && l.maxTransientBytes <= 512 * MiB
-        && l.cacheBytes <= 8 * MiB;
+        && l.cacheBytes <= 8 * MiB && l.scratchBytes <= 256 * MiB;
 }
 
 bool ValidToken(const tracking::WorkToken& token) noexcept {
@@ -305,6 +305,7 @@ struct RenderQueue::Impl {
         if (FAILED(com)) return;
         {
             knitting::TileCache cache(limits.cacheBytes);
+            KnitRasterScratch scratch(limits.scratchBytes);
             try {
 #ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
                 if (hooks.beforeFirstDequeue) hooks.beforeFirstDequeue(stop);
@@ -328,6 +329,7 @@ struct RenderQueue::Impl {
                         status.maxTransientBytes = std::max(status.maxTransientBytes, status.transientBytes);
                     }
                     RenderReady result{job.request, RenderError{RenderErrorKind::NativeFailure, E_FAIL}};
+                    bool aborted = false;
                     if (job.budget.error) result.outcome = *job.budget.error;
                     else {
 #ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
@@ -343,9 +345,22 @@ struct RenderQueue::Impl {
                             ++status.renderPreparations;
                         }
                         try {
+#ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
+                            std::uint32_t polls = 0;
+#endif
+                            const KnitRenderControl control{&scratch, [&] {
+#ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
+                                if (hooks.duringRender) hooks.duringRender(*job.request, ++polls, stop);
+#endif
+                                if (stop.stop_requested()) return true;
+                                std::lock_guard lock(mutex);
+                                return !Current(job);
+                            }};
                             auto perimeter = std::make_shared<const KnitPerimeter>(
-                                KnitRaster::RenderPerimeter(job.request->frame, job.request->tile, cache));
+                                KnitRaster::RenderPerimeter(job.request->frame, job.request->tile, cache, control));
                             result.outcome = std::move(perimeter);
+                        } catch (const KnitRenderCancelled&) {
+                            aborted = true;
                         } catch (const std::invalid_argument&) {
                             result.outcome = RenderError{RenderErrorKind::InvalidInput, E_INVALIDARG};
                         } catch (const std::bad_alloc&) {
@@ -366,7 +381,12 @@ struct RenderQueue::Impl {
                         status.tileGenerations = cache.GenerationCount();
                         status.cacheHits = cache.HitCount();
                         status.residentCacheBytes = cache.ResidentBytes();
-                        if (!Current(job)) { ++status.staleCancelled; continue; }
+                        status.scratchBytes = scratch.ResidentBytes();
+                        const auto counts = scratch.GetStats();
+                        status.scratchFactories = counts.factories;
+                        status.scratchTargets = counts.targets;
+                        status.scratchUploads = counts.uploads;
+                        if (aborted || !Current(job)) { ++status.staleCancelled; continue; }
                         // The reservation precedes all rendering. Never publish a
                         // success whose actual retained charge exceeds that bound.
                         auto bytes = ReadyBytes(result);
@@ -395,7 +415,7 @@ struct RenderQueue::Impl {
         }
         {
             std::lock_guard lock(mutex);
-            status.active = status.transientBytes = status.residentCacheBytes = 0;
+            status.active = status.transientBytes = status.residentCacheBytes = status.scratchBytes = 0;
         }
         CoUninitialize();
     }

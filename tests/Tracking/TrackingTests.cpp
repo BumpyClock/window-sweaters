@@ -10,6 +10,20 @@
 
 using namespace window_sweaters::tracking;
 
+namespace window_sweaters::tracking {
+struct TrackerTestAccess {
+    static NativeQueryCounts Probe(WindowTracker& tracker, HWND hwnd) {
+        const auto before = QueryCounts();
+        ActionBatch actions;
+        tracker.Enqueue(reinterpret_cast<WindowHandle>(hwnd), Dirty::Lifecycle);
+        tracker.Drain(actions, 0);
+        if (!actions.empty()) throw std::runtime_error("In-process candidates never produce overlay actions");
+        const auto after = QueryCounts();
+        return {after.processOpens - before.processOpens, after.dwmReads - before.dwmReads};
+    }
+};
+}
+
 namespace {
 
 void Check(bool condition, const char* message) {
@@ -425,6 +439,60 @@ void NativeReceiverContract() {
     Check(std::holds_alternative<DestroyedWindow>(WindowTracker::Query(receiver)), "Confirmed native death");
 }
 
+void NativeProbePrefilter() {
+    const auto instance=GetModuleHandleW(nullptr);
+    const wchar_t* name=L"WindowSweaters.NativeProbePrefilter";
+    WNDCLASSW registration{};
+    registration.hInstance=instance;
+    registration.lpfnWndProc=DefWindowProcW;
+    registration.lpszClassName=name;
+    Check(RegisterClassW(&registration)!=0,"Register hidden native prefilter test class");
+    struct Unregister { const wchar_t* name; HINSTANCE instance; ~Unregister(){UnregisterClassW(name,instance);} } unregister{name,instance};
+    struct OwnedWindow {
+        HWND value{};
+        ~OwnedWindow() { if (value) DestroyWindow(value); }
+    };
+    const auto make=[&](DWORD style,DWORD extended,HWND parent) {
+        OwnedWindow window{CreateWindowExW(extended,name,L"",style,0,0,240,160,parent,nullptr,instance,nullptr)};
+        Check(window.value!=nullptr,"Create hidden native prefilter case");
+        return window;
+    };
+    const auto owner=make(WS_OVERLAPPEDWINDOW,0,nullptr);
+    WindowTracker tracker{owner.value,TrackerConfig{}};
+    const auto probe=[&](HWND window) { return TrackerTestAccess::Probe(tracker,window); };
+    const auto zero=[](const NativeQueryCounts& counts) { return counts.processOpens==0 && counts.dwmReads==0; };
+    const auto full=[](const NativeQueryCounts& counts) { return counts.processOpens==2 && counts.dwmReads==2; };
+    struct Case { DWORD style,extended; HWND parent; };
+    const Case rejected[]{
+        {WS_OVERLAPPEDWINDOW,WS_EX_TOOLWINDOW,nullptr},
+        {WS_OVERLAPPEDWINDOW,WS_EX_NOACTIVATE,nullptr},
+        {WS_OVERLAPPEDWINDOW,0,owner.value},
+        {WS_POPUP|WS_CAPTION,0,nullptr},
+        {WS_POPUP,0,nullptr},
+        {WS_CHILD|WS_CAPTION,0,owner.value},
+    };
+    for (const auto& item:rejected) {
+        const auto window=make(item.style,item.extended,item.parent);
+        Check(zero(probe(window.value)) && zero(probe(window.value)),
+            "Unknown tool/owned/popup/child candidates make no process or DWM call, on every pass");
+    }
+    const auto hidden=make(WS_OVERLAPPEDWINDOW,0,nullptr);
+    Check(!IsWindowVisible(hidden.value),"Prefilter admission case is hidden");
+    Check(full(probe(hidden.value)) && full(probe(hidden.value)),
+        "Hidden supported frames are never rejected by the prefilter and each probe queries fully");
+    const auto frame=make(WS_OVERLAPPEDWINDOW,0,nullptr);
+    SetLastError(0);
+    const auto previous=SetWindowLongPtrW(frame.value,GWL_EXSTYLE,WS_EX_TOOLWINDOW);
+    Check(previous!=0 || GetLastError()==0,"Make hidden frame a tool window");
+    Check(zero(probe(frame.value)),"Tool-window state is rejected without native queries");
+    SetLastError(0);
+    Check(SetWindowLongPtrW(frame.value,GWL_EXSTYLE,previous)!=0 || GetLastError()==0,"Restore hidden frame style");
+    Check(full(probe(frame.value)),"Restored styles allow rediscovery, nothing is cached across probes");
+    SetWindowLongPtrW(frame.value,GWL_EXSTYLE,WS_EX_TOOLWINDOW);
+    Check(zero(probe(frame.value)),"Rejection is re-evaluated on each probe");
+    std::cout<<"PASS: native Probe prefilter spends zero process/DWM calls on unknown rejected candidates; hidden frames and restored styles keep full Query\n";
+}
+
 void SelectedLifetimeIsolation() {
     for (const auto hidden : {false,true}) {
         auto selected=Window(101);
@@ -597,6 +665,7 @@ int main(int argc, char** argv) {
         std::cout << "PASS: 12 deterministic tracking contract scenarios, including suppressed selections/reuse/capacity (scripted, not desktop evidence)\n";
         if (argc == 2 && std::string_view{argv[1]} == "--native-contract") {
             NativeReceiverContract();
+            NativeProbePrefilter();
             NativeSelectedTracker();
             std::cout << "PASS: isolated native receiver/query rejection contract (not cross-process fixture evidence)\n";
         } else if (argc != 1) {

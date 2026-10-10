@@ -884,10 +884,102 @@ void IdleWorkerDoesNoCpuOrGenerations() {
 }
 }
 
+// Poll 1-2 precede the first side; each side then polls six times (start,
+// brushes, colour, height, shading, fray). Poll 9 is the start of side 1.
+constexpr std::uint32_t SideOneStartPoll = 9;
+
+void SupersededJobAbortsBetweenSides() {
+    auto gate = std::make_shared<Gate>();
+    std::atomic<std::uint32_t> oldPolls{}, newPolls{};
+    Receiver receiver;
+    RenderQueueTestHooks hooks;
+    hooks.duringRender = [&](const RenderRequest& r, std::uint32_t poll, std::stop_token stop) {
+        if (r.token.appearanceRevision != 1) { newPolls.store(poll); return; }
+        oldPolls.store(poll);
+        if (poll == SideOneStartPoll) gate->Wait(stop);
+    };
+    receiver.Start({}, std::move(hooks));
+    Check(receiver.queue->Submit(Request(100, 1)) == S_OK, "Submit job to supersede");
+    gate->Entered();
+    Check(receiver.queue->Submit(Request(100, 2)) == S_OK, "Supersede after side zero completed");
+    gate->Open();
+    receiver.Collect(1);
+    receiver.Wait([&] { return receiver.queue->Status().active == 0; });
+    Check(receiver.results.size() == 1 && receiver.results[0].request->token.appearanceRevision == 2,
+          "Only the newest perimeter publishes");
+    Perimeter(receiver.results[0]);
+    Check(oldPolls.load() == SideOneStartPoll, "Superseded job runs no stage after the failed poll");
+    Check(newPolls.load() == 2 + 4 * 6, "Complete job polls every stage");
+    const auto status = receiver.queue->Status();
+    Check(status.renderPreparations == 2 && status.staleCancelled == 1 && status.ready == 0
+        && status.readyBytes == 0 && status.transientBytes == 0 && status.active == 0 && status.pending == 0,
+          "Aborted job leaves no charge or result");
+}
+
+void CancelledJobAbortsAndNextJobRendersFresh() {
+    auto gate = std::make_shared<Gate>();
+    std::atomic<std::uint32_t> cancelledPolls{};
+    Receiver receiver;
+    RenderQueueTestHooks hooks;
+    hooks.duringRender = [&](const RenderRequest& r, std::uint32_t poll, std::stop_token stop) {
+        if (r.token.target.hwnd != 100) return;
+        cancelledPolls.store(poll);
+        if (poll == SideOneStartPoll) gate->Wait(stop);
+    };
+    receiver.Start({}, std::move(hooks));
+    const auto cancelled = Request(100, 1);
+    Check(receiver.queue->Submit(cancelled) == S_OK, "Submit job to cancel");
+    gate->Entered();
+    Check(receiver.queue->Cancel(cancelled.token.target) == S_OK, "Cancel mid-render");
+    gate->Open();
+    receiver.Wait([&] { return receiver.queue->Status().active == 0 && receiver.queue->Status().staleCancelled == 1; });
+    Check(cancelledPolls.load() == SideOneStartPoll && receiver.queue->Status().ready == 0
+        && receiver.queue->Status().readyBytes == 0 && receiver.queue->Status().transientBytes == 0,
+          "Cancelled job stops and publishes nothing");
+    Check(receiver.queue->Submit(Request(101, 1)) == S_OK, "Queue continues after abort");
+    receiver.Collect(1);
+    knitting::TileCache cache;
+    const auto fresh = KnitRaster::RenderPerimeter(Request().frame, Request().tile, cache);
+    const auto& p = Perimeter(receiver.results[0]);
+    for (std::size_t i = 0; i < 4; ++i)
+        Check(p.pieces[i].image.pixels == fresh.pieces[i].image.pixels, "Reused scratch after abort is pixel-identical");
+}
+
+void ScratchReuseAndBound() {
+    Receiver receiver;
+    receiver.Start();
+    for (std::uint64_t i = 1; i <= 3; ++i) {
+        Check(receiver.queue->Submit(Request(100, i)) == S_OK, "Submit repeated identical frame");
+        receiver.Collect(i);
+        if (i == 1) receiver.Wait([&] { return receiver.queue->Status().active == 0; });
+    }
+    receiver.Wait([&] { return receiver.queue->Status().active == 0; });
+    const auto status = receiver.queue->Status();
+    Check(status.scratchFactories == 2 && status.scratchTargets == 4 && status.scratchUploads == 4,
+          "Repeated identical renders create no new factories, targets or uploads");
+    Check(status.scratchBytes > 0 && status.scratchBytes <= RenderQueueLimits{}.scratchBytes,
+          "Retained scratch is counted and bounded");
+    receiver.queue->Stop();
+    Check(receiver.queue->Status().scratchBytes == 0, "Stopped worker releases scratch");
+
+    Receiver tiny;
+    RenderQueueLimits limits;
+    limits.scratchBytes = 1;
+    tiny.Start(limits);
+    Check(tiny.queue->Submit(Request(100, 1)) == S_OK, "Submit with tiny scratch budget");
+    tiny.Collect(1);
+    tiny.Wait([&] { return tiny.queue->Status().active == 0; });
+    Perimeter(tiny.results[0]);
+    Check(tiny.queue->Status().scratchBytes == 0, "Over-budget scratch is not retained");
+}
+
 int main() {
     const auto com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(com)) return 2;
     const std::array tests{
+        std::pair{"superseded job aborts between sides", SupersededJobAbortsBetweenSides},
+        std::pair{"cancelled job aborts, next render fresh", CancelledJobAbortsAndNextJobRendersFresh},
+        std::pair{"scratch reuse and byte bound", ScratchReuseAndBound},
         std::pair{"real CPU fixture/cache reuse", RealCpuFixtureAndCacheReuse},
         std::pair{"coalescing/pending count", CoalescingAndPendingCountBound},
         std::pair{"pending input byte quota", PendingBytesBoundIncludesChart},

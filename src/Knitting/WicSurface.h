@@ -11,7 +11,8 @@ void Check(HRESULT result, const char* operation);
 
 class WicSurface {
 public:
-    WicSurface(std::uint32_t width, std::uint32_t height, float scale, ID2D1Factory* sharedFactory = nullptr);
+    WicSurface(std::uint32_t width, std::uint32_t height, float scale, ID2D1Factory* sharedFactory = nullptr,
+                IWICImagingFactory* sharedWic = nullptr);
     RasterImage Read() const;
     ComPtr<IWICImagingFactory> wic;
     ComPtr<ID2D1Factory> factory;
