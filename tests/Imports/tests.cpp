@@ -346,6 +346,20 @@ void ResolutionTest() {
     Check(helper_plan.bindings.size() == 1 && helper_plan.bindings[0].application == helper_apps[1].Identity() &&
         std::holds_alternative<Ambiguous>(helper_plan.resolutions[0].match),
         "A verified unique longer prefix can bind while the ambiguous broad prefix remains unresolved");
+    const std::array multi_alias{
+        Metadata(L"D:\\Zed\\Code.exe"), Metadata(L"C:\\Pkg\\Spotify.exe", L"Pkg_8wekyb3d8bbwe!App"),
+        Metadata(L"C:\\Alpha\\CODE.EXE"), Metadata(L"C:\\Pkg\\Code.exe", L"Pkg_8wekyb3d8bbwe!App"),
+        Metadata(L"c:\\alpha\\code.exe")};
+    const auto short_only = Value(PlanRuleImport(Value(ParseRules("Sp = #010203\n")), multi_alias));
+    Check(short_only.bindings.size() == 1 && short_only.bindings[0].application == multi_alias[1].Identity(),
+        "A packaged identity binds through any of its verified executable aliases");
+    const auto shadowed = Value(PlanRuleImport(Value(ParseRules("Sp = #010203\nCode = #123456\n")), multi_alias));
+    const auto& candidates = std::get<Ambiguous>(shadowed.resolutions[1].match).candidates;
+    Check(candidates.size() == 3 && std::is_sorted(candidates.begin(), candidates.end()) &&
+        std::ranges::find(candidates, multi_alias[1].Identity()) != candidates.end(),
+        "Ambiguous candidates are unique, sorted, and fold case-equivalent executable identities");
+    Check(shadowed.bindings.empty(),
+        "A longer ambiguous prefix shadows a shorter exact match for every candidate identity");
     Reject(ResolveRules(rules, std::vector<applications::AppMetadata>(4097, metadata[0])),
         ErrorCode::ResourceLimit, "Verified metadata count is bounded before matching");
     std::vector<applications::AppMetadata> many_apps;

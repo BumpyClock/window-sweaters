@@ -175,8 +175,8 @@ Result<RuleImportPlan> PlanRuleImport(
                 const auto* matched = std::get_if<Matched>(&resolution.match);
                 const auto* ambiguous = std::get_if<Ambiguous>(&resolution.match);
                 const bool applies = (matched && matched->application == identity) ||
-                    (ambiguous && std::find(ambiguous->candidates.begin(), ambiguous->candidates.end(), identity)
-                        != ambiguous->candidates.end());
+                    (ambiguous && std::binary_search(
+                        ambiguous->candidates.begin(), ambiguous->candidates.end(), identity));
                 if (applies && (!winner ||
                     resolution.rule.original_prefix.size() > winner->rule.original_prefix.size()))
                     winner = &resolution;

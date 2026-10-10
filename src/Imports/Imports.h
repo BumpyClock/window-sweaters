@@ -64,6 +64,7 @@ Result<ParsedRules> ParseRules(std::string_view document);
 const Rule* LongestPrefix(const ParsedRules&, std::wstring_view verified_alias);
 
 struct Unmatched {};
+// Candidates are unique and sorted by AppIdentity ordering.
 struct Ambiguous { std::vector<applications::AppIdentity> candidates; };
 struct Matched { applications::AppIdentity application; };
 using Match = std::variant<Unmatched, Ambiguous, Matched>;
