@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <crtdbg.h>
 #include <filesystem>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 using namespace window_sweaters::knitting;
 using namespace window_sweaters::rendering;
@@ -157,6 +159,7 @@ void CacheAndInvalidInputs() {
     auto [minimum, maximum] = std::minmax_element(tile->image.pixels.begin(), tile->image.pixels.end());
     Require((*maximum & 255) - (*minimum & 255) > 8, "Tile contains real raised relief, not flat colour");
     Require(probe.Get(spec) == tile && probe.GenerationCount() == 1, "Same key shares immutable tile");
+    Require(probe.HitCount() == 1, "Cache hit metric counts actual reused tile");
     auto half = spec; half.bandDip = 10.1f;
     Require(probe.Get(half) == tile, "Pinned half-DIP tile quantization");
     auto opaque = spec; opaque.baseArgb &= 0x00ffffffu;
@@ -190,8 +193,8 @@ void CacheAndInvalidInputs() {
         &ws_knit_gauge::ambient, &ws_knit_gauge::depth, &ws_knit_gauge::relief,
         &ws_knit_gauge::sheen, &ws_knit_gauge::tuck};
     for (auto field : fields) { changed = spec; changed.gauge.*field += .001f; change(changed); }
-    changed = spec; changed.stitch = Stitch::Rib;
-    Invalid([&] { probe.Get(changed); }, "Unported stitch must not masquerade as stockinette");
+    changed = spec; changed.stitch = static_cast<Stitch>(255);
+    Invalid([&] { probe.Get(changed); }, "Unknown stitch rejected");
     changed = spec; changed.gauge.jitter = std::numeric_limits<float>::quiet_NaN();
     Invalid([&] { probe.Get(changed); }, "NaN gauge rejected");
     changed = spec; changed.deviceScale = 0;
@@ -587,6 +590,531 @@ void RenderBehavior(const std::filesystem::path& root) {
     std::cout << "production perimeter bytes=" << perimeterBytes << ", full fixture bytes="
               << image.ByteSize() << ", tile bytes=" << perimeter.tile->image.ByteSize() << "\n";
 }
+
+TileSpec ThemeSpec(const char* id) {
+    using namespace window_sweaters::designs;
+    auto theme = ws_design_theme_by_id(id);
+    if (!theme) throw std::runtime_error("Unknown fixture theme");
+    auto source = ws_design_chart_by_name(theme->chart_name);
+    if (!source) throw std::runtime_error("Unknown fixture chart");
+    TileSpec spec;
+    spec.baseArgb = theme->base_argb;
+    spec.chart = MakeDesignChart(*source, theme->id);
+    return spec;
+}
+
+void ChartContracts() {
+    using namespace window_sweaters::designs;
+    TileCache cache;
+    TileSpec plain;
+    auto stockinette = cache.Get(plain);
+    plain.stitch = Stitch::Rib;
+    auto rib = cache.Get(plain);
+    plain.stitch = Stitch::Garter;
+    auto garter = cache.Get(plain);
+    Require(rib->layout.columns == 8 && garter->layout.rows == 8
+        && rib->layout.width_dip == 18 && garter->layout.height_dip == 13,
+        "Legacy plain 8x8 repeat dimensions preserved for rib and garter");
+    Require(Near(rib->layout.yarn_width, 1.2375f), "Source rib thickness is stitch width times .55");
+    Require(rib->image.pixels != stockinette->image.pixels
+        && garter->image.pixels != stockinette->image.pixels
+        && rib->image.pixels != garter->image.pixels, "Three plain styles produce distinct real stitch geometry");
+    RecordedPath ribPath, garterPath;
+    auto gauge = ws_knit_default_gauge();
+    Require(ws_knit_emit_plain(&gauge, &rib->layout, 1, ribPath.Writer())
+        && ribPath.moves.size() == 12 && ribPath.curves.size() == 12
+        && Near(ribPath.moves[2][0], 1.125f) && Near(ribPath.moves[3][0], 3.735f)
+        && Near(ribPath.curves[2][3], 19.5f), "Pinned k1p1 rib column positions and full margins");
+    Require(ws_knit_emit_plain(&gauge, &garter->layout, 2, garterPath.Writer())
+        && garterPath.moves.size() == 12 && garterPath.curves.size() == 288
+        && Near(garterPath.curves[0][0], -3.9375f)
+        && Near(garterPath.curves[0][1], -3.80397725f)
+        && Near(garterPath.curves[24][0], -2.8125f),
+        "Pinned alternating-phase garter waves use exact source quadratic controls");
+    auto spotify = ThemeSpec("spotify");
+    auto tile = cache.Get(spotify);
+    Require(tile->layout.columns == 12 && tile->layout.rows == 6
+        && tile->layout.width_dip == 27 && tile->layout.height_dip == 10
+        && Near(tile->layout.row_step, 10.f/6) && Near(tile->layout.yarn_width, .9f),
+        "Real Spotify chart retains source 12x6, 27x10 repeat and band row rounding");
+    auto priorPlain = spotify; priorPlain.stitch = Stitch::Rib; priorPlain.material = Material::Plain;
+    Require(cache.Get(priorPlain) == tile, "Chart material and stockinette independent of prior plain selection");
+    priorPlain.stitch = Stitch::Garter;
+    Require(cache.Get(priorPlain) == tile, "Chart does not inherit previous garter selection");
+    auto messages = cache.Get(ThemeSpec("messages"));
+    Require(messages->spec.material == Material::Plain && messages->layout.columns == 32
+        && messages->layout.rows == 12 && messages->layout.width_dip == 36
+        && messages->layout.height_dip == 10, "Messages uses actual 16x6 chart at source fabric 2x density");
+    auto messagesSpec = ThemeSpec("messages");
+    auto fabricLook = messagesSpec.chart->appearance;
+    fabricLook.flags &= ~ChartRoundDots;
+    auto squareDots = messagesSpec;
+    squareDots.chart = std::make_shared<const Chart>("messages-square", 0, messagesSpec.chart->width,
+        messagesSpec.chart->height, messagesSpec.chart->argbCells, fabricLook);
+    Require(cache.Get(squareDots)->image.pixels != messages->image.pixels,
+        "Round-dot mask changes actual fabric boundaries, not just catalogue metadata");
+    fabricLook.flags = messagesSpec.chart->appearance.flags & ~ChartDefinedYarn;
+    auto fineYarn = messagesSpec;
+    fineYarn.chart = std::make_shared<const Chart>("messages-fine", 0, messagesSpec.chart->width,
+        messagesSpec.chart->height, messagesSpec.chart->argbCells, fabricLook);
+    Require(cache.Get(fineYarn)->image.pixels != messages->image.pixels,
+        "Defined-yarn flag changes per-pixel stitch detail without replacing chart dimensions");
+    auto chrome = cache.Get(ThemeSpec("google-chrome"));
+    Require(chrome->layout.columns == 112 && chrome->layout.width_dip == 252,
+        "Literal 112-column Chrome repeat is not replaced by an 8x8 stand-in");
+    for (std::size_t i = 0; i < ws_design_chart_count(); ++i) {
+        auto source = ws_design_chart_at(i);
+        auto copied = MakeDesignChart(*source, source->name);
+        bool exact = true;
+        for (std::uint32_t y = 0; y < source->height; ++y)
+            for (std::uint32_t x = 0; x < source->width; ++x)
+                exact = exact && copied->argbCells[static_cast<std::size_t>(y)*source->width+x]
+                    == ws_design_cell_argb(source, x, y);
+        Require(exact && copied->width == source->width && copied->height == source->height
+            && copied->appearance.flags == source->flags && copied->appearance.cornerArgb == source->corner_argb
+            && copied->appearance.cuffArgb == source->cuff_argb, "All 47 copied charts preserve cells, palette and flags");
+        auto custom = TileSpec{}; custom.chart = copied;
+        Require(!cache.Get(custom)->image.pixels.empty(), "All 47 literal chart repeats render through production");
+    }
+    auto notes = ThemeSpec("notes");
+    Require(std::none_of(notes.chart->argbCells.begin(), notes.chart->argbCells.end(),
+        [](auto cell) { return cell == 0xffefc852u; })
+        && notes.chart->argbCells.back() == 0xfffffcf3u && notes.chart->appearance.cuffArgb == 0xffefc852u,
+        "Notes cuff cells are source-suppressed; curved golden material remains separate");
+    ChartAppearance raised{ChartSculptedYarn | ChartDefinedYarn};
+    TileSpec custom;
+    custom.chart = std::make_shared<const Chart>("imported:literal", 3, 2, 2,
+        std::vector<std::uint32_t>{0xff102030u, 0xffe0b070u, 0u, 0x7fffff00u}, raised);
+    auto owned = cache.Get(custom);
+    auto recolored = custom; recolored.baseArgb = 0xffd1495bu;
+    auto recoloredTile = cache.Get(recolored);
+    Require(recoloredTile->spec.chart->argbCells == custom.chart->argbCells,
+        "Changing base yarn never recolors literal custom PNG cells");
+    auto fullColor = custom;
+    fullColor.chart = std::make_shared<const Chart>("imported:opaque", 0, 2, 2,
+        std::vector<std::uint32_t>{0xff102030u, 0xffe0b070u, 0xff123456u, 0xff789abcu}, raised);
+    auto fixed = cache.Get(fullColor);
+    fullColor.baseArgb = 0xffee1199u;
+    // Ground is deliberately base-colored in the original material; yarn colors,
+    // not the background between them, must remain untouched.
+    Require(cache.Get(fullColor)->spec.chart->argbCells == fixed->spec.chart->argbCells,
+        "Opaque imported palette retained when source ground color changes");
+    auto change = [&](std::shared_ptr<const Chart> chart) {
+        auto changed = custom; changed.chart = std::move(chart);
+        Require(cache.Get(changed) != owned, "Chart identity, revision, content, dimensions and appearance invalidate key");
+    };
+    change(std::make_shared<const Chart>("imported:other", 3, 2, 2, custom.chart->argbCells, raised));
+    change(std::make_shared<const Chart>("imported:literal", 4, 2, 2, custom.chart->argbCells, raised));
+    auto cells = custom.chart->argbCells; cells[0] = 0xff0a141eu;
+    change(std::make_shared<const Chart>("imported:literal", 3, 2, 2, cells, raised));
+    change(std::make_shared<const Chart>("imported:literal", 3, 1, 4, custom.chart->argbCells, raised));
+    auto look = raised; look.outsideAnchored = true;
+    change(std::make_shared<const Chart>("imported:literal", 3, 2, 2, custom.chart->argbCells, look));
+    for (auto flag : {ChartRoundDots, ChartFittedRepeat, ChartSolidCorners, ChartOuterCuff}) {
+        look = raised; look.flags |= flag;
+        if (flag == ChartOuterCuff) look.cuffArgb = 0xffefc852u;
+        change(std::make_shared<const Chart>("imported:literal", 3, 2, 2, custom.chart->argbCells, look));
+    }
+    look = raised; look.cornerArgb = 0xff112233u;
+    change(std::make_shared<const Chart>("imported:literal", 3, 2, 2, custom.chart->argbCells, look));
+    auto changedCuff = notes;
+    auto cuffLook = notes.chart->appearance; cuffLook.cuffArgb = 0xffe55c52u;
+    changedCuff.chart = std::make_shared<const Chart>(notes.chart->semanticId,
+        notes.chart->contentRevision, notes.chart->width, notes.chart->height, notes.chart->argbCells, cuffLook);
+    Require(cache.Get(changedCuff) != cache.Get(notes), "Changing only cuff color invalidates complete chart appearance key");
+    TileCache bounded(owned->ByteSize());
+    auto held = bounded.Get(custom); auto heldPixels = held->image.pixels;
+    custom.chart.reset(); bounded.Get(recolored); bounded.Clear();
+    Require(held->spec.chart && held->spec.chart->contentRevision == 3
+        && held->image.pixels == heldPixels && bounded.ResidentBytes() == 0,
+        "Eviction and producer release preserve immutable chart/tile ownership");
+    TileCache chartBudget(owned->image.ByteSize());
+    chartBudget.Get(recolored);
+    Require(chartBudget.ResidentBytes() == 0, "Byte cache bounds include owned chart data, not only raster");
+    for (float scale : {MinimumDeviceScale, 1.f, 1.25f, 1.5f, 2.f, MaximumDeviceScale}) {
+        auto scaled = spotify; scaled.deviceScale = scale;
+        auto scaledTile = cache.Get(scaled);
+        Require(scaledTile->layout.width_dip == 27 && scaledTile->image.width == 108,
+            "Device scale invalidation preserves source logical stitch gauge and raster sampling rule");
+    }
+    Invalid([&] { Chart("", 0, 1, 1, {0}); }, "Empty chart identity rejected");
+    Invalid([&] { Chart("bad", 0, 0, 1, {}); }, "Empty chart dimensions rejected");
+    Invalid([&] { Chart("bad", 0, 257, 1, {}); }, "Unbounded chart dimensions rejected");
+    Invalid([&] { Chart("bad", 0, 2, 2, {0}); }, "Truncated chart cells rejected");
+    look = {}; look.flags = 1u << 31;
+    Invalid([&] { Chart("bad", 0, 1, 1, {0}, look); }, "Unknown appearance flags rejected");
+    look = {}; look.flags = ChartOuterCuff;
+    Invalid([&] { Chart("bad", 0, 1, 1, {0}, look); }, "Missing outer cuff color rejected");
+    auto enormous = spotify; enormous.bandDip = 256; enormous.gauge.rows = 1.5f; enormous.gauge.aspect = 8;
+    auto count = cache.GenerationCount();
+    Invalid([&] { cache.Get(enormous); }, "Oversized chart raster rejected before allocation");
+    Require(cache.GenerationCount() == count, "Invalid chart raster cannot commit a cache generation");
+    enormous = spotify; enormous.gauge.aspect = std::numeric_limits<float>::denorm_min();
+    Invalid([&] { cache.Get(enormous); }, "Subnormal chart pitch cannot overflow repeat float-to-int conversion");
+    enormous = spotify; enormous.gauge.aspect = .000001f;
+    Invalid([&] { cache.Get(enormous); }, "Microscopic chart pitch cannot allocate unbounded yarn paths");
+    std::vector<std::uint32_t> palette;
+    for (std::uint32_t i = 0; i < 17; ++i) palette.push_back(0xff123400u | i);
+    auto tooMany = TileSpec{};
+    tooMany.chart = std::make_shared<const Chart>("17-yarns", 0, 17, 1, palette, raised);
+    Invalid([&] { cache.Get(tooMany); }, "Raised chart rejects seventeenth yarn instead of silently recoloring");
+    tooMany.chart = std::make_shared<const Chart>("17-fabric-yarns", 0, 17, 1, palette);
+    Require(!cache.Get(tooMany)->image.pixels.empty(), "Per-pixel fabric accepts full literal palette without source path cap");
+    TileSpec sentinel;
+    sentinel.chart = std::make_shared<const Chart>("sentinel", 0, 1, 1,
+        std::vector<std::uint32_t>{0}, raised);
+    auto sentinelImage = cache.Get(sentinel)->image;
+    sentinel.chart = std::make_shared<const Chart>("alpha127", 0, 1, 1,
+        std::vector<std::uint32_t>{0x7fffff00u}, raised);
+    Require(cache.Get(sentinel)->image.pixels == sentinelImage.pixels,
+        "Alpha127 imported cell renders base yarn, not a recolored contrast");
+    sentinel.chart = std::make_shared<const Chart>("alpha128", 0, 1, 1,
+        std::vector<std::uint32_t>{0x80ffff00u}, raised);
+    auto opaque128 = cache.Get(sentinel);
+    Require(opaque128->image.pixels != sentinelImage.pixels
+        && std::all_of(opaque128->image.pixels.begin(), opaque128->image.pixels.end(),
+            [](auto p) { return Alpha(p) == 255; }),
+        "Alpha128 is literal opaque yarn rather than transparency or base sentinel");
+    TileSpec paletteFixture; paletteFixture.baseArgb = 0xff010101u;
+    paletteFixture.chart = std::make_shared<const Chart>("literal-red-blue", 0, 2, 1,
+        std::vector<std::uint32_t>{0xffff0000u, 0xff0000ffu}, raised);
+    auto pixels = cache.Get(paletteFixture)->image.pixels;
+    Require(std::any_of(pixels.begin(), pixels.end(), [](auto p) {
+        return ((p>>16)&255)>100 && (p&255)<10;
+    }) && std::any_of(pixels.begin(), pixels.end(), [](auto p) {
+        return (p&255)>100 && ((p>>16)&255)<10;
+    }), "Actual custom PNG raster contains both literal contrast hues, not a substituted base palette");
+    auto pathLimit = ThemeSpec("spotify");
+    pathLimit.chart = std::make_shared<const Chart>("path-pressure", 0, 256, 256,
+        std::vector<std::uint32_t>(256*256), raised);
+    pathLimit.bandDip = 2; pathLimit.gauge.rows = 128; pathLimit.gauge.aspect = 1;
+    Invalid([&] { cache.Get(pathLimit); }, "Expanded small stitches obey bounded CPU yarn-path budget");
+    auto dense = pathLimit;
+    dense.chart = std::make_shared<const Chart>("dense-1x1", 0, 1, 1,
+        std::vector<std::uint32_t>{0}, raised);
+    dense.gauge.aspect = 1.28f;
+    auto denseTile = cache.Get(dense);
+    Require(denseTile->layout.columns == 400 && denseTile->layout.rows == 512
+        && denseTile->image.width == 32 && denseTile->image.height == 32,
+        "Dense valid source chart renders exact400x512 repeat within262144 margin-cell limit");
+    Require(std::all_of(denseTile->image.pixels.begin(), denseTile->image.pixels.end(),
+        [](auto p) { return Alpha(p) == 255; }),
+        "Dense208464-cell source raster remains opaque after one bounded YarnCell reservation");
+    std::vector<std::uint32_t> adversarial(256*256);
+    std::iota(adversarial.begin(), adversarial.end(), 0xff000000u);
+    TileSpec rejection;
+    rejection.chart = std::make_shared<const Chart>("adversarial-256x256", 0, 256, 256,
+        std::move(adversarial), raised);
+    bool beforeWic = false;
+    auto started = std::chrono::steady_clock::now();
+    std::thread withoutCom([&] {
+        // A WIC allocation on this deliberately uninitialized thread would
+        // throw system_error, not the required palette invalid_argument.
+        try { TileCache isolated; isolated.Get(rejection); }
+        catch (const std::invalid_argument&) { beforeWic = true; }
+        catch (const std::system_error&) {}
+    });
+    withoutCom.join();
+    double elapsed = std::chrono::duration<double,std::milli>(
+        std::chrono::steady_clock::now()-started).count();
+    Require(beforeWic, "Adversarial65536-color raised chart rejects seventeenth distinct yarn before COM/WIC");
+    Require(elapsed < 500., "Palette admission is bounded at16 comparisons per cell, never quadratic in65536 colors");
+    std::cout << "adversarial65536-color chart rejection before WIC: " << elapsed << "ms\n";
+    std::vector<std::uint32_t> sixteen(16);
+    std::iota(sixteen.begin(), sixteen.end(), 0xff102030u);
+    auto boundary = rejection;
+    boundary.chart = std::make_shared<const Chart>("16-opaque-yarns",0,16,1,sixteen,raised);
+    Require(!cache.Get(boundary)->image.pixels.empty(),
+        "Sixteen opaque authored yarns pass; unused base-colored ground is not a seventeenth path");
+    sixteen.back() = 0;
+    boundary.chart = std::make_shared<const Chart>("15-plus-base-yarns",0,16,1,sixteen,raised);
+    Require(!cache.Get(boundary)->image.pixels.empty(), "Fifteen authored colors plus used base sentinel fit16-yarn limit");
+    sixteen.back() = 0xff10203fu; sixteen.push_back(0);
+    boundary.chart = std::make_shared<const Chart>("16-plus-base-yarns",0,17,1,sixteen,raised);
+    Invalid([&] { cache.Get(boundary); }, "Sixteen authored colors plus used base sentinel reject17th effective yarn");
+}
+
+void CatalogueFixtures(const std::filesystem::path& root) {
+    using namespace window_sweaters::designs;
+    TileCache cache;
+    auto output = root / L"outputs";
+    for (std::size_t i = 0; i < ws_design_theme_count(); ++i) {
+        auto theme = ws_design_theme_at(i);
+        auto spec = ThemeSpec(theme->id);
+        for (float scale : {1.f, 2.f}) {
+            KnitFrameSpec frame; frame.deviceScale = scale;
+            auto image = KnitRaster::RenderFrame(frame, spec, cache);
+            auto name = std::string(theme->id) + (scale == 1.f ? "-1x.png" : "-2x.png");
+            SavePng(image, (output / name).c_str());
+            Require(image.width == static_cast<std::uint32_t>(640*scale)
+                && image.height == static_cast<std::uint32_t>(160*scale)
+                && Alpha(Pixel(image, image.width/2, image.height/2)) == 0
+                && Alpha(Pixel(image, image.width/2, 2)) == 255,
+                "All 37 original themes render opaque bands and transparent content at 1x/2x");
+            Premultiplied(image);
+        }
+        for (float scale : {1.f, 2.f})
+            for (float radius : {0.f, 10.f, 28.f, 200.f}) {
+                KnitFrameSpec f; f.widthDip = 180; f.heightDip = 110;
+                f.deviceScale = scale; f.radiusDip = radius;
+                auto image = KnitRaster::RenderFrame(f, spec, cache);
+                float r = std::min(radius, 55.f), tolerance = 1.f / scale;
+                bool valid = true;
+                for (std::uint32_t y = 0; y < image.height; ++y)
+                    for (std::uint32_t x = 0; x < image.width; ++x) {
+                        float dx = (x+.5f)/scale, dy = (y+.5f)/scale;
+                        bool outer = InsideRounded(dx, dy, tolerance, tolerance,
+                            200-2*tolerance, 130-2*tolerance, r+10-tolerance);
+                        bool hole = InsideRounded(dx, dy, 11-tolerance, 11-tolerance,
+                            178+2*tolerance, 108+2*tolerance, std::max(0.f, r-1)+tolerance);
+                        if (outer && !hole && Alpha(Pixel(image, x, y)) != 255) valid = false;
+                    }
+                Require(valid, "All 37 source designs preserve opaque mitres at 1x/2x and square/rounded/clamped radii");
+            }
+    }
+
+    auto whatsapp = ThemeSpec("whatsapp");
+    KnitFrameSpec frame; frame.deviceScale = 2;
+    auto actual = KnitRaster::RenderFrame(frame, whatsapp, cache);
+    auto patch = TileSpec{}; patch.material = Material::Raised; patch.baseArgb = whatsapp.baseArgb;
+    ChartAppearance capLook{ChartSculptedYarn}; capLook.outsideAnchored = true;
+    patch.chart = std::make_shared<const Chart>("solid-cap-fixture", 0, 8, 8,
+        std::vector<std::uint32_t>(64), capLook);
+    auto patchOnly = KnitRaster::RenderFrame(frame, patch, cache);
+    Require(Pixel(actual, 30, 8) == Pixel(patchOnly, 30, 8)
+        && Pixel(actual, 100, 8) != Pixel(patchOnly, 100, 8),
+        "WhatsApp curved tangent caps use solid raised base yarn while straight edge retains stripes");
+    auto square = frame; square.widthDip = 20; square.heightDip = 20; square.radiusDip = 10;
+    auto allCaps = KnitRaster::RenderFrame(square, whatsapp, cache);
+    Require(allCaps.pixels == KnitRaster::RenderFrame(square, patch, cache).pixels,
+        "A short WhatsApp edge with no tangent interval is wholly solid, without partial motif");
+    for (auto id : {"notes", "calendar"}) {
+        auto spec = ThemeSpec(id);
+        auto image = KnitRaster::RenderFrame(frame, spec, cache);
+        auto isCuff = [&](auto p) {
+            float r = static_cast<float>((p >> 16) & 255);
+            float green = static_cast<float>((p >> 8) & 255);
+            float blue = static_cast<float>(p & 255);
+            return r > 2.3f * blue && (std::string(id) == "calendar" ? r > 2.3f * green : green > 2.f * blue);
+        };
+        Require(isCuff(Pixel(image, 100, 2)) && !isCuff(Pixel(image, 100, 10)),
+            "Notes/Calendar outer cuff is one third band, not a full-edge recolor");
+        Require(isCuff(Pixel(image, 14, 14)),
+            "Curved outer cuff reaches the arc, not disconnected rectangular strips");
+    }
+    auto fitted = ThemeSpec("finder");
+    auto fittedImage = KnitRaster::RenderFrame(frame, fitted, cache);
+    // Finder repeat 36 DIP; 640 DIP edge contains round(640/36)=18 repeats.
+    auto noFit = fitted.chart->appearance; noFit.flags &= ~ChartFittedRepeat;
+    auto free = fitted; free.chart = std::make_shared<const Chart>("finder-free", 0,
+        fitted.chart->width, fitted.chart->height, fitted.chart->argbCells, noFit);
+    Require(fittedImage.pixels != KnitRaster::RenderFrame(frame, free, cache).pixels,
+        "Fitted flag changes real along-edge motif placement");
+    for (float scale : {1.f, 1.25f, 1.5f, 2.f}) {
+        auto fitFrame = frame; fitFrame.deviceScale = scale;
+        fitFrame.widthDip = 107.25f; fitFrame.heightDip = 31.75f; fitFrame.radiusDip = 1000;
+        auto image = KnitRaster::RenderFrame(fitFrame, whatsapp, cache);
+        Require(std::any_of(image.pixels.begin(), image.pixels.end(), [](auto p) { return Alpha(p) == 255; }),
+            "Fractional short-edge tangent fits retain covered opaque yarn");
+    }
+    auto physical = frame; physical.deviceScale = 1.5f;
+    physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
+    physical.physicalPaddingPixels = 16;
+    auto authority = KnitRaster::RenderPerimeter(physical, ThemeSpec("notes"), cache);
+    Require(authority.width == 1032 && authority.height == 273 && authority.contentInsetPixels == 16,
+        "Chart/cuff rendering preserves authoritative physical content and one-pixel padding override");
+    for (auto stitch : {Stitch::Rib, Stitch::Garter}) {
+        TileSpec spec; spec.stitch = stitch;
+        SavePng(KnitRaster::RenderFrame(frame, spec, cache),
+            (output / (stitch == Stitch::Rib ? L"rib-2x.png" : L"garter-2x.png")).c_str());
+    }
+    std::cout << "catalogue fixtures: 37 themes x 1x/2x, cache bytes=" << cache.ResidentBytes() << "\n";
+}
+
+void SpecialFinishContracts() {
+    using namespace window_sweaters::designs;
+    TileCache cache;
+    auto redYarn = [](std::uint32_t p) { return ((p>>16)&255) > 2*((p>>8)&255); };
+    TileSpec patch;
+    ChartAppearance look{ChartSolidCorners, 0xffff0000u};
+    patch.baseArgb = 0xffffffffu;
+    patch.chart = std::make_shared<const Chart>("patch-boundary-test", 0, 6, 6,
+        std::vector<std::uint32_t>(36, 0xffffffffu), look);
+    for (float scale : {1.f, 2.f})
+        for (auto anchor : {KnitAnchor::Corner, KnitAnchor::Centre})
+            for (auto size : {std::array<float,2>{180,110}, {187,137}, {299,173}}) {
+                KnitFrameSpec f; f.widthDip = size[0]; f.heightDip = size[1];
+                f.deviceScale = scale; f.anchor = anchor;
+                auto image = KnitRaster::RenderFrame(f, patch, cache);
+                bool exact = true; std::uint32_t minimum = 255, maximum = 0;
+                for (int side = 0; side < 4; ++side) {
+                    int length = static_cast<int>((side%2 ? size[1] : size[0])+20);
+                    for (int offset = static_cast<int>(15*scale); offset < (length-15)*scale; ++offset) {
+                        int x = side%2 ? static_cast<int>((side==1 ? size[0]+15 : 5)*scale) : offset;
+                        int y = side%2 ? offset : static_cast<int>((side==2 ? size[1]+15 : 5)*scale);
+                        auto p = Pixel(image, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+                        bool expected = offset < 20*scale || offset >= (length-20)*scale;
+                        exact = exact && Alpha(p) == 255 && redYarn(p) == expected;
+                        if (expected) { minimum = std::min(minimum, (p>>16)&255); maximum = std::max(maximum, (p>>16)&255); }
+                    }
+                }
+                Require(exact, "Original contrasting patch test: equal tangent extents on four sides, both anchors, 1x/2x");
+                Require(maximum-minimum > 8, "Solid tangent patches retain real raised-yarn relief");
+            }
+    TileSpec cuff; cuff.baseArgb = 0xffeeeeeeu;
+    look = {}; look.flags = ChartOuterCuff | ChartSculptedYarn | ChartDefinedYarn; look.cuffArgb = 0xffff0000u;
+    cuff.chart = std::make_shared<const Chart>("curved-cuff-test", 0, 1, 1,
+        std::vector<std::uint32_t>{0}, look);
+    for (float scale : {1.f, 2.f})
+        for (float radius : {0.f,10.f,28.f}) {
+            KnitFrameSpec f; f.widthDip = 180; f.heightDip = 110; f.radiusDip = radius; f.deviceScale = scale;
+            auto image = KnitRaster::RenderFrame(f, cuff, cache);
+            bool continuous = true, noIslands = true;
+            float width = 10.f/3, tolerance = .75f/scale;
+            for (std::uint32_t y = 0; y < image.height; ++y)
+                for (std::uint32_t x = 0; x < image.width; ++x) {
+                    float dx=(x+.5f)/scale,dy=(y+.5f)/scale;
+                    bool outer = InsideRounded(dx,dy,tolerance,tolerance,200-2*tolerance,130-2*tolerance,
+                        radius+10-tolerance);
+                    bool insetExpanded = InsideRounded(dx,dy,width-tolerance,width-tolerance,
+                        200-2*width+2*tolerance,130-2*width+2*tolerance,radius+10-width+tolerance);
+                    bool insetContracted = InsideRounded(dx,dy,width+tolerance,width+tolerance,
+                        200-2*width-2*tolerance,130-2*width-2*tolerance,radius+10-width-tolerance);
+                    auto p=Pixel(image,x,y);
+                    if (outer && !insetExpanded && !redYarn(p)) continuous=false;
+                    if (insetContracted && Alpha(p)==255 && redYarn(p)) noIslands=false;
+                }
+            Require(continuous && noIslands, "Original cuff test: one-third curved band, no interior color islands, three radii at 1x/2x");
+        }
+    for (float band : {2.f, 10.f, 14.f, 26.f})
+        for (float scale : {1.f, 2.f}) {
+            KnitFrameSpec f; f.bandDip=band; f.deviceScale=scale; f.widthDip=180; f.heightDip=110;
+            auto image=KnitRaster::RenderFrame(f, ThemeSpec("messages"), cache);
+            Require(image.width==static_cast<std::uint32_t>((180+2*band)*scale)
+                && image.height==static_cast<std::uint32_t>((110+2*band)*scale),
+                "Narrow/wide fabric maintains exact physical band and content dimensions");
+        }
+}
+
+RasterImage Crop(const RasterImage& image, std::uint32_t x, std::uint32_t y,
+                 std::uint32_t width, std::uint32_t height) {
+    RasterImage crop{width, height, width*4, {}};
+    crop.pixels.reserve(static_cast<std::size_t>(width)*height);
+    for (std::uint32_t row = 0; row < height; ++row)
+        for (std::uint32_t column = 0; column < width; ++column)
+            crop.pixels.push_back(Pixel(image, x+column, y+row));
+    return crop;
+}
+
+std::array<double, 3> TextureMetrics(const RasterImage& source, const RasterImage& candidate) {
+    auto gray = [](std::uint32_t p) {
+        return .2126*((p >> 16) & 255) + .7152*((p >> 8) & 255) + .0722*(p & 255);
+    };
+    double absolute = 0, square = 0, sourceEnergy = 0, candidateEnergy = 0;
+    for (std::uint32_t y = 0; y < source.height; ++y)
+        for (std::uint32_t x = 0; x < source.width; ++x) {
+            double a = gray(Pixel(source, x, y)), b = gray(Pixel(candidate, x, y));
+            absolute += std::abs(a-b); square += (a-b)*(a-b);
+            if (x && y) {
+                sourceEnergy += std::abs(a-gray(Pixel(source, x-1, y))) + std::abs(a-gray(Pixel(source, x, y-1)));
+                candidateEnergy += std::abs(b-gray(Pixel(candidate, x-1, y)))
+                    + std::abs(b-gray(Pixel(candidate, x, y-1)));
+            }
+        }
+    auto count = static_cast<double>(source.pixels.size());
+    return {absolute/count, std::sqrt(square/count), candidateEnergy/sourceEnergy};
+}
+
+void SourceCatalogueParity(const std::filesystem::path& root) {
+    struct Example { const char* id; const wchar_t* plate; };
+    const std::array<Example, 12> examples = {{
+        {"finder", L"app-01.png"}, {"spotify", L"app-05.png"},
+        {"whatsapp", L"app-07.png"}, {"messages", L"app-21.png"},
+        {"notes", L"app-23.png"}, {"calendar", L"app-24.png"},
+        {"adobe-photoshop", L"app-34.png"}, {"google-chrome", L"app-09.png"},
+        {"grok-bot", L"app-12.png"}, {"granola", L"app-14.png"},
+        {"adobe-illustrator", L"app-35.png"}, {"terminal", L"app-36.png"}
+    }};
+    TileCache cache;
+    auto output = root / L"outputs";
+    for (auto example : examples) {
+        auto spec = ThemeSpec(example.id);
+        auto plate = LoadPng(root / L"references" / example.plate);
+        KnitFrameSpec frame; frame.deviceScale = 8;
+        auto enlarged = KnitRaster::RenderFrame(frame, spec, cache);
+        auto detail = Crop(enlarged, 496, 0, 1280, 80);
+        auto baseline = Crop(plate, 76, 602, 1280, 80);
+        SavePng(detail, (output / (std::string(example.id) + "-production-detail.png")).c_str());
+        SavePng(baseline, (output / (std::string(example.id) + "-source-detail.png")).c_str());
+        auto metric = TextureMetrics(baseline, detail);
+        std::cout << "source " << example.id << " detail: MAE=" << metric[0] << ", RMSE="
+            << metric[1] << ", edgeEnergyRatio=" << metric[2] << "\n";
+        // Detail and geometry are independent. The source's CoreText labels and
+        // opaque application body never contribute to these texture metrics.
+        Require(metric[0] < 6. && metric[1] < 8.,
+            "Actual source plate versus production detail within measured AA/interpolation tolerance");
+        Require(metric[2] > .80 && metric[2] < 1.20,
+            "Source-matched material retains yarn edge energy, not flattened placeholder fabric");
+        frame.deviceScale = 4;
+        auto corners = KnitRaster::RenderFrame(frame, spec, cache);
+        const std::array<std::uint32_t, 4> cx = {0, 2400, 2400, 0}, cy = {0, 0, 480, 480};
+        for (std::size_t corner = 0; corner < 4; ++corner) {
+            auto native = Crop(corners, cx[corner], cy[corner], 160, 160);
+            auto source = Crop(plate, static_cast<std::uint32_t>(116+corner*332), 780, 160, 160);
+            auto name = std::string(example.id) + "-corner-" + std::to_string(corner);
+            SavePng(native, (output / (name + "-native.png")).c_str());
+            SavePng(source, (output / (name + "-source.png")).c_str());
+            std::size_t count = 0, disagreements = 0;
+            double colorError = 0; std::size_t colorCount = 0;
+            for (std::uint32_t y = 0; y < 160; ++y)
+                for (std::uint32_t x = 0; x < 160; ++x) {
+                    float dx = (cx[corner]+x+.5f)/4, dy = (cy[corner]+y+.5f)/4;
+                    if (InsideRounded(dx, dy, 9.75f, 9.75f, 620.5f, 140.5f, 10.25f)) continue;
+                    auto a = Pixel(source, x, y), b = Pixel(native, x, y);
+                    int backgroundDistance = std::abs(static_cast<int>((a>>16)&255)-249)
+                        + std::abs(static_cast<int>((a>>8)&255)-247) + std::abs(static_cast<int>(a&255)-243);
+                    bool sourceYarn = backgroundDistance > 3, nativeYarn = Alpha(b) > 128;
+                    ++count; if (sourceYarn != nativeYarn) ++disagreements;
+                    // Texture excludes the outer1px and white-content2px AA
+                    // boundaries. Geometry above still includes every pixel.
+                    bool outerInterior = InsideRounded(dx,dy,.25f,.25f,639.5f,159.5f,19.75f);
+                    bool contentExpanded = InsideRounded(dx,dy,9.5f,9.5f,621.f,141.f,10.5f);
+                    if (sourceYarn && Alpha(b) == 255 && outerInterior && !contentExpanded) {
+                        for (int shift = 0; shift < 24; shift += 8)
+                            colorError += std::abs(static_cast<int>((a>>shift)&255)-static_cast<int>((b>>shift)&255));
+                        colorCount += 3;
+                    }
+                }
+            double disagreement = static_cast<double>(disagreements)/static_cast<double>(count);
+            double mae = colorError/static_cast<double>(colorCount);
+            std::cout << "source " << example.id << " corner " << corner << ": geometry="
+                << disagreement*100 << "%, opaque RGB MAE=" << mae << "\n";
+            Require(disagreement < .01, "All four enlarged source corners preserve exterior geometry");
+            Require(mae < 4., "Special cap/cuff/fitted source corner yarn keeps authored colors and material");
+        }
+
+    }
+}
+
+void RendererMetrics() {
+    TileCache cache;
+    KnitFrameSpec f; f.widthDip=620; f.heightDip=140; f.deviceScale=2;
+    for (auto id : {"spotify","messages","notes"}) {
+        auto spec=ThemeSpec(id);
+        auto start=std::chrono::steady_clock::now();
+        auto perimeter=KnitRaster::RenderPerimeter(f,spec,cache);
+        double cold=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+        start=std::chrono::steady_clock::now();
+        constexpr int iterations=5;
+        for(int i=0;i<iterations;++i) KnitRaster::RenderPerimeter(f,spec,cache);
+        double warm=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/iterations;
+        std::size_t bytes=0;for(const auto& piece:perimeter.pieces)bytes+=piece.image.ByteSize();
+        std::cout<<"measured "<<id<<" 620x140@2x: cold="<<cold<<"ms, warm="<<warm
+            <<"ms, narrowBytes="<<bytes<<", tileOwnedBytes="<<perimeter.tile->ByteSize()
+            <<", cacheResident="<<cache.ResidentBytes()<<", generations="<<cache.GenerationCount()
+            <<", hits="<<cache.HitCount()<<"\n";
+    }
+}
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -605,6 +1133,11 @@ int wmain(int argc, wchar_t** argv) {
         PortableMath();
         CacheAndInvalidInputs();
         RenderBehavior(root);
+        ChartContracts();
+        CatalogueFixtures(root);
+        SpecialFinishContracts();
+        SourceCatalogueParity(root);
+        RendererMetrics();
         std::cout << "PASS " << checks << " native knitting checks\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << "\n";

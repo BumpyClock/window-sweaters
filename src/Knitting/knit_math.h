@@ -41,6 +41,9 @@ float ws_knit_noise(int column, int row);
 /* Logical +x follows an edge; +y goes inward. Each path has a two-cell margin. */
 int ws_knit_emit_stockinette(const ws_knit_gauge* gauge, const ws_knit_layout* layout,
                             int raised, ws_knit_path_writer writer);
+/* stitch: 0 stockinette, 1 rib, 2 garter, matching the authored source modes. */
+int ws_knit_emit_plain(const ws_knit_gauge* gauge, const ws_knit_layout* layout,
+                      int stitch, ws_knit_path_writer writer);
 /* Real raised-yarn cell primitive for later per-colour chart path grouping. */
 int ws_knit_emit_cell(const ws_knit_gauge* gauge, const ws_knit_layout* layout,
                      int column, int row, ws_knit_path_writer writer);

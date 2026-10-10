@@ -121,6 +121,37 @@ int ws_knit_emit_stockinette(const ws_knit_gauge* g, const ws_knit_layout* l,
     return 1;
 }
 
+int ws_knit_emit_plain(const ws_knit_gauge* g, const ws_knit_layout* l,
+                      int stitch, ws_knit_path_writer w) {
+    if (!valid_path(g, l, w) || stitch < 0 || stitch > 2) return 0;
+    if (!stitch) return ws_knit_emit_stockinette(g, l, 0, w);
+    float sw = l->stitch_width, sh = l->stitch_height;
+    if (stitch == 1) {
+        float h = (l->rows + 4) * l->row_step;
+        for (int i = -2; i <= l->columns + 1; ++i) {
+            float x = i * sw + sw * 0.5f;
+            float purl = (i & 1) ? sw * 0.16f : 0.f;
+            float start = -2 * l->row_step;
+            w.move(w.context, x + purl, start);
+            /* A collinear quadratic is the same straight rib as CGPath's line. */
+            w.quadratic(w.context, x + purl, (start + h) * 0.5f, x + purl, h);
+        }
+        return 1;
+    }
+    for (int j = -2; j <= l->rows + 1; ++j) {
+        float y = j * l->row_step;
+        float phase = (j & 1) ? sw * 0.5f : 0.f;
+        w.move(w.context, -2 * sw, y);
+        for (int i = -2; i <= l->columns + 1; ++i) {
+            float x = i * sw + phase;
+            w.quadratic(w.context, x + sw * 0.25f, y - sh * 0.30f,
+                        x + sw * 0.5f, y);
+            w.quadratic(w.context, x + sw * 0.75f, y + sh * 0.30f, x + sw, y);
+        }
+    }
+    return 1;
+}
+
 int ws_knit_blur(float* a, int w, int h, float* tmp) {
     if (!a || !tmp || a == tmp || w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
     for (int y = 0; y < h; ++y)

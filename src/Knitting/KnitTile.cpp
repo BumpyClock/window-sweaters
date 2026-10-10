@@ -57,10 +57,17 @@ std::array<float, 14> GaugeFields(const ws_knit_gauge& g) {
 }
 
 bool SameSpec(const TileSpec& a, const TileSpec& b) {
+    bool sameChart = a.chart == b.chart;
+    if (!sameChart && a.chart && b.chart) {
+        const auto& x = *a.chart; const auto& y = *b.chart;
+        sameChart = x.semanticId == y.semanticId && x.contentRevision == y.contentRevision
+            && x.width == y.width && x.height == y.height && x.appearance == y.appearance
+            && x.contentHash == y.contentHash && x.argbCells == y.argbCells;
+    }
     return a.bandDip == b.bandDip && a.baseArgb == b.baseArgb && a.stitch == b.stitch
         && a.material == b.material && a.chartRevision == b.chartRevision
         && a.deviceScale == b.deviceScale && a.rasterScale == b.rasterScale
-        && a.sampling == b.sampling && GaugeFields(a.gauge) == GaugeFields(b.gauge);
+        && a.sampling == b.sampling && GaugeFields(a.gauge) == GaugeFields(b.gauge) && sameChart;
 }
 
 struct PathWriter {
@@ -96,24 +103,33 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
     auto material = raised ? ws_knit_raised_material(spec.gauge) : spec.gauge;
     auto width = static_cast<std::uint32_t>(l.width_dip * l.raster_scale);
     auto height = static_cast<std::uint32_t>(l.height_dip * l.raster_scale);
+    std::array<std::uint32_t, 16> colors{};
+    std::size_t colorCount = 0;
+    if (chartCells.empty()) colors[colorCount++] = spec.baseArgb;
+    for (const auto& cell : chartCells) {
+        auto end = colors.begin() + colorCount;
+        if (std::find(colors.begin(), end, cell.argb) != end) continue;
+        if (colorCount == colors.size())
+            throw std::invalid_argument("Raised raster supports at most sixteen yarn colours");
+        colors[colorCount++] = cell.argb;
+    }
+    // Palette rejection precedes COM/WIC and every lookup is bounded by16.
     detail::WicSurface colour(width, height, static_cast<float>(l.raster_scale));
     detail::WicSurface ridge(width, height, static_cast<float>(l.raster_scale), colour.factory.Get());
     struct YarnPath { std::uint32_t argb; ComPtr<ID2D1PathGeometry> path; };
     std::vector<YarnPath> paths;
-    std::vector<std::uint32_t> colors;
-    if (chartCells.empty()) colors.push_back(spec.baseArgb);
-    for (const auto& cell : chartCells)
-        if (std::find(colors.begin(), colors.end(), cell.argb) == colors.end()) colors.push_back(cell.argb);
-    if (colors.size() > 16) throw std::invalid_argument("Raised raster supports at most sixteen yarn colours");
-    for (auto color : colors) {
+    for (std::size_t index = 0; index < colorCount; ++index) {
+        auto color = colors[index];
         ComPtr<ID2D1PathGeometry> path;
         ComPtr<ID2D1GeometrySink> sink;
         Check(colour.factory->CreatePathGeometry(&path), "Create stockinette path");
         Check(path->Open(&sink), "Open stockinette path");
         PathWriter writer{sink.Get()};
         if (chartCells.empty()) {
-            if (!ws_knit_emit_stockinette(&material, &l, raised, {&writer, PathWriter::Move, PathWriter::Quad}))
-                throw std::invalid_argument("Invalid stockinette path");
+            auto output = ws_knit_path_writer{&writer, PathWriter::Move, PathWriter::Quad};
+            if (!(raised ? ws_knit_emit_stockinette(&material, &l, 1, output)
+                : ws_knit_emit_plain(&material, &l, static_cast<int>(spec.stitch), output)))
+                throw std::invalid_argument("Invalid plain knit path");
         } else {
             for (const auto& cell : chartCells)
                 if (cell.argb == color && !ws_knit_emit_cell(&material, &l, cell.column, cell.row,
@@ -175,15 +191,142 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
 }
 
 namespace {
+std::size_t YarnCellCount(int columns, int rows) {
+    if (columns <= 0 || rows <= 0 || columns > 4096 || rows > 4096)
+        throw std::invalid_argument("Invalid chart yarn dimensions");
+    auto width = static_cast<std::size_t>(columns) + 4;
+    auto height = static_cast<std::size_t>(rows) + 4;
+    if (height > std::numeric_limits<std::size_t>::max() / width)
+        throw std::invalid_argument("Chart yarn path count overflows");
+    auto count = width * height;
+    if (count > 256u * 1024u)
+        throw std::invalid_argument("Chart yarn path count exceeds CPU limit");
+    return count;
+}
+
+ws_knit_layout ChartLayout(const TileSpec& spec, const ws_knit_gauge& material) {
+    const auto& ch = *spec.chart;
+    bool raised = spec.material == Material::Raised;
+    int density = raised ? 1 : 2;
+    float step = spec.bandDip / std::max(1.5f, material.rows) / density;
+    float sw = step * material.aspect;
+    int columns = static_cast<int>(ch.width) * density;
+    int rows = static_cast<int>(ch.height) * density;
+    // Source enlarges only very small repeats to preserve the ridge filter.
+    float columnRepeats = std::max(1.f, std::ceil(8.f / (sw * columns)));
+    float rowRepeats = std::max(1.f, std::ceil(8.f / (step * rows)));
+    if (!std::isfinite(columnRepeats) || !std::isfinite(rowRepeats)
+        || columnRepeats > 4096.f / columns || rowRepeats > 4096.f / rows)
+        throw std::invalid_argument("Chart gauge exceeds repeat limits");
+    columns *= static_cast<int>(columnRepeats);
+    rows *= static_cast<int>(rowRepeats);
+    int width = std::max(8, static_cast<int>(std::lround(sw * columns)));
+    int height = std::max(8, static_cast<int>(std::lround(step * rows)));
+    sw = static_cast<float>(width) / columns;
+    step = static_cast<float>(height) / rows;
+    int scale = spec.rasterScale ? spec.rasterScale : step < 4.f ? 4 : 2;
+    if (columns > 4096 || rows > 4096 || width > 4096 / scale || height > 4096 / scale)
+        throw std::invalid_argument("Chart tile exceeds raster limits");
+    if (raised) YarnCellCount(columns, rows);
+    return {columns, rows, width, height, scale, sw, step / (1.f - material.row_overlap),
+        step, std::max(sw * material.yarn, raised ? .8f : .35f)};
+}
+
+// Port of knit.c:234-298. Computation follows the source's logical y; WIC
+// stores that row directly, rather than its CoreGraphics bottom-up address.
+RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l) {
+    const auto& ch = *spec.chart;
+    const auto& g = spec.gauge;
+    bool defined = (ch.appearance.flags & designs::ChartDefinedYarn) != 0;
+    bool dots = (ch.appearance.flags & designs::ChartRoundDots) != 0;
+    std::uint32_t width = static_cast<std::uint32_t>(l.width_dip * l.raster_scale);
+    std::uint32_t height = static_cast<std::uint32_t>(l.height_dip * l.raster_scale);
+    RasterImage image{width, height, width * 4, {}};
+    image.pixels.resize(static_cast<std::size_t>(width) * height);
+    float stitchScale = defined ? 2.f : 1.f;
+    float relief = std::min(defined ? .30f : .25f,
+        std::max(0.f, g.relief * (defined ? .32f : .20f)));
+    for (std::uint32_t y = 0; y < height; ++y) {
+        float sy = (y + .5f) / (l.raster_scale * l.row_step);
+        float stitchY = sy / stitchScale;
+        int row = static_cast<int>(std::floor(stitchY));
+        float v = stitchY - row;
+        for (std::uint32_t x = 0; x < width; ++x) {
+            float sx = (x + .5f) / (l.raster_scale * l.stitch_width);
+            int column = static_cast<int>(std::floor(sx));
+            float stitchX = sx / stitchScale;
+            int yarnColumn = static_cast<int>(std::floor(stitchX));
+            float u = stitchX - yarnColumn;
+            float warp = dots ? 0.f : .16f * (1.f - 2.f * std::abs(2.f * u - 1.f));
+            int colorRow = static_cast<int>(std::floor(sy + warp));
+            int chartRows = static_cast<int>(ch.height) * 2;
+            colorRow = (colorRow % chartRows + chartRows) % chartRows;
+            auto cx = static_cast<std::uint32_t>(column / 2) % ch.width;
+            auto cy = static_cast<std::uint32_t>(colorRow / 2);
+            auto yarn = ch.argbCells[static_cast<std::size_t>(cy) * ch.width + cx];
+            if (dots && (yarn >> 24) >= 128) {
+                bool left = ch.argbCells[static_cast<std::size_t>(cy) * ch.width
+                    + (cx + ch.width - 1) % ch.width] == yarn;
+                bool above = ch.argbCells[static_cast<std::size_t>((cy + ch.height - 1)
+                    % ch.height) * ch.width + cx] == yarn;
+                float dx = sx * .5f - std::floor(sx * .5f) + (left ? 1.f : 0.f) - 1.f;
+                float dy = sy * .5f - std::floor(sy * .5f) + (above ? 1.f : 0.f) - 1.f;
+                if (dx * dx + dy * dy > .94f) yarn = spec.baseArgb;
+            }
+            if ((yarn >> 24) < 128) yarn = spec.baseArgb;
+            auto seed = ws_knit_mix(static_cast<std::uint32_t>(yarnColumn) * 73856093u
+                ^ static_cast<std::uint32_t>(row) * 19349663u);
+            float wobble = ((seed & 255u) / 255.f - .5f) * g.jitter;
+            float leg = .42f * (1.f - v) + .08f * v * (1.f - v);
+            float distance = std::abs(std::abs(u - .5f - wobble) - leg);
+            float radius = std::max(.10f, g.yarn * .5f);
+            float ridge = std::max(0.f, 1.f - distance * distance / (radius * radius));
+            auto grain = ws_knit_mix(x * 73856093u ^ y * 19349663u);
+            float fibre = ((grain & 255u) / 255.f - .5f) * .014f;
+            float shade = std::max(0.f, g.ground - relief * (1.f - ridge)
+                + (g.ambient - .94f) + g.sheen * .08f * (.5f - u) + fibre);
+            auto r = static_cast<std::uint32_t>(std::min(255.f, ((yarn >> 16) & 255u) * shade));
+            auto green = static_cast<std::uint32_t>(std::min(255.f, ((yarn >> 8) & 255u) * shade));
+            auto b = static_cast<std::uint32_t>(std::min(255.f, (yarn & 255u) * shade));
+            image.pixels[static_cast<std::size_t>(y) * width + x] = 0xff000000u | r << 16 | green << 8 | b;
+        }
+    }
+    return image;
+}
+
 std::shared_ptr<const Tile> MakeTile(const TileSpec& spec) {
     auto tile = std::make_shared<Tile>();
     tile->spec = spec;
     auto material = spec.material == Material::Raised ? ws_knit_raised_material(spec.gauge) : spec.gauge;
-    if (!ws_knit_make_layout(&material, spec.bandDip, spec.rasterScale, &tile->layout))
+    if (spec.chart) tile->layout = ChartLayout(spec, material);
+    else if (!ws_knit_make_layout(&material, spec.bandDip, spec.rasterScale, &tile->layout))
         throw std::invalid_argument("Invalid knit tile layout");
     if (spec.material == Material::Raised)
         tile->layout.yarn_width = std::max(tile->layout.stitch_width * material.yarn, 0.8f);
-    tile->image = detail::RasterizeTile(spec, tile->layout);
+    if (spec.chart && spec.material == Material::Plain) {
+        tile->image = FabricTile(spec, tile->layout);
+        return tile;
+    }
+    if (!spec.chart && spec.material == Material::Plain && spec.stitch == Stitch::Rib)
+        tile->layout.yarn_width = tile->layout.stitch_width * .55f;
+    std::vector<detail::YarnCell> cells;
+    if (spec.chart) {
+        auto count = YarnCellCount(tile->layout.columns, tile->layout.rows);
+        if (count > cells.max_size())
+            throw std::invalid_argument("Chart yarn cell allocation exceeds vector limit");
+        // Exact reservation prevents vector-growth overlap exceeding the
+        // render queue's bounded transient YarnCell allocation.
+        cells.reserve(count);
+        const auto& ch = *spec.chart;
+        for (int j = -2; j <= tile->layout.rows + 1; ++j)
+            for (int i = -2; i <= tile->layout.columns + 1; ++i) {
+                int cx = (i % static_cast<int>(ch.width) + ch.width) % ch.width;
+                int cy = (j % static_cast<int>(ch.height) + ch.height) % ch.height;
+                auto argb = ch.argbCells[static_cast<std::size_t>(cy) * ch.width + cx];
+                cells.push_back({i, j, (argb >> 24) < 128 ? spec.baseArgb : argb | 0xff000000u});
+            }
+    }
+    tile->image = detail::RasterizeTile(spec, tile->layout, cells);
     return tile;
 }
 }
@@ -193,12 +336,17 @@ TileSpec NormalizeTileSpec(TileSpec spec) {
         || spec.bandDip > 256.f || !std::isfinite(spec.deviceScale)
         || spec.deviceScale < MinimumDeviceScale || spec.deviceScale > MaximumDeviceScale
         || spec.rasterScale < 0 || spec.rasterScale > 8
-        || spec.stitch != Stitch::Stockinette
+        || (spec.stitch != Stitch::Stockinette && spec.stitch != Stitch::Rib && spec.stitch != Stitch::Garter)
         || (spec.material != Material::Plain && spec.material != Material::Raised)
         || (spec.sampling != Sampling::Nearest && spec.sampling != Sampling::Linear))
         throw std::invalid_argument("Invalid or unsupported tile specification");
     spec.bandDip = std::round(std::max(2.f, spec.bandDip) * 2.f) / 2.f;
     spec.baseArgb |= 0xff000000u;
+    if (spec.chart) {
+        spec.stitch = Stitch::Stockinette;
+        spec.material = (spec.chart->appearance.flags & designs::ChartSculptedYarn)
+            ? Material::Raised : Material::Plain;
+    }
     return spec;
 }
 
@@ -209,6 +357,7 @@ std::shared_ptr<const Tile> TileCache::Get(const TileSpec& requested) {
     std::lock_guard lock(mutex_);
     for (auto it = entries_.begin(); it != entries_.end(); ++it) {
         if (SameSpec(it->tile->spec, spec)) {
+            ++hits_;
             auto tile = it->tile;
             entries_.splice(entries_.begin(), entries_, it);
             return tile;
@@ -216,10 +365,10 @@ std::shared_ptr<const Tile> TileCache::Get(const TileSpec& requested) {
     }
     auto tile = MakeTile(spec);
     ++generations_;
-    std::size_t bytes = tile->image.ByteSize();
+    std::size_t bytes = tile->ByteSize();
     if (bytes > budget_) return tile;
     while (resident_ > budget_ - bytes) {
-        resident_ -= entries_.back().tile->image.ByteSize();
+        resident_ -= entries_.back().tile->ByteSize();
         entries_.pop_back();
     }
     entries_.push_front({tile});
@@ -230,6 +379,7 @@ std::shared_ptr<const Tile> TileCache::Get(const TileSpec& requested) {
 void TileCache::Clear() { std::lock_guard lock(mutex_); entries_.clear(); resident_ = 0; }
 std::size_t TileCache::ResidentBytes() const { std::lock_guard lock(mutex_); return resident_; }
 std::uint64_t TileCache::GenerationCount() const { std::lock_guard lock(mutex_); return generations_; }
+std::uint64_t TileCache::HitCount() const { std::lock_guard lock(mutex_); return hits_; }
 
 void SavePng(const RasterImage& image, const wchar_t* path) {
     if (!path || !*path || !image.width || !image.height || image.stride != image.width * 4u

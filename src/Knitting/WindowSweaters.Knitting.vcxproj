@@ -37,6 +37,7 @@
   <ItemGroup>
     <ClCompile Include="knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
     <ClCompile Include="KnitTile.cpp" />
+    <ClCompile Include="Chart.cpp" />
     <ClCompile Include="..\Rendering\KnitRaster.cpp" />
     <ClInclude Include="knit_math.h" />
     <ClInclude Include="KnitTile.h" />

@@ -88,3 +88,153 @@ plain-periodic-tile.png, raised-stitch-detail-4x.png.
 Controlled source-texture outputs: spotify-source-detail.png,
 spotify-corrected-detail.png, spotify-diagnostic-tile.png,
 spotify-diagnostic-height.png, raised-solid-matched-phase.png.
+
+Issue #7 renderer/material increment (the preceding record describes #5):
+Production now accepts an optional shared_ptr<const knitting::Chart> in TileSpec.
+Chart owns immutable semantic identity, content revision, literal top-down ARGB
+cells and appearance; it never persists an index or references import-cache
+storage. Alpha below128 is base yarn; all other RGB values remain authored.
+MakeDesignChart copies the real Designs ChartView, including cuff suppression,
+flags, corner/cuff colors and the source atelier outside-edge phase.
+Plain rib/garter preserve the source8x8 layout and path equations. Charted tiles
+always use stockinette; ChartSculptedYarn chooses original raised path/ridge
+material, otherwise the literal knit.c:234-298 per-pixel fabric shader is used.
+Messages retains its round-dot mask and defined-yarn detail at source2x density.
+Fitted repeats, solid tangent caps and curved band/3 cuffs follow knit.c:505-731.
+This is production renderer coverage, not completion of #7 settings/Host wiring.
+
+Additional actual pinned renderer plates copied from docs/collection:
+app-01.png Finder SHA2564319528C72BF86EFCD4DAAEAB75F3A55ADF08B9A295668B85696C84D3B77C900
+app-07.png WhatsApp SHA2567E59DF0510D65D5AC102BADB0EF25F56381B9DE9C1FBF817A6383A5B729AE7CE
+app-21.png Messages SHA256446515DD58BBF113CA5EC57C9D98BD5354826419EF53573FEFFCBC8E03B4A243
+app-23.png Notes SHA256070B65C5234026E491619DC6BEA1645E3CC65C02ED04D8A29CF60256697A2844
+app-24.png Calendar SHA2567046ACAA60910484D0C021170406F656E454A0A9190A11245C65354F2CA9C7D1
+app-34.png Photoshop SHA2565C7D07AC5449B9935305BFD7056052E6071538C9E69DE65DAA220CB6C66E0979
+No Windows output has been relabeled as a golden. Licensing/source pin and
+individual_review generator provenance above apply to every copied plate.
+
+Comparisons use the production RenderFrame/RenderPerimeter, not a substitute:
+source detail crop76,602,1280,80; candidate frame8px/DIP crop496,0,1280,80.
+Enlarged source corner crops116+332*corner,780,160,160; candidate4px/DIP crops
+x0/2400,y0/480,160,160. White application content is masked analytically.
+CoreText captions remain outside every crop. Geometry compares source yarn
+versus background249/247/243 with RGB L1 distance>3 and native alpha>128.
+The lower background threshold is needed for pale Calendar yarn; threshold12
+incorrectly classifies its genuine white stitches as background.
+
+Initial measured actual same-chart detail grayscale MAE/RMSE/edge-energy ratio
+before the fitted-period correction described below:
+Finder13.408/19.4602/0.946701; Spotify3.86151/5.63818/0.922598;
+WhatsApp6.53824/9.33628/0.924850; Messages2.17952/3.20452/0.952851;
+Notes3.29558/4.32685/0.927288; Calendar2.97545/4.02646/0.937185;
+Photoshop4.04272/6.25419/0.935252.
+All28 source corner exterior coverage disagreements0.583090..0.671437%, gate<1%.
+Non-fitted corner RGB MAE0.018526..2.363890, gate<4/255.
+Fitted Finder corners0/2 MAE3.37066/3.31015, corners1/3 MAE19.5593/19.4769.
+WhatsApp corners MAE1.89654..7.63820; fitted corner gate<22/255.
+Non-fitted detail gates MAE<6, RMSE<8; fitted detail gates MAE<16, RMSE<23.
+All detail edge-energy gates0.80..1.20.
+
+Resolved fitted-period diagnosis: source fitted Finder white motifs recur every142
+physical pixels in its8px/DIP detail; exact floating source fit640/18 DIP in D2D
+produces142.222px. It drifts about2px across the1280px crop and also differs on
+the right/left vertical fitted edges. Device-pixel quantization in the upstream
+CG tiled-image path is an inferred explanation, not a new macOS measurement.
+The initial native renderer retained a floating sampler period and used wider
+fitted thresholds. That was not sufficient fidelity; the correction below
+replaces those thresholds and the drifting sampler without changing chart data.
+D2D stepped curve coverage remains visible in enlarged yarn. All source palettes,
+V-shaped stitch geometry and original material equations remain unchanged.
+
+Adapted source tests: all37 designs at1x/2x and radii0/10/28/clamped200;
+equal contrasting solid tangent extents on all4 sides, both anchors,3 sizes;
+continuous curved cuff hue/width with no inner color islands at3 radii;
+all47 literal repeats/flags copied and rasterized; custom palette/sentinel
+retention, previous-plain-style independence, eviction ownership, complete
+content/revision/appearance keys, invalid gauge/chart inputs, fractional scales
+and authoritative physical content/padding. Narrow/wide fabric bands2/10/14/26
+preserve exact physical dimensions. No live desktop application was launched.
+
+Byte limits: chart1..256 per axis; raster axes<=4096; repeat columns/rows<=4096;
+raised margin cells<=262144, effective opaque yarn palette<=16 (explicit reject,
+never silent dropping/recoloring). Per-pixel fabric has no16-color path limit.
+ResidentBytes includes owned chart string/vector capacities as well as pixels.
+TileCache::HitCount/GenerationCount are monotonic measured counters.
+Physical frame/padding and perimeter allocation limits from #5 remain intact.
+
+Measured validation machine: Windows11 Enterprise10.0.26300 build26300,
+AMD Ryzen AI7 PRO350/Radeon860M, MSBuild18/v145, C17/C++20, SDK10.0.26100.0,
+W4/WX. No GPU performance or compositor latency claim is made.
+Representative Release software renderer620x140 DIP@2x:
+Spotify cold54.0819ms/warm45.9433ms; Messages53.4204/54.0688ms;
+Notes114.683/62.9925ms. Warm means5 synchronous perimeter renders with cached
+tile data, not a recurring live paint loop. Shared-machine scheduling varies.
+Each retained perimeter384000bytes versus full fixture1638400bytes.
+Owned Release main tilesSpotify17679bytes, Messages23535bytes, Notes17679bytes.
+The final37-theme fixture cache resident1837777bytes, below8MiB; this includes
+the added authoritative physical-content/cuff fixture.
+Build/run commands remain the focused native project and executable above.
+Generated production1x/2x frames, source/detail/corner crops, timing/counter
+measurements and Debug/Release-validation.log persist in ignored outputs/.
+Final Debug and Release each pass914 native checks; diff --check is clean.
+
+Issue #15 coupled transient-allocation correction:
+Raised YarnCell storage reserves the exact validated margin count once before
+appending cells. Size multiplication and the existing262144-cell CPU cap are
+checked before allocation; no vector growth can overlap old/new cell storage.
+Dense1x1 Sculpted band2/rows128/aspect1.28 produces400x512 sampling units,
+208464 margin cells, and a32x32 raster. With12-byte YarnCell this is2501568
+payload bytes, not the6221460-byte overlapping MSVC growth case from review.
+The count/size is derived from the validated layout; queue instrumentation
+owns the separate reservation/peak test. Runtime signatures remain unchanged.
+After the exact-reservation correction, Debug and Release each pass916 native
+checks, including the dense chart; source comparison metrics are unchanged.
+
+Independent #7 review palette and fitted-period correction:
+The effective raised palette is collected in a fixed16-entry array and rejects
+the seventeenth distinct YarnCell before either WicSurface is constructed.
+Every lookup compares at most16 entries. The first17 distinct inputs require
+at most136 equality comparisons, not quadratic growth through65536 colors.
+Base counts only when a cell uses it; the base-colored ground is not a path.
+An actual256x256 unique-color Chart/TileCache test on an uninitialized COM thread
+rejects with invalid_argument before WIC (measured3.46ms). Calling WIC there
+would throw system_error. Tests also distinguish16 opaque/unused-base colors,
+15 opaque plus used base, and16 opaque plus used base. Retained reviewer93914634
+independently cleared the palette source correction without running its tests.
+
+Fitted sampler: original logical cap, whole-repeat count and available-length
+formulas remain unchanged. The bitmap brush's fitted period now rounds to an
+integral device pixel, matching the period measured in the pinned source plates.
+This is a raster-adapter behavior, not a new chart or a hand-drawn motif.
+The exact internal Quartz rounding mechanism is inferred; Apple's documented
+CGContextDrawTiledImage interface does not guarantee its internal quantization:
+https://developer.apple.com/documentation/coregraphics/cgcontextdrawtiledimage
+Actual source Finder full fitted tile284px at8px/DIP versus prior D2D284.444px
+explains the cumulative phase drift. With the adapter, same-crop Finder detail
+MAE13.408->2.90992, RMSE19.4602->4.21731, edge energy0.947831.
+Original opaque corner RGB MAE19.5593->2.47265 on corner1 (unchanged crop).
+WhatsApp detail MAE6.53824->2.93303/RMSE4.04825, edge energy0.926579.
+No image was moved, recropped, blurred or recolored for these detail comparisons.
+The original floating-fit Finder output remains in ignored outputs/ for review.
+The bitmap sampler can have a subpixel-period remainder at the fixed tangent
+clip, as the pinned source rendering does; caps and logical band remain exact.
+No pixel-identity or universal CoreGraphics implementation claim is made.
+
+Expanded authentic fitted source plates, same pin/license/generator:
+app-09.png Chrome SHA256828A6F070E8E1D612A766BC032ACE085DC46FB3BE412F1DE160AE871036A1D0F
+app-12.png Grok SHA2567C002260DCFDD8A9DF3E0D988C35E7320A9D1091294B9DF1AF10192C963D4642
+app-14.png Granola SHA256BB3A0BCA50FCDC090286F5EEBDD428464215D92EB982AFEEAA9A7C9744078A50
+app-35.png Illustrator SHA256DA3C9FAFF8BA17BEF0EC243B80B9B1D11AE2DBB20C74C04ED892A899386C903D
+app-36.png Terminal SHA2560B551F726B41F33A2B4E0094D2C0398B5DC60F8501BB442EB78115B27825A65A
+Their production detail MAE/RMSE/edge ratio:
+Chrome3.21533/4.42934/0.932367; Grok3.92417/6.04756/0.925522;
+Granola2.31613/3.76017/0.915628; Illustrator2.76684/4.73327/0.922126;
+Terminal2.52546/4.04939/0.929168.
+All12 actual source plates now share strict detail MAE<6/RMSE<8 and all48
+corners share RGB MAE<4 and exterior disagreement<1%. Fitted exemptions removed.
+Yarn RGB metric excludes only the outer1px and white-content2px AA boundaries;
+the geometry metric still includes every exterior pixel. This separates yarn
+from source application-content coverage, matching the earlier geometry mask.
+No captions, authored stitches or motif regions are omitted.
+Final Debug isolated native project passes971 checks. Release/Host/Settings
+rebuilds were deliberately not run during the coordinator's live candidate test.

@@ -72,8 +72,43 @@ ComPtr<ID2D1PathGeometry> Mitre(ID2D1Factory* factory, float length, float depth
     return path;
 }
 
+ComPtr<ID2D1Geometry> CuffRing(ID2D1Factory* factory, const KnitFrameSpec& f) {
+    float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
+    float width = f.bandDip / 3.f, radius = f.radiusDip + f.bandDip;
+    ComPtr<ID2D1RoundedRectangleGeometry> outer, inner;
+    Check(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(
+        D2D1::RectF(0, 0, ow, oh), radius, radius), &outer), "Create outer cuff curve");
+    Check(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(
+        D2D1::RectF(width, width, ow-width, oh-width), radius-width, radius-width), &inner),
+        "Create inner cuff curve");
+    ID2D1Geometry* contours[] = {outer.Get(), inner.Get()};
+    ComPtr<ID2D1GeometryGroup> ring;
+    Check(factory->CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, contours, 2, &ring), "Create curved cuff band");
+    return ring;
+}
+
+ComPtr<ID2D1BitmapBrush> TileBrush(ID2D1RenderTarget* target, const knitting::Tile& tile,
+                                  float px, float py, float repeatWidth) {
+    ComPtr<ID2D1Bitmap> bitmap;
+    const auto& image = tile.image;
+    auto properties = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.f * tile.layout.raster_scale, 96.f * tile.layout.raster_scale);
+    Check(target->CreateBitmap(D2D1::SizeU(image.width, image.height),
+        image.pixels.data(), image.stride, properties, &bitmap), "Upload software periodic tile");
+    auto sampling = tile.spec.sampling == knitting::Sampling::Nearest
+        ? D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
+    ComPtr<ID2D1BitmapBrush> brush;
+    Check(target->CreateBitmapBrush(bitmap.Get(), D2D1::BitmapBrushProperties(
+        D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, sampling), &brush), "Create periodic yarn brush");
+    brush->SetTransform(D2D1::Matrix3x2F::Scale(repeatWidth / tile.layout.width_dip, 1.f)
+        * D2D1::Matrix3x2F::Translation(px, py));
+    return brush;
+}
+
 KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, int side,
-                           std::uint32_t width, std::uint32_t height, float depth, float gutterDip) {
+                           std::uint32_t width, std::uint32_t height, float depth, float gutterDip,
+                           const knitting::Tile* patch, const knitting::Tile* cuff) {
     float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
     float right = std::floor((gutterDip + ow - depth) * f.deviceScale);
     float bottom = std::floor((gutterDip + oh - depth) * f.deviceScale);
@@ -104,23 +139,35 @@ KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, i
     auto placement = D2D1::Matrix3x2F::Translation(
         gutterDip - static_cast<float>(piece.x) / f.deviceScale,
         gutterDip - static_cast<float>(piece.y) / f.deviceScale);
-    ComPtr<ID2D1Bitmap> bitmap;
-    const auto& image = tile.image;
-    auto properties = D2D1::BitmapProperties(
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
-        96.f * tile.layout.raster_scale, 96.f * tile.layout.raster_scale);
-    Check(surface.target->CreateBitmap(D2D1::SizeU(image.width, image.height),
-        image.pixels.data(), image.stride, properties, &bitmap), "Upload software periodic tile");
-    ComPtr<ID2D1BitmapBrush> brush;
-    auto sampling = tile.spec.sampling == knitting::Sampling::Nearest
-        ? D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
-    auto brushProperties = D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, sampling);
-    Check(surface.target->CreateBitmapBrush(bitmap.Get(), brushProperties, &brush), "Create periodic yarn brush");
+    auto look = tile.spec.chart ? tile.spec.chart->appearance : knitting::ChartAppearance{};
     float px = f.anchor == KnitAnchor::Centre ? length * 0.5f - tile.layout.width_dip * 0.5f : 0.f;
-    float py = f.bandDip * 0.5f - tile.layout.height_dip * 0.5f;
-    brush->SetTransform(D2D1::Matrix3x2F::Translation(px, py));
+    float py = look.outsideAnchored ? 0.f : f.bandDip * 0.5f - tile.layout.height_dip * 0.5f;
+    bool fitted = (look.flags & designs::ChartFittedRepeat) != 0;
+    float repeatWidth = fitted ? length / std::max(1.f, std::round(length / tile.layout.width_dip))
+        : static_cast<float>(tile.layout.width_dip);
+    float cap = std::min(f.radiusDip + f.bandDip, length * .5f);
+    float available = std::max(0.f, length - 2.f * cap);
+    if (patch && available > 0.f) {
+        repeatWidth = available / std::max(1.f, std::round(available / tile.layout.width_dip));
+        px = cap;
+    } else if (fitted) px = 0.f;
+    // Authored CoreGraphics plates tile a fitted image at an integral device
+    // period. Keep the logical fit/caps, but match that sampler period instead
+    // of accumulating D2D's fractional-period phase drift down each edge.
+    if (fitted || patch)
+        repeatWidth = std::max(1.f, std::round(repeatWidth * f.deviceScale)) / f.deviceScale;
+    auto brush = TileBrush(surface.target.Get(), tile, px, py, repeatWidth);
+    ComPtr<ID2D1BitmapBrush> patchBrush, cuffBrush;
+    ComPtr<ID2D1Geometry> cuffRing;
+    if (patch) patchBrush = TileBrush(surface.target.Get(), *patch, 0, py,
+        static_cast<float>(patch->layout.width_dip));
+    if (cuff) {
+        cuffBrush = TileBrush(surface.target.Get(), *cuff, 0, 0, static_cast<float>(cuff->layout.width_dip));
+        cuffRing = CuffRing(surface.factory.Get(), f);
+    }
     ComPtr<ID2D1SolidColorBrush> backing, black;
-    Check(surface.target->CreateSolidColorBrush(knitting::detail::OpaqueColor(tile.spec.baseArgb, 0.96f), &backing),
+    auto cornerColor = patch ? patch->spec.baseArgb : tile.spec.baseArgb;
+    Check(surface.target->CreateSolidColorBrush(knitting::detail::OpaqueColor(cornerColor, 0.96f), &backing),
           "Create opaque yarn backing");
     Check(surface.target->CreateSolidColorBrush(D2D1::ColorF(0.f, 0.f, 0.f, f.dim), &black), "Create dim overlay");
     surface.target->BeginDraw();
@@ -132,7 +179,19 @@ KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, i
     surface.target->PushLayer(mask, nullptr);
     auto rectangle = D2D1::RectF(0.f, 0.f, length, depth);
     surface.target->FillRectangle(rectangle, backing.Get());
-    surface.target->FillRectangle(rectangle, brush.Get());
+    if (patch) {
+        surface.target->FillRectangle(D2D1::RectF(0, 0, cap, depth), patchBrush.Get());
+        surface.target->FillRectangle(D2D1::RectF(length-cap, 0, length, depth), patchBrush.Get());
+        if (available > 0.f)
+            surface.target->FillRectangle(D2D1::RectF(cap, 0, length-cap, depth), brush.Get());
+    } else surface.target->FillRectangle(rectangle, brush.Get());
+    if (cuff) {
+        surface.target->SetTransform(placement);
+        surface.target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), cuffRing.Get()), nullptr);
+        surface.target->SetTransform(orientations[side] * placement);
+        surface.target->FillRectangle(rectangle, cuffBrush.Get());
+        surface.target->PopLayer();
+    }
     if (f.dim > 0.001f) surface.target->FillRectangle(D2D1::RectF(-depth, -depth, length + 2.f*depth, 3.f*depth), black.Get());
     surface.target->PopLayer();
     surface.target->PopLayer();
@@ -172,9 +231,25 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     perimeter.bandDip = f.bandDip;
     perimeter.deviceScale = f.deviceScale;
     perimeter.tile = cache.Get(tileSpec);
+    std::shared_ptr<const knitting::Tile> patch, cuff;
+    if (perimeter.tile->spec.chart) {
+        const auto& look = perimeter.tile->spec.chart->appearance;
+        auto solid = perimeter.tile->spec;
+        solid.chart.reset(); solid.stitch = knitting::Stitch::Stockinette;
+        solid.material = knitting::Material::Raised;
+        if (look.flags & designs::ChartSolidCorners) {
+            solid.baseArgb = look.cornerArgb ? look.cornerArgb : tileSpec.baseArgb;
+            patch = cache.Get(solid);
+        }
+        if (look.flags & designs::ChartOuterCuff) {
+            solid.baseArgb = look.cuffArgb;
+            cuff = cache.Get(solid);
+        }
+    }
     float gutterDip = static_cast<float>(inset) / f.deviceScale - f.bandDip;
     for (int side = 0; side < 4; ++side)
-        perimeter.pieces[side] = RenderSide(f, *perimeter.tile, side, perimeter.width, perimeter.height, depth, gutterDip);
+        perimeter.pieces[side] = RenderSide(f, *perimeter.tile, side, perimeter.width,
+            perimeter.height, depth, gutterDip, patch.get(), cuff.get());
     return perimeter;
 }
 
