@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <NativePackagesDir Condition="'$(NativePackagesDir)'==''">$(MSBuildThisFileDirectory).packages\</NativePackagesDir>
+    <GlobalNativePackagesDir Condition="'$(GlobalNativePackagesDir)'==''">$(UserProfile)\.nuget\packages\</GlobalNativePackagesDir>
+    <CppWinRTPackageDir>$(GlobalNativePackagesDir)microsoft.windows.cppwinrt\2.0.240405.15\</CppWinRTPackageDir>
+    <CppWinRTPackageDir Condition="Exists('$(NativePackagesDir)Microsoft.Windows.CppWinRT.2.0.240405.15')">$(NativePackagesDir)Microsoft.Windows.CppWinRT.2.0.240405.15\</CppWinRTPackageDir>
+    <AppSDKDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk\2.5.1\</AppSDKDir>
+    <AppSDKDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.2.5.1')">$(NativePackagesDir)Microsoft.WindowsAppSDK.2.5.1\</AppSDKDir>
+    <BaseDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk.base\2.0.4\</BaseDir>
+    <BaseDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.Base.2.0.4')">$(NativePackagesDir)Microsoft.WindowsAppSDK.Base.2.0.4\</BaseDir>
+    <FoundationDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk.foundation\2.3.12\</FoundationDir>
+    <FoundationDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.Foundation.2.3.12')">$(NativePackagesDir)Microsoft.WindowsAppSDK.Foundation.2.3.12\</FoundationDir>
+    <InteractiveDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk.interactiveexperiences\2.1.9\</InteractiveDir>
+    <InteractiveDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.InteractiveExperiences.2.1.9')">$(NativePackagesDir)Microsoft.WindowsAppSDK.InteractiveExperiences.2.1.9\</InteractiveDir>
+    <WinUIDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk.winui\2.3.9\</WinUIDir>
+    <WinUIDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.WinUI.2.3.9')">$(NativePackagesDir)Microsoft.WindowsAppSDK.WinUI.2.3.9\</WinUIDir>
+    <DWriteDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk.dwrite\2.1.0\</DWriteDir>
+    <DWriteDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.DWrite.2.1.0')">$(NativePackagesDir)Microsoft.WindowsAppSDK.DWrite.2.1.0\</DWriteDir>
+    <RuntimeDir>$(GlobalNativePackagesDir)microsoft.windowsappsdk.runtime\2.5.1\</RuntimeDir>
+    <RuntimeDir Condition="Exists('$(NativePackagesDir)Microsoft.WindowsAppSDK.Runtime.2.5.1')">$(NativePackagesDir)Microsoft.WindowsAppSDK.Runtime.2.5.1\</RuntimeDir>
+    <WebViewDir>$(GlobalNativePackagesDir)microsoft.web.webview2\1.0.3719.77\</WebViewDir>
+    <WebViewDir Condition="Exists('$(NativePackagesDir)Microsoft.Web.WebView2.1.0.3719.77')">$(NativePackagesDir)Microsoft.Web.WebView2.1.0.3719.77\</WebViewDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <NativePackage Include="Microsoft.WindowsAppSDK"><Version>2.5.1</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.Base"><Version>2.0.4</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.Foundation"><Version>2.3.12</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.InteractiveExperiences"><Version>2.1.9</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.WinUI"><Version>2.3.9</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.DWrite"><Version>2.1.0</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.Widgets"><Version>2.0.5</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.AI"><Version>2.5.5</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.ML"><Version>2.1.94</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.Search"><Version>2.5.5</Version></NativePackage>
+    <NativePackage Include="Microsoft.WindowsAppSDK.Runtime"><Version>2.5.1</Version></NativePackage>
+    <NativePackage Include="Microsoft.Web.WebView2"><Version>1.0.3719.77</Version></NativePackage>
+    <NativePackage Update="@(NativePackage)">
+      <Root>$(GlobalNativePackagesDir)$([System.String]::Copy('%(Identity)').ToLowerInvariant())\%(Version)\</Root>
+      <Root Condition="Exists('$(NativePackagesDir)%(Identity).%(Version)')">$(NativePackagesDir)%(Identity).%(Version)\</Root>
+    </NativePackage>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- WinUI's public metadata refers to this type even when no WebView control is used.
+         Generate headers only; never link or deploy a WebView loader. -->
+    <Reference Include="Microsoft.Web.WebView2.Core.winmd">
+      <HintPath>$(WebViewDir)lib\Microsoft.Web.WebView2.Core.winmd</HintPath><Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <Import Project="$(CppWinRTPackageDir)build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('$(CppWinRTPackageDir)build\native\Microsoft.Windows.CppWinRT.props')"/>
+  <Import Project="$(AppSDKDir)build\native\Microsoft.WindowsAppSDK.props"/>
+  <Import Project="$(BaseDir)build\native\Microsoft.WindowsAppSDK.Base.props"/>
+  <Import Project="$(FoundationDir)build\native\Microsoft.WindowsAppSDK.Foundation.props"/>
+  <Import Project="$(InteractiveDir)build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.props"/>
+  <Import Project="$(WinUIDir)build\native\Microsoft.WindowsAppSDK.WinUI.props"/>
+  <Import Project="$(DWriteDir)build\Microsoft.WindowsAppSDK.DWrite.props"/>
+  <Import Project="$(RuntimeDir)build\native\Microsoft.WindowsAppSDK.Runtime.props"/>
+</Project>

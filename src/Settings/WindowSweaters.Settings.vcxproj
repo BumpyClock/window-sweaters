@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><ProjectGuid>{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}</ProjectGuid><Keyword>Win32Proj</Keyword><RootNamespace>WindowSweaters.Settings</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion><WindowsTargetPlatformMinVersion>10.0.22000.0</WindowsTargetPlatformMinVersion>
+    <AppxPackage>false</AppxPackage><AppContainerApplication>false</AppContainerApplication><WindowsPackageType>None</WindowsPackageType><WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <UseWinUI>true</UseWinUI><ApplicationType>Windows Store</ApplicationType><ApplicationTypeRevision>10.0</ApplicationTypeRevision>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+  <PropertyGroup Label="Configuration"><ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset><CharacterSet>Unicode</CharacterSet><UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+  <PropertyGroup><OutDir>$(MSBuildThisFileDirectory)..\..\out\$(Platform)\$(Configuration)\</OutDir><IntDir>$(MSBuildThisFileDirectory)..\..\out\obj\Settings\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>WindowSweaters.Settings</TargetName><CppWinRTOptimized>true</CppWinRTOptimized><CppWinRTRootNamespaceAutoMerge>false</CppWinRTRootNamespaceAutoMerge>
+    <GeneratedFilesDir>$(IntDir)Generated Files\</GeneratedFilesDir>
+    <GenerateWindowsMetadata>false</GenerateWindowsMetadata>
+  </PropertyGroup>
+  <Import Project="NativePackages.props"/>
+  <ItemDefinitionGroup>
+    <ClCompile><LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><ExceptionHandling>Sync</ExceptionHandling><PrecompiledHeader>NotUsing</PrecompiledHeader><AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary><RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>user32.lib;advapi32.lib;shell32.lib;ole32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile><PreprocessorDefinitions>NDEBUG;WINRT_NO_SOURCE_LOCATION;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <Link><AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="SettingsApp.cpp"/><ClCompile Include="Session.cpp"/><ClInclude Include="Session.h"/><None Include="packages.config"/><Manifest Include="app.manifest"/></ItemGroup>
+  <ItemGroup><ProjectReference Include="..\Configuration\WindowSweaters.Configuration.vcxproj"><Project>{2D727CBB-89D4-47D2-A630-0212AF370E26}</Project></ProjectReference></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+  <Import Project="$(AppSDKDir)build\native\Microsoft.WindowsAppSDK.targets"/>
+  <Import Project="$(BaseDir)build\native\Microsoft.WindowsAppSDK.Base.targets"/>
+  <Import Project="$(FoundationDir)build\native\Microsoft.WindowsAppSDK.Foundation.targets"/>
+  <Import Project="$(InteractiveDir)build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.targets"/>
+  <Import Project="$(WinUIDir)build\native\Microsoft.WindowsAppSDK.WinUI.targets"/>
+  <Import Project="$(DWriteDir)build\Microsoft.WindowsAppSDK.DWrite.targets"/>
+  <Import Project="$(RuntimeDir)build\native\Microsoft.WindowsAppSDK.Runtime.targets"/>
+  <Import Project="$(CppWinRTPackageDir)build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('$(CppWinRTPackageDir)build\native\Microsoft.Windows.CppWinRT.targets')"/>
+  <Target Name="RequirePinnedNativeDependencies" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(CppWinRTPackageDir)bin\cppwinrt.exe')" Text="Restore pinned native packages: nuget restore src\Settings\packages.config -PackagesDirectory src\Settings\.packages"/>
+    <Error Condition="!Exists('%(NativePackage.Root)%(NativePackage.Identity).nuspec')" Text="Missing exact native package %(NativePackage.Identity) %(NativePackage.Version). Restore src\Settings\packages.config."/>
+  </Target>
+</Project>
