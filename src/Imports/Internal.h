@@ -21,4 +21,4 @@ template<class T, class F> Result<T> CheckedAllocation(F&& function) {
     }
 }
 
-} // namespace window_sweaters::imports::detail
+}

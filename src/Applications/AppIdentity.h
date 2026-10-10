@@ -11,12 +11,6 @@ namespace window_sweaters::applications {
 enum class IdentityKind { PackagedAumid, NormalizedExecutablePath };
 
 // Persistence stores Kind()+Key() and restores through the corresponding validated factory.
-// DOS/UNC executable paths normalize separators, drive case and supported \\?\ prefixes.
-// Equality uses Windows CompareStringOrdinal(ignoreCase=true), NOT locale collation or file IDs.
-// No filesystem access: links, 8.3 names, moved files and case-sensitive directories can differ
-// from this identity policy. Dot segments, trailing dots/spaces, DOS device names, ADS/relative paths are
-// unsupported rather than guessed. AUMIDs retain exact ordinal case and exclude package versions.
-// Keys can contain sensitive paths; there is deliberately no logging/formatting API.
 class AppIdentity final {
 public:
     static std::optional<AppIdentity> FromPackagedAumid(std::wstring_view value);
@@ -35,7 +29,6 @@ private:
 
 class ProcessInstance final {
 public:
-    // CreationTime is the complete GetProcessTimes FILETIME, matching tracking::TargetId::processStart.
     static std::optional<ProcessInstance> FromValues(std::uint32_t pid, std::uint64_t creationTime);
     std::uint32_t Pid() const noexcept { return pid_; }
     std::uint64_t CreationTime() const noexcept { return creationTime_; }
@@ -72,8 +65,6 @@ using ExecutablePathQuery = std::variant<ExecutablePath, MetadataUnavailable>;
 enum class MetadataProvenance { ProcessApplicationId, ProcessImageName, WindowApplicationId };
 enum class DisplayNameProvenance { ExecutableBasename, PackageRelativeApplicationId };
 
-// "Verified" means public process/window metadata, not verified publisher, theme mapping or unique alias.
-// DisplayName is a bounded fallback label, not a localized resource/title/product-name query.
 class AppMetadata final {
 public:
     const AppIdentity& Identity() const noexcept { return identity_; }
@@ -85,8 +76,6 @@ public:
         if (identity_.Kind() == IdentityKind::NormalizedExecutablePath) return identity_.Key();
         return executableSource_ ? std::wstring_view(*executableSource_) : std::wstring_view{};
     }
-    // The worker may recover a packaged process image stripped by the window-AUMID
-    // adapter, but never associate a hosting executable with another app's identity.
     AppMetadata WithVerifiedProcessSource(const AppMetadata& process) const;
     std::size_t RetainedBytes() const noexcept;
 
@@ -108,9 +97,6 @@ private:
 
 using MetadataResult = std::variant<AppMetadata, MetadataUnavailable>;
 
-// Facts must come from the process query boundary, not window titles or user-supplied aliases.
-// Only a definitive NoPackagedIdentity permits executable fallback; AUMID query errors fail closed.
-// Process-only API for genuine standalone processes; window callers use WindowOwnerMetadata.h.
 MetadataResult ResolveMetadata(const PackagedIdentityQuery& packaged, const ExecutablePathQuery& image);
 
-} // namespace window_sweaters::applications
+}

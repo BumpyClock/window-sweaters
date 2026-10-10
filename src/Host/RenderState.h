@@ -32,8 +32,6 @@ inline rendering::RenderRequest MakeRenderRequest(const tracking::WorkToken& tok
     return request;
 }
 
-// Placement and clip are deliberately absent. A moved target can attach its
-// prepared pixels at today's position without regenerating the source tile.
 inline bool MatchesRenderInput(const rendering::RenderRequest& request,
     const tracking::WorkToken& token, std::uint64_t revision, std::uint64_t generation,
     const geometry::RenderInput& input) noexcept {
@@ -69,4 +67,4 @@ struct RenderState {
     }
 };
 
-} // namespace window_sweaters::host
+}

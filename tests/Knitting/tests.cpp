@@ -209,8 +209,6 @@ void CacheAndInvalidInputs() {
     Invalid([&] { probe.Get(changed); }, "Excess tile allocation rejected");
 }
 
-// Production pixels without the transparent drop-shadow desktop margin, so band
-// geometry keeps its content + 2*band coordinates. Shadow alpha stays included.
 RasterImage BandImage(const KnitPerimeter& perimeter) {
     auto image = KnitRaster::Compose(perimeter);
     const auto m = perimeter.shadowMarginPixels;
@@ -229,8 +227,6 @@ RasterImage BandFrame(const KnitFrameSpec& frame, TileSpec tile, TileCache& cach
 
 bool InsideRounded(float x, float y, float left, float top, float width, float height, float radius);
 
-// `desktop` is the default 620x140 DIP frame (10 DIP band and radius) composed at
-// an integral band inset, so its outer contour starts exactly `m` pixels in.
 void DropShadowContracts(const RasterImage& desktop, std::uint32_t m, float scale) {
     const float w = static_cast<float>(desktop.width - 2*m), h = static_cast<float>(desktop.height - 2*m);
     std::uint32_t peak = 0;
@@ -257,8 +253,6 @@ void DropShadowContracts(const RasterImage& desktop, std::uint32_t m, float scal
     Require(bottom > top && right > left && bottom > 0 && right > 0,
         "Shadow falls down/right, away from the upper-left ring light");
 
-    // Direct contract: sides partition pixels by nearest outer edge, nothing
-    // reaches the hole, and opaque yarn is unchanged.
     const ws_knit_ring ring{120.f, 80.f, 15.f, 11.f, 4.f};
     constexpr int bw = 132, bh = 92;
     std::array<std::vector<std::uint32_t>, 4> sides;
@@ -293,8 +287,6 @@ bool InsideRounded(float x, float y, float left, float top, float width, float h
     radius = std::clamp(radius, 0.f, std::min(width, height) * .5f);
     float mx = left + width * .5f, my = top + height * .5f;
     float hx = std::max(0.f, width * .5f - radius), hy = std::max(0.f, height * .5f - radius);
-    // At a capsule end hx/hy can be zero. Centre +/- a nonnegative extent
-    // cannot reverse due to cancellation of large origins and tiny radii.
     float cx = std::clamp(x, mx - hx, mx + hx);
     float cy = std::clamp(y, my - hy, my + hy);
     return (x-cx)*(x-cx) + (y-cy)*(y-cy) <= radius*radius;
@@ -307,10 +299,7 @@ void ReferenceGeometry(const RasterImage& image, const std::filesystem::path& ro
     for (std::uint32_t y = 0; y < image.height; ++y)
         for (std::uint32_t x = 0; x < image.width; ++x) {
             float dipX = (x + .5f) / 2.f, dipY = (y + .5f) / 2.f;
-            // Remove the white content (including its antialias boundary).
-            // Crop contains no CoreText captions.
             if (InsideRounded(dipX, dipY, 9.5f, 9.5f, 621.f, 141.f, 10.5f)) continue;
-            // The deliberately frayed outer rim is excluded; the rest of the silhouette is pinned.
             const float fray = ws_knit_fray_depth(10.f);
             if (InsideRounded(dipX, dipY, 0.f, 0.f, 640.f, 160.f, 20.f)
                 && !InsideRounded(dipX, dipY, fray, fray, 640.f - 2*fray, 160.f - 2*fray, 20.f - fray)) continue;
@@ -334,8 +323,6 @@ struct StitchPitch { int pixels = 0; double correlation = -1; };
 StitchPitch MeasureStitchPitch(const RasterImage& image, std::uint32_t ox,
                               std::uint32_t oy, std::uint32_t width, std::uint32_t height) {
     StitchPitch result;
-    // Remove the authored green/butter palette, not its stitch detail.
-    // Mixed-yarn colour boundaries are excluded from this texture-only metric.
     auto sample = [](std::uint32_t p) {
         double r = (p >> 16) & 255, g = (p >> 8) & 255;
         if (r < g * .75) return g / 118.;
@@ -506,7 +493,6 @@ void RenderBehavior(const std::filesystem::path& root) {
         }
     Require(periodic, "Periodic bitmap brush preserves native repeat");
     Require(rotatedCoverage, "Separately rotated edges share coverage; only screen-space light differs");
-    // Mean luminance across one 2x row band, averaged over whole stitch repeats.
     auto rowLight = [&](std::uint32_t y) {
         double sum = 0;
         for (std::uint32_t x = 80; x < 80 + 4 * repeat; ++x) {
@@ -524,8 +510,6 @@ void RenderBehavior(const std::filesystem::path& root) {
     Require(outerTop > 1.1 * outerBottom, "Upper-left key light brightens top outer flank over bottom outer flank");
     auto nearest = tile; nearest.sampling = Sampling::Nearest; nearest.rasterScale = 2;
     auto nearestImage = BandFrame(frame, nearest, cache);
-    // Ring light scales all channels of a pixel equally, so rotated edges keep
-    // the same normalized yarn colour even where screen-space light differs.
     auto sameYarn = [](std::uint32_t a, std::uint32_t b) {
         float pa = static_cast<float>(std::max({(a >> 16) & 255, (a >> 8) & 255, a & 255}));
         float pb = static_cast<float>(std::max({(b >> 16) & 255, (b >> 8) & 255, b & 255}));
@@ -543,8 +527,6 @@ void RenderBehavior(const std::filesystem::path& root) {
                 || !sameYarn(p, Pixel(nearestImage, y, nearestImage.height-1-x))) exactNearest = false;
         }
     Require(exactNearest, "Nearest sampling proves four-edge orientation under ring light");
-    // Analytic ring interior excludes a 1-physical-pixel AA boundary tolerance
-    // plus the frayed outer silhouette.
     bool cornerHoles = false;
     const float fray = ws_knit_fray_depth(10.f);
     for (std::uint32_t y = 0; y < image.height; ++y)
@@ -571,7 +553,6 @@ void RenderBehavior(const std::filesystem::path& root) {
     physical.deviceScale = 1.5f;
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
     auto physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
-    // Band padding plus ShadowMarginPixels(padding) = ceil(padding / 2) per side.
     Require(physicalPerimeter.width == 1046 && physicalPerimeter.height == 287
         && physicalPerimeter.contentInsetPixels == 23 && physicalPerimeter.shadowMarginPixels == 8,
         "Native physical target extents do not undergo lossy DIP ceil roundtrips");
@@ -764,7 +745,6 @@ void ScratchContracts() {
         KnitRaster::RenderPerimeter(k.frame, k.tile, cache, {&capped});
     Require(capped.ResidentBytes() <= 512 * 1024, "Mid-sized budget evicts to its bound");
 
-    // Aborting at every stage leaves reusable, uncorrupted state.
     std::uint32_t total = 0;
     KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch, [&] { ++total; return false; }});
     Require(total == 2 + 4 * 6, "Every stage polls for cancellation");
@@ -872,8 +852,6 @@ void ChartContracts() {
         std::vector<std::uint32_t>{0xff102030u, 0xffe0b070u, 0xff123456u, 0xff789abcu}, raised);
     auto fixed = cache.Get(fullColor);
     fullColor.baseArgb = 0xffee1199u;
-    // Ground is deliberately base-colored in the original material; yarn colors,
-    // not the background between them, must remain untouched.
     Require(cache.Get(fullColor)->spec.chart->argbCells == fixed->spec.chart->argbCells,
         "Opaque imported palette retained when source ground color changes");
     auto change = [&](std::shared_ptr<const Chart> chart) {
@@ -985,8 +963,7 @@ void ChartContracts() {
     bool beforeWic = false;
     auto started = std::chrono::steady_clock::now();
     std::thread withoutCom([&] {
-        // A WIC allocation on this deliberately uninitialized thread would
-        // throw system_error, not the required palette invalid_argument.
+        // No COM here on purpose: a WIC allocation would throw system_error, not invalid_argument.
         try { TileCache isolated; isolated.Get(rejection); }
         catch (const std::invalid_argument&) { beforeWic = true; }
         catch (const std::system_error&) {}
@@ -1083,7 +1060,6 @@ void CatalogueFixtures(const std::filesystem::path& root) {
     }
     auto fitted = ThemeSpec("finder");
     auto fittedImage = KnitRaster::RenderFrame(frame, fitted, cache);
-    // Finder repeat 36 DIP; 640 DIP edge contains round(640/36)=18 repeats.
     auto noFit = fitted.chart->appearance; noFit.flags &= ~ChartFittedRepeat;
     auto free = fitted; free.chart = std::make_shared<const Chart>("finder-free", 0,
         fitted.chart->width, fitted.chart->height, fitted.chart->argbCells, noFit);
@@ -1188,13 +1164,6 @@ RasterImage Crop(const RasterImage& image, std::uint32_t x, std::uint32_t y,
     return crop;
 }
 
-// Source plates bake their light in tile space with weak relief; production
-// lights stitches in screen space, so luminance patterns differ by design. This
-// compares what stays authored: chromaticity (yarn colours and motif edges, both
-// independent of the uniform channel scaling lighting applies), plus mean
-// brightness and luminance spread so production is neither darker nor harsher
-// than the plates. Returns {chroma MAE (0-255), chroma edge-energy ratio,
-// mean luminance ratio, luminance stddev ratio}. Opaque candidate pixels only.
 std::array<double, 4> TextureMetrics(const RasterImage& source, const RasterImage& candidate) {
     auto gray = [](std::uint32_t p) {
         return .2126*((p >> 16) & 255) + .7152*((p >> 8) & 255) + .0722*(p & 255);
@@ -1225,8 +1194,6 @@ std::array<double, 4> TextureMetrics(const RasterImage& source, const RasterImag
     return {absolute/(3*n), candidateEnergy/sourceEnergy, sb/sa, candidateSpread/sourceSpread};
 }
 
-// Upstream plates predate ring lighting. Lighting them with the default
-// 620x140 frame's ring keeps parity about stitches and colour, not light.
 RasterImage RingLit(RasterImage image, float originX, float originY, float scale) {
     const ws_knit_ring ring{640.f, 160.f, 20.f, 11.f, 9.f};
     Require(ws_knit_shade_ring(&ring, originX, originY, scale, image.pixels.data(),
@@ -1259,8 +1226,6 @@ void SourceCatalogueParity(const std::filesystem::path& root) {
         std::cout << "source " << example.id << " detail: chromaMAE=" << metric[0]
             << ", chromaEdgeRatio=" << metric[1] << ", meanLumaRatio=" << metric[2]
             << ", lumaSpreadRatio=" << metric[3] << "\n";
-        // Detail and geometry are independent. The source's CoreText labels and
-        // opaque application body never contribute to these texture metrics.
         Require(metric[0] < 4.,
             "Actual source plate versus production detail keeps authored yarn colours within AA tolerance");
         Require(metric[1] > .60 && metric[1] < 1.8,
@@ -1292,12 +1257,9 @@ void SourceCatalogueParity(const std::filesystem::path& root) {
                         + std::abs(static_cast<int>((a>>8)&255)-247) + std::abs(static_cast<int>(a&255)-243);
                     bool sourceYarn = backgroundDistance > 3, nativeYarn = Alpha(b) > 128;
                     ++count; if (sourceYarn != nativeYarn) ++disagreements;
-                    // Texture excludes the outer1px and white-content2px AA
-                    // boundaries. Geometry above still includes every pixel.
                     bool outerInterior = InsideRounded(dx,dy,.25f,.25f,639.5f,159.5f,19.75f);
                     bool contentExpanded = InsideRounded(dx,dy,9.5f,9.5f,621.f,141.f,10.5f);
                     if (sourceYarn && Alpha(b) == 255 && outerInterior && !contentExpanded) {
-                        // Chromaticity: lighting scales channels uniformly, so it cancels.
                         double sumA = ((a>>16)&255) + ((a>>8)&255) + (a&255) + 1., sumB = ((b>>16)&255) + ((b>>8)&255) + (b&255) + 1.;
                         for (int shift = 0; shift < 24; shift += 8)
                             colorError += std::abs(255.*((a>>shift)&255)/sumA - 255.*((b>>shift)&255)/sumB);
@@ -1315,10 +1277,6 @@ void SourceCatalogueParity(const std::filesystem::path& root) {
     }
 }
 
-// Stitch light is one screen-space light. Rebuild each side's screen-space stitch
-// height from the tile through that side's orientation, then require luminance to
-// fall where the height rises toward the light (negative correlation) on all four
-// sides. Tile-space baked light would flip the sign on the bottom and left sides.
 void StitchLightConsistency() {
     TileCache cache;
     TileSpec tile; tile.material = Material::Raised; tile.baseArgb = 0xff7aa86au;

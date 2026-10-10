@@ -27,8 +27,7 @@ struct WorkToken {
     bool operator==(const WorkToken&) const = default;
 };
 
-// Paths are transient source facts from verified process metadata, not persistent identities.
-// Empty source means unavailable. Native decoding accepts only a bounded absolute local path.
+// Transient source facts, not persistent identities; empty path means unavailable.
 struct IconInput {
     std::string canonicalAppIdentity;
     std::uint64_t iconRevision{};
@@ -55,8 +54,7 @@ struct Completion {
     ImmutablePalette palette;
 };
 
-// Owner-thread authority. Begin replaces that target's previous request. Take accepted
-// completions only with the owner's current complete token; forgetting never touches a border.
+// Owner-thread only. Begin replaces the target's prior request; Accept requires the owner's current token.
 class CompletionGate final {
 public:
     explicit CompletionGate(std::size_t maxTargets = 512);
@@ -87,10 +85,7 @@ struct PreparationStatistics {
     std::uint64_t queries{}, cacheHits{}, deduplicated{};
 };
 
-// Query is a local decoder boundary. It must honor stop/deadline and bound its own allocations;
-// the worker bounds admitted jobs/subscribers/completions and cache, not arbitrary custom code.
-// No UI callback is run. Submit/Drain/Statistics are thread-safe. Stop belongs to one owner,
-// cancels queued jobs and joins workers. It must not be called from Query.
+// Query must honor stop/deadline, bound its allocations, and never call Stop; Submit/Drain/Statistics are thread-safe.
 class PreparationWorker final {
 public:
     using Query = std::function<PaletteResult(
@@ -131,4 +126,4 @@ private:
     std::vector<std::jthread> threads_;
 };
 
-} // namespace window_sweaters::icon_yarn
+}

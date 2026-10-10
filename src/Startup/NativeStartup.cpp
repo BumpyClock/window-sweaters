@@ -76,7 +76,7 @@ namespace window_sweaters::startup
                     try { operation.Cancel(); }
                     catch (winrt::hresult_error const& error)
                     {
-                        // Keep the slot occupied until the underlying async operation completes.
+                        // Cancel is asynchronous: the slot stays occupied until the WinRT operation completes.
                         cancellationError_.store(error.code().value);
                     }
                 }
@@ -101,7 +101,7 @@ namespace window_sweaters::startup
                             identity == ERROR_SUCCESS ? E_UNEXPECTED : HRESULT_FROM_WIN32(identity)});
                         return;
                     }
-                    // Lookup and enable span worker callbacks; keep the MTA alive between them.
+                    // MTA usage keeps the apartment alive across async callbacks on other threads.
                     winrt::check_hresult(CoIncrementMTAUsage(&mtaCookie_));
                     Apartment apartment;
                     auto const lookup = StartupTask::GetAsync(TaskId);
@@ -189,8 +189,7 @@ namespace window_sweaters::startup
                     Finish(AfterMutation(command_, Translate(task.State())));
                     return;
                 }
-                // Packaged Win32 has no UWP consent dialog/UI-thread requirement.
-                // Only SettingsUserActions + SettingsGesture reaches this through Controller.
+                // Packaged Win32 needs no UWP consent dialog or UI thread for RequestEnableAsync.
                 auto const enable = task.RequestEnableAsync();
                 Track(enable);
                 enable.Completed([self = shared_from_this()](auto const& operation, AsyncStatus status)

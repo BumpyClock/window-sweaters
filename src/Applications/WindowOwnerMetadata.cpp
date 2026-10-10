@@ -94,7 +94,7 @@ MetadataUnavailable OpenFailure() {
 bool Matches(const WindowOwnerLifetime& lifetime, const TargetToken& expected) {
     return lifetime.process == expected.Process() && lifetime.threadId != 0 && lifetime.classAtom != 0;
 }
-} // namespace
+}
 
 TargetToken::TargetToken(tracking::TargetId target, std::uint64_t configurationRevision)
     : target_(target), configurationRevision_(configurationRevision) {}
@@ -114,8 +114,7 @@ MetadataResult ResolveWindowOwnerMetadata(
     const auto& root = std::get<AppMetadata>(rootProcess);
     if (root.Provenance() == MetadataProvenance::WindowApplicationId)
         return WindowFailure(UnavailableReason::InvalidMetadata, QueryStage::Resolver);
-    // Unpackaged apps may set an explicit window AUMID (Chromium: "MSEdge.udd.Default").
-    // It names no package, so only the verified root process below can identify the owner.
+    // Unpackaged apps may set an explicit window AUMID (Chromium: "MSEdge.udd.Default") that names no package.
     const auto* packaged = std::get_if<PackagedAumid>(&windowApplicationId);
     if (auto identity = packaged ? AppIdentity::FromPackagedAumid(packaged->value) : std::nullopt) {
         const bool packagedRoot = root.Identity().Kind() == IdentityKind::PackagedAumid;
@@ -166,4 +165,4 @@ WindowLifetimeResult QueryWindowOwnerLifetime(const TargetToken& expected) {
     return source.ReadLifetime(expected);
 }
 
-} // namespace window_sweaters::applications
+}

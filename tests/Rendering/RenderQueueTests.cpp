@@ -38,8 +38,6 @@ void Start() noexcept {
 void Finish() noexcept { observing = false; }
 }
 
-// Measure real worker-side C++ buffer overlap, not the queue's reservation.
-// This fixture's only >=1 MiB allocation is the core's dense YarnCell vector.
 void* operator new(std::size_t bytes) {
     using allocation_probe::Header;
     if (bytes > std::numeric_limits<std::size_t>::max() - sizeof(Header)) throw std::bad_alloc();
@@ -219,7 +217,6 @@ void RealCpuFixtureAndCacheReuse() {
     first.tile.baseArgb = 0xffee1122;
     receiver.Collect(1);
     const auto& p = Perimeter(receiver.results[0]);
-    // 4px band plus a 2px drop-shadow margin per side.
     Check(p.width == 108 && p.height == 84 && p.contentInsetPixels == 6 && p.shadowMarginPixels == 2,
         "Physical fixture dimensions");
     Check(p.pieces[0].image.width == 108 && p.pieces[0].image.height == 8
@@ -326,7 +323,7 @@ void ReadyBytesBackpressure() {
     auto gate = std::make_shared<Gate>();
     Receiver receiver;
     RenderQueueLimits limits;
-    limits.maxReadyBytes = 28000; // One reservation fits; a second waits for drain.
+    limits.maxReadyBytes = 28000;
     receiver.Start(limits, Pinned(gate));
     gate->Entered();
     Check(receiver.queue->Submit(Request(100)) == S_OK && receiver.queue->Submit(Request(101)) == S_OK,
@@ -570,13 +567,14 @@ void AuxiliaryChartTilesAndPathQuotas() {
 
 void DenseChartTransientReservationCoversActualCorePeak() {
     static_assert(sizeof(knitting::detail::YarnCell) == 12);
-    constexpr std::size_t cellBytes = 2501568; // (400 + 4) * (512 + 4) * 12
+    constexpr std::size_t cellBytes = 2501568;
+    // v145 x64 allocation sizes: toolchain-specific; Debug adds a sentinel.
 #ifdef _DEBUG
-    constexpr std::size_t allocationBytes = 2501615; // v145 x64 includes the Debug allocation sentinel.
+    constexpr std::size_t allocationBytes = 2501615;
 #else
-    constexpr std::size_t allocationBytes = 2501607; // v145 x64 vector alignment/bookkeeping.
+    constexpr std::size_t allocationBytes = 2501607;
 #endif
-    constexpr std::size_t previousGrowthPeak = 6221460; // (207382 + 311073) * 12
+    constexpr std::size_t previousGrowthPeak = 6221460;
     constexpr std::size_t budget = 5u * 1024u * 1024u;
     Check(cellBytes < budget && previousGrowthPeak > budget, "Dense fixture distinguishes reserve from overlapping growth");
     auto request = Request();
@@ -884,8 +882,6 @@ void IdleWorkerDoesNoCpuOrGenerations() {
 }
 }
 
-// Poll 1-2 precede the first side; each side then polls six times (start,
-// brushes, colour, height, shading, fray). Poll 9 is the start of side 1.
 constexpr std::uint32_t SideOneStartPoll = 9;
 
 void SupersededJobAbortsBetweenSides() {

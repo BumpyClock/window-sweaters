@@ -34,10 +34,7 @@ struct MetadataCompletion {
     ImmutableMetadata metadata;
 };
 
-// Owner-thread authority. Host must supply its current Tracking TargetId+configuration revision to
-// Accept, Forget on destruction, and SetConfigurationRevision on committed mutations. Begin before
-// Submit; Full/Stopped requires request-specific Retire or a new Begin for a bounded retry. Retire
-// every cancellation returned by Stop before reusing this gate. A result never owns a border.
+// Owner-thread only; Retire every cancellation returned by Stop before reusing the gate.
 class CompletionGate final {
 public:
     explicit CompletionGate(std::uint64_t configurationRevision = 0, std::size_t maxTargets = 512);
@@ -76,24 +73,11 @@ struct WorkerStatistics {
 };
 enum class SubmitResult { Accepted, Coalesced, Full, Obsolete, Stopped };
 
-// One local MTA worker; read-only expected-root HWND operations, no UI callbacks, resource loading
-// or external service. Window facts cache only by complete target token, never by process alone.
-// One CompletionGate supplies its monotonic sequences. Submit/Drain/Statistics are thread-safe;
-// Stop/destruction belong to one owner and must not run in Query. Query owns its dependencies.
-// Queue/completion counts and cache count/charged retained bytes are bounded, including negative
-// results in completions. No unavailable result is cached. Cache TTL advances only on requests.
-// A full completion queue blocks dequeue, never drops accepted current requests. Drain wakes it.
-// Stop returns request-specific cancellations for queued/completed/in-flight work and joins the
-// current query. Caller retires those requests on its owner-thread gate; destruction without Stop
-// is only safe when the gate is also discarded. Documented synchronous shell/process
-// APIs have no cancellable hard deadline. Custom Query must be local and bounded, not arbitrary I/O.
-// Allocator overhead/process-wide memory is not the cache byte statistic. No recurring timer runs.
+// Stop/destruction belong to one owner and must not run in Query.
 class MetadataWorker final {
 public:
     using Query = std::function<MetadataResult(const TargetToken&)>;
     using LifetimeQuery = std::function<WindowLifetimeResult(const TargetToken&)>;
-    // Custom Query owns before/after validation. Without LifetimeQuery its results are not cached.
-    // Supplying LifetimeQuery permits target-scoped caching with matching before/after live facts.
     explicit MetadataWorker(WorkerLimits limits = {}, Query query = {}, LifetimeQuery lifetime = {});
     ~MetadataWorker();
     MetadataWorker(const MetadataWorker&) = delete;
@@ -128,4 +112,4 @@ private:
     std::jthread thread_;
 };
 
-} // namespace window_sweaters::applications
+}

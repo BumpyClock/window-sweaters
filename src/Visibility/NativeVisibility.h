@@ -32,12 +32,10 @@ struct NativeStats {
     DWORD lastRegistrationError{};
 };
 
-// Construct, Start, HandleMessage, query, registration, Stop and destruction on the
-// receiver's thread. Receiver is an existing hidden top-level HWND, NOT HWND_MESSAGE.
+// Receiver thread only; receiver must be a hidden top-level HWND, not HWND_MESSAGE.
 class NativeVisibility final {
 public:
     explicit NativeVisibility(HWND receiver) noexcept;
-    // Deterministic tests provide only the documented interface, never a live shell manager.
     NativeVisibility(HWND receiver, IVirtualDesktopManager& manager) noexcept;
 #ifdef WINDOW_SWEATERS_VISIBILITY_TESTING
     using FactsQuery = HRESULT (*)(HWND, WindowSnapshot&) noexcept;
@@ -61,8 +59,7 @@ public:
     HRESULT RegisterOverlay(HWND overlay);
     void UnregisterOverlay(HWND overlay) noexcept;
     Observation Observe(const ProbeToken& token, HWND overlay) noexcept;
-    // Caller first consumes the Hide transition. Only a hidden, registered, owned
-    // overlay can move; success includes fresh target/overlay membership validation.
+    // Caller consumes the Hide transition first; overlay must be hidden, registered and owned.
     HRESULT AssociateOverlay(HWND overlay, const ProbeToken& token, const DesktopId& desktop) noexcept;
 
     static SessionState QueryCurrentSession(DWORD sessionId) noexcept;
@@ -133,4 +130,4 @@ private:
 #endif
 };
 
-} // namespace window_sweaters::visibility
+}

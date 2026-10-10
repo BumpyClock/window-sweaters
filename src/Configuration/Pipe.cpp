@@ -71,7 +71,7 @@ std::wstring EndpointName(std::wstring const& suffix) {
         (suffix.empty()?L"":L"."+suffix);
 }
 std::wstring PipeSecuritySddl() {
-    // The logon SID denotes one user's one authenticated logon, unlike a user-only ACE.
+    // Logon SID, not user SID: one authenticated logon, not every logon of the user.
     return L"D:P(A;;GRGW;;;"+CurrentIdentity().logon_sid+L")";
 }
 std::wstring TestEndpointSuffix(std::filesystem::path const& storage_directory) {
@@ -177,7 +177,6 @@ contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path 
         if (error!=ERROR_PIPE_BUSY) throw std::runtime_error(error==ERROR_FILE_NOT_FOUND?"Host is disconnected":
             "Host identity verification failed");
         if (elapsed>=contracts::io_timeout_ms) throw std::runtime_error("Host is disconnected");
-        // Short slices keep a busy pipe cancellable.
         WaitNamedPipeW(endpoint.c_str(),static_cast<DWORD>(std::min<ULONGLONG>(25,contracts::io_timeout_ms-elapsed)));
     }
     if (!VerifyPeer(pipe.get(),true,host_path)) throw std::runtime_error("Host identity verification failed");

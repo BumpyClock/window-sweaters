@@ -54,7 +54,6 @@ HRESULT PlaceOverlayBelow(HWND overlay, HWND target) noexcept {
     if (action == StackingAction::PromoteThenPlaceBelow ||
         action == StackingAction::DemoteThenPlaceBelow) {
         const StackingBand expectedBand = snapshot.targetBand;
-        // An unowned overlay cannot drag a foreign owner through a band transition.
         const HWND band = expectedBand == StackingBand::Topmost ? HWND_TOPMOST : HWND_NOTOPMOST;
         if (!SetWindowPos(overlay, band, 0, 0, 0, 0, PlacementFlags)) return LastError();
         result = Query(overlay, target, snapshot);

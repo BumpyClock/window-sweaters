@@ -116,7 +116,6 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
             throw std::invalid_argument("Raised raster supports at most sixteen yarn colours");
         colors[colorCount++] = cell.argb;
     }
-    // Palette rejection precedes COM/WIC and every lookup is bounded by16.
     detail::WicSurface colour(width, height, static_cast<float>(l.raster_scale));
     detail::WicSurface ridge(width, height, static_cast<float>(l.raster_scale), colour.factory.Get());
     struct YarnPath { std::uint32_t argb; ComPtr<ID2D1PathGeometry> path; };
@@ -177,16 +176,12 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
                 std::swap(image.pixels[static_cast<std::size_t>(y)*image.width+x],
                     image.pixels[static_cast<std::size_t>(image.height-1-y)*image.width+x]);
     };
-    // CoreGraphics's shader buffers are bottom-up, unlike the top-down WIC
-    // surface. Preserve its dy/light and grain coordinates, then return BGRA
-    // top-down output. Flipping only the displayed path changes the stitches.
     flipRows(flat);
     flipRows(heights);
     std::vector<float> hf(flat.pixels.size()), scratch(hf.size());
     for (std::size_t i = 0; i < hf.size(); ++i) hf[i] = (heights.pixels[i] & 255) / 255.f;
     ws_knit_blur(hf.data(), static_cast<int>(width), static_cast<int>(height), scratch.data());
     ws_knit_blur(hf.data(), static_cast<int>(width), static_cast<int>(height), scratch.data());
-    // With stitchHeight the tile stays unlit: the renderer lights it in screen space.
     (stitchHeight ? ws_knit_albedo : ws_knit_shade)(&material, raised, l.raster_scale, hf.data(),
         flat.pixels.data(), static_cast<int>(width), static_cast<int>(height), flat.pixels.data());
     flipRows(flat);
@@ -224,7 +219,6 @@ ws_knit_layout ChartLayout(const TileSpec& spec, const ws_knit_gauge& material) 
     float sw = step * material.aspect;
     int columns = static_cast<int>(ch.width) * density;
     int rows = static_cast<int>(ch.height) * density;
-    // Source enlarges only very small repeats to preserve the ridge filter.
     float columnRepeats = std::max(1.f, std::ceil(8.f / (sw * columns)));
     float rowRepeats = std::max(1.f, std::ceil(8.f / (step * rows)));
     if (!std::isfinite(columnRepeats) || !std::isfinite(rowRepeats)
@@ -244,8 +238,6 @@ ws_knit_layout ChartLayout(const TileSpec& spec, const ws_knit_gauge& material) 
         step, std::max(sw * material.yarn, raised ? .8f : .35f)};
 }
 
-// Port of knit.c:234-298. Computation follows the source's logical y; WIC
-// stores that row directly, rather than its CoreGraphics bottom-up address.
 RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l, RasterImage& stitchHeight) {
     const auto& ch = *spec.chart;
     const auto& g = spec.gauge;
@@ -331,8 +323,6 @@ std::shared_ptr<const Tile> MakeTile(const TileSpec& spec) {
         auto count = YarnCellCount(tile->layout.columns, tile->layout.rows);
         if (count > cells.max_size())
             throw std::invalid_argument("Chart yarn cell allocation exceeds vector limit");
-        // Exact reservation prevents vector-growth overlap exceeding the
-        // render queue's bounded transient YarnCell allocation.
         cells.reserve(count);
         const auto& ch = *spec.chart;
         for (int j = -2; j <= tile->layout.rows + 1; ++j)

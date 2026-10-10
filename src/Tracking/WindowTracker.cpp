@@ -71,8 +71,7 @@ bool ReadStyle(HWND hwnd, int index, LONG_PTR& style) noexcept {
     return style != 0 || GetLastError() == ERROR_SUCCESS;
 }
 
-// Single definition of "ordinary" for Query and the Probe prefilter. Packaged app frames and some
-// desktop apps (Steam's SDL_app) use WS_POPUP roots with a full resizable system frame.
+// Packaged app frames and Steam's SDL_app use WS_POPUP roots with a full resizable frame.
 bool OrdinaryTopLevel(HWND hwnd, const wchar_t* className, LONG_PTR style, LONG_PTR extendedStyle) noexcept {
     const bool framedPopup = (style & (WS_SYSMENU | WS_THICKFRAME)) == (WS_SYSMENU | WS_THICKFRAME);
     const bool supportedPopup = !(style & WS_POPUP) || framedPopup
@@ -83,7 +82,6 @@ bool OrdinaryTopLevel(HWND hwnd, const wchar_t* className, LONG_PTR style, LONG_
         && hwnd != GetDesktopWindow() && hwnd != GetShellWindow();
 }
 
-// True only on a definite rejection; any unreadable fact defers to the full Query.
 bool PlainlyUnsupported(HWND hwnd) noexcept {
     wchar_t className[256]{};
     LONG_PTR style{}, extendedStyle{};
@@ -147,7 +145,7 @@ Milliseconds EventTimestamp(DWORD time) noexcept {
     return elapsed <= now ? now - elapsed : 0;
 }
 
-} // namespace
+}
 
 WindowTracker::WindowTracker(HWND receiver, TrackerConfig config)
     : receiver_(receiver), ownerThreadId_(GetCurrentThreadId()), config_(std::move(config)),
@@ -247,7 +245,6 @@ bool WindowTracker::Start(ActionBatch& initialActions) {
         stats_.lastWin32Error = ERROR_INVALID_PARAMETER;
         return false;
     }
-    // Fixture mode seals the identity as well as the numeric HWND. Reuse cannot broaden the fixture.
     if (config_.mode == TrackingMode::FixtureOnly) {
         if (!config_.initialFixtureIdentity) {
             stats_.lastWin32Error = ERROR_INVALID_PARAMETER;
@@ -434,7 +431,6 @@ void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Millis
         ++stats_.coalesced;
     } else if (pending_.size() < TrackerQueueLimit
                && (model_.Current(hwnd) || pending_.size() < TrackerQueueLimit - TrackerTargetLimit)) {
-        // Insert both structures atomically, including allocation failure.
         pending_.emplace(hwnd, Pending{dirty, createdAt, geometryHint, reprobeTarget, destroyed});
         try {
             queue_.push_back(hwnd);
@@ -457,7 +453,6 @@ void WindowTracker::Probe(WindowHandle hwnd, const Pending& pending, Millisecond
         geometryReprobe_.Cancel(hwnd);
         return;
     }
-    // Unknown plainly-unsupported windows would only yield Unsupported, which creates no model state.
     if (config_.mode==TrackingMode::Production && !model_.Current(hwnd)
         && PlainlyUnsupported(reinterpret_cast<HWND>(hwnd))) {
         geometryReprobe_.Cancel(hwnd);
@@ -542,7 +537,7 @@ bool WindowTracker::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam, Ac
             Enqueue(hwnd, Dirty::Settlement);
         }
         Reconcile(now);
-        Drain(actions, now); // Also recovers a failed PostMessage.
+        Drain(actions, now);
         return true;
     }
     return false;
@@ -574,4 +569,4 @@ bool WindowTracker::ValidateWork(const WorkToken& token, ActionBatch& updates) {
     return model_.Accepts(token);
 }
 
-} // namespace window_sweaters::tracking
+}

@@ -416,7 +416,7 @@ void CoverageAndManualCatalogue() {
     const auto native = QueryWindowsInstallRoots();
     Check(!native.program_files.empty() && !native.local_app_data.empty() && !native.windows.empty(), "native OS Known Folder boundary responsive; no application install probing");
 }
-} // namespace
+}
 
 int main() {
     try {

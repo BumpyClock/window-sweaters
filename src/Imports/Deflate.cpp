@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Bounded RFC1950/1951 validation is necessary because WIC can report success
-// for damaged IDAT bytes. WIC still owns image decoding and pixel conversion.
+// Bounded RFC1950/1951 check: WIC can report success for damaged IDAT bytes.
 #include "Internal.h"
 #include <algorithm>
 
@@ -202,7 +201,7 @@ constexpr std::array<Pass, 7> adam7{{
 unsigned PassSize(unsigned full, unsigned start, unsigned step) {
     return full <= start ? 0 : (full - start + step - 1) / step;
 }
-} // namespace
+}
 
 Result<std::monostate> ValidatePngDeflate(std::span<const std::uint8_t> encoded,
     std::uint32_t width, std::uint32_t height, unsigned depth, unsigned color_type, bool interlaced) {
@@ -241,4 +240,4 @@ Result<std::monostate> ValidatePngDeflate(std::span<const std::uint8_t> encoded,
     return std::monostate{};
 }
 
-} // namespace window_sweaters::imports::detail
+}

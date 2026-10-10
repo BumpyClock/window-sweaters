@@ -181,7 +181,6 @@ void IpcCases(std::filesystem::path const& directory) {
     server.Start();
     auto restarted=Exchange(endpoint,Self(),SnapshotRequest());
     Require(restarted.configuration.revision==3,"Restart publishes persisted snapshot");
-    // Stop/Start on one service retains identity; constructing a new host service replaces it.
     server.Stop();
     ConfigurationServer replacement(options); replacement.Start();
     auto new_snapshot=Exchange(endpoint,Self(),SnapshotRequest());

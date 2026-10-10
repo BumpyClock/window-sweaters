@@ -35,7 +35,7 @@ struct PhysicalRect {
 struct WindowIdentity {
     std::uint32_t pid{};
     std::uint64_t processStart{};
-    std::uint64_t observedIdentity{}; // Thread ID and class fingerprint, not a persisted app identity.
+    std::uint64_t observedIdentity{};
     bool operator==(const WindowIdentity&) const = default;
 };
 
@@ -108,7 +108,7 @@ struct Action {
     std::uint32_t dpi{};
     std::uint64_t appearanceRevision{};
     bool rebuildAppearance{};
-    bool topmost{}; // A request to the stacking owner; not permission to reorder a foreign window.
+    bool topmost{};
 };
 using ActionBatch = std::vector<Action>;
 
@@ -166,4 +166,4 @@ private:
     void RetireSelection(WindowHandle hwnd);
 };
 
-} // namespace window_sweaters::tracking
+}

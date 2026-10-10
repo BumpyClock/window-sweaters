@@ -57,7 +57,6 @@ NativeVisibility::DesktopOperation::DesktopOperation(NativeVisibility& owner) no
 }
 
 NativeVisibility::DesktopOperation::~DesktopOperation() {
-    // Release the operation's reference while shutdown still sees an active call.
     manager_.Reset();
     owner_.FinishOperation();
 }
@@ -187,7 +186,6 @@ StartResult NativeVisibility::Start() noexcept {
     started_ = true;
     policy_.SetSession(QueryCurrentSession(sessionId_));
     lastSessionQuery_ = GetTickCount64();
-    // This code is executing; display state remains unknown until its initial notification.
     policy_.SetPower(PowerState::Awake);
     policy_.SetNotificationsReady(true);
     return {S_OK, desktopResult};
@@ -510,7 +508,6 @@ Observation NativeVisibility::Observe(const ProbeToken& token, HWND overlay) noe
                 if (guidCurrent != overlayCurrent) return failure(E_PENDING);
                 window.overlayDesktop = overlayDesktop;
                 window.overlayDesktopCapability = OverlayDesktopCapability::Available;
-                // Contradictory same-GUID/off-current results cannot authorize a move.
                 if (overlayDesktop == window.desktop) return failure(E_PENDING);
                 window.overlay = OverlayAssociation::Mismatched;
             }
@@ -576,7 +573,6 @@ HRESULT NativeVisibility::AssociateOverlay(HWND overlay, const ProbeToken& token
             return E_PENDING;
         if (!CurrentOverlay(overlay, *overlayEpoch)) return E_PENDING;
         if (IsWindowVisible(overlay)) return E_ACCESSDENIED;
-        // No foreign HWND is passed to the sole mutating virtual-desktop API.
         const GUID id = NativeDesktopId(desktop);
         if (!QueryAuthorized(operation, token, overlay, overlayEpoch)) return E_PENDING;
         result = operation.Manager()->MoveWindowToDesktop(overlay, id);
@@ -600,4 +596,4 @@ HRESULT NativeVisibility::AssociateOverlay(HWND overlay, const ProbeToken& token
     return S_OK;
 }
 
-} // namespace window_sweaters::visibility
+}

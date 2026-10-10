@@ -515,7 +515,7 @@ void Native() {    Require(std::get<Fallback>(PixelsFromOwnedIcon(nullptr)).reas
     std::cout << "PASS native own-executable resource and WIC mask/alpha probe; no desktop apps\n";
 }
 
-} // namespace
+}
 
 int wmain(int argc, wchar_t** argv) {
     try {

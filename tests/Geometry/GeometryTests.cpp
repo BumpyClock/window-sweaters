@@ -67,7 +67,6 @@ void DpiTransforms() {
         Case{192, 2.0, 20, {70, 70, 770, 530}}
     };
     for (const auto& item : cases) {
-        // Band padding plus the half-band drop-shadow margin.
         const auto inset = item.padding + ShadowMarginPixels(item.padding);
         auto facts = Ordinary();
         facts.dpi = item.dpi;
@@ -121,7 +120,6 @@ void MixedMonitorTransfers() {
     Check(a.physicalTargetBounds == left.physicalTargetBounds
           && b.physicalTargetBounds == right.physicalTargetBounds, "transfer never resizes target");
 
-    // Repeated transfers are pure snapshots, not a target registry or generation cache.
     for (int i = 0; i < 40; ++i) {
         const auto result = BuildRenderInput(i % 2 ? left : right);
         const auto& render = Result<RenderInput>(result, "rapid transfer still produces current snapshot");
@@ -259,7 +257,6 @@ void CapabilityPolicyAndHiddenStates() {
     Hidden(facts, HiddenReason::NoExteriorSpace);
     facts.physicalTargetBounds = {2500, 100, 3140, 500};
     Hidden(facts, HiddenReason::OutsideClip);
-    // The shadow margin reaches the display here, but the band does not.
     facts.physicalTargetBounds = {100, 1090, 740, 1490};
     Hidden(facts, HiddenReason::OutsideClip, {32768, 64ull * 1024 * 1024, ClipPolicy::Display});
 }
@@ -531,7 +528,7 @@ void HiddenNativeFixtureContract() {
     Check(UnregisterClassW(name, instance) != FALSE, "own fixture class is unregistered");
     Check(SetThreadDpiAwarenessContext(previous) != nullptr, "fixture restores its thread awareness context");
 }
-} // namespace
+}
 
 int main() {
     static_assert(!std::is_copy_assignable_v<RenderInput>);

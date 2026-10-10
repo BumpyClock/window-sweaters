@@ -56,9 +56,7 @@ namespace window_sweaters::startup
         virtual void Cancel() noexcept = 0;
     };
 
-    // A startup-specific seam. Begin is nonblocking; its callback can complete inline.
-    // Completion must be terminal; cancellation does not free the active slot until completion.
-    // Begin may throw std::bad_alloc, other failures are returned through completion.
+    // Begin is nonblocking, may complete inline, may throw only bad_alloc; slot frees only at completion.
     class Backend
     {
     public:

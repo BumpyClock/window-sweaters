@@ -23,8 +23,6 @@ inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configu
         if (!chart) throw std::invalid_argument("Host design chart is unavailable");
         tile.chart = knitting::MakeDesignChart(*chart, theme->id);
     }
-    // The identity-free overload remains the shared configuration placeholder.
-    // Production By-app targets must use accepted metadata and the overload below.
     return knitting::NormalizeTileSpec(std::move(tile));
 }
 
@@ -47,7 +45,6 @@ private:
     colorways::ResolutionError error_;
 };
 
-// Imported personal PNGs require a validated asset adapter, never palette rewriting.
 inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& configuration,
     const colorways::ResolutionResult& resolution) {
     if (!contracts::PerApplication(configuration.design_selection))
@@ -65,8 +62,6 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
             !designs::ws_design_theme_by_id(themeId.c_str()))
             throw AppearanceResolutionError(colorways::ResolutionError::UnknownTheme);
     }
-    // ResolveAppearance currently retains a mapping even if its theme is missing.
-    // Detect that catalogue inconsistency instead of publishing its plain fallback.
     if (resolved.mapping && (!resolved.theme_id || *resolved.theme_id != resolved.mapping->theme_id))
         throw AppearanceResolutionError(colorways::ResolutionError::UnknownTheme);
     tile.baseArgb = resolved.base_argb;
@@ -92,10 +87,6 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
     return knitting::NormalizeTileSpec(std::move(tile));
 }
 
-// Manual selections retain saved yarn/stitch semantics and never consult identity.
-// The caller caches QueryWindowsInstallRoots() outside this per-target path. A
-// missing/unavailable owner stays hidden at the existing Host metadata gate; it
-// must not be fabricated as an empty identity to obtain a successful fallback.
 inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,
     const applications::AppIdentity& application, const colorways::WindowsInstallRoots& roots,
     const std::optional<colorways::AutomaticAppearance>& automatic = {},
@@ -109,4 +100,4 @@ inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configu
         colorways::ResolveAppearance(&application, settings, personal, roots, automatic));
 }
 
-} // namespace window_sweaters::host
+}

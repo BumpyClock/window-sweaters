@@ -44,25 +44,6 @@ private:
     std::size_t actionCount_{};
 };
 
-// Pure policy, called serially by the Host's graphics-owner thread. Construct
-// after initial device creation, using the Host's current generation (normally 1).
-// Copy update.generation to the Host before applying actions in order.
-// HideCurrent also releases overlay device references before the shared device;
-// InitDevice calls GraphicsDevice::Initialize once and returns its HRESULT with
-// the exact attempt token to CompleteInitialization. Host discards partial or
-// stale initialized resources; the controller owns no resources to release.
-// Arm one Host timer only when an update supplies retry; preserve that ticket
-// through the timer callback. Delays are 100/500/2000 ms after the fault/previous
-// failed completion, excluding Initialize latency. There is no catch-up loop.
-// Cancel the timer on Ready/Unavailable/Stop; already-posted stale tickets are inert.
-//
-// RebuildCurrent means enumerate today's eligible targets, never replay captured
-// work. CanRender checks only device authority: Host must additionally revalidate
-// target lifetime/event, configuration, render input, pause and visibility tokens
-// before uploading/showing. No raw devices, target callbacks or settings live here.
-// At UINT64_MAX, generation cannot advance: terminal state still revokes authority.
-// Log update.error/LastError on faults and NotifyUnavailable. New construction is
-// the only restart after Stopped; Unavailable does not automatically retry.
 class GraphicsRecovery final {
 public:
     using Clock = std::chrono::steady_clock;
@@ -97,4 +78,4 @@ private:
     std::variant<std::monostate, RecoveryRetry, RecoveryAttempt> work_;
 };
 
-} // namespace window_sweaters::rendering
+}

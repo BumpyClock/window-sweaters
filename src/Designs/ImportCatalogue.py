@@ -89,7 +89,6 @@ def render(repo):
             f'    {{ "{theme_id}", "{name}", "{match}", "{chart}", {color},\n'
             f'      "{palette}", "{pattern}" }},'
         )
-    # Two themes share a chart; the exact process-name matches preserve their identity.
     id_by_match = {theme[1]: re.sub(r"[^a-z0-9]+", "-", theme[0].lower()).strip("-")
                    for theme in themes}
     aliases = [

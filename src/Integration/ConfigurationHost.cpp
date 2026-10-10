@@ -124,8 +124,7 @@ struct ConfigurationHost::Impl {
     HostStatus CurrentStatus() const {
         auto result = status;
         result.pending_local = pending.size();
-        // The signaled handle also distinguishes a real exit code of STILL_ACTIVE
-        // from a live process. Retain one handle until the next successful launch.
+        // A signaled handle distinguishes a real STILL_ACTIVE exit code from a live process.
         if (last_settings_process && WaitForSingleObject(last_settings_process.get(), 0) == WAIT_OBJECT_0) {
             DWORD exit = 0;
             if (GetExitCodeProcess(last_settings_process.get(), &exit)) {
@@ -187,7 +186,6 @@ HostStatus ConfigurationHost::Start() noexcept {
             (options.test_mode && OverlappingPaths(requested_canonical, production_canonical)))
             return impl_->Failure(HostState::invalid_options, ERROR_INVALID_PARAMETER);
         std::filesystem::create_directories(requested);
-        // Deny directory renames while its canonical path is used by Storage.
         Handle directory(CreateFileW(requested.c_str(), FILE_READ_ATTRIBUTES | READ_CONTROL,
             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS, nullptr));
@@ -301,8 +299,7 @@ LocalSubmission ConfigurationHost::SubmitLocal(bool paused, float width, std::ui
     if (impl_->pending.size() >= contracts::maximum_pending_mutations ||
         impl_->next_id == std::numeric_limits<std::uint64_t>::max())
         return {LocalSubmissionState::busy};
-    // Allocate the queue entry before submitting so allocation failure cannot
-    // orphan an accepted save without a completion ticket.
+    // Allocate the queue entry before submitting so allocation failure cannot orphan an accepted save.
     impl_->pending.push_back({impl_->next_id + 1, {}});
     try {
         impl_->pending.back().future = impl_->server->SubmitLocal(paused, width, expected_revision);
@@ -342,7 +339,6 @@ DWORD ConfigurationHost::LaunchSettings() noexcept {
     try {
         auto binding = impl_->Binding();
         error = binding.error;
-        // Native tests inspect bindings but must never launch Settings UI.
         if (!error && impl_->test_exe) error = ERROR_NOT_SUPPORTED;
         Handle image;
         if (!error) {
@@ -365,7 +361,6 @@ DWORD ConfigurationHost::LaunchSettings() noexcept {
                 nullptr, FALSE, 0, nullptr, binding.executable.parent_path().c_str(), &startup, &process))
                 error = GetLastError();
             else {
-                // Settings owns its activation/single-instance lifetime independently.
                 Handle thread(process.hThread);
                 impl_->last_settings_process = Handle(process.hProcess);
                 impl_->status.last_launch_pid = process.dwProcessId;

@@ -8,9 +8,7 @@
 
 namespace window_sweaters::colorways {
 namespace {
-// Public documentation/source reviewed 2026-10-09. These facts do not establish
-// which applications are installed, nor demonstrate their running windows.
-// Measured entries come from an installed package manifest where no public document names the AUMID.
+// Public documentation reviewed 2026-10-09; facts do not establish installation or running windows.
 constexpr std::string_view teams_package =
     "https://learn.microsoft.com/en-us/microsoftteams/teams-client-vdi-requirements-deploy#remoteapp ; "
     "https://learn.microsoft.com/en-us/troubleshoot/microsoftteams/teams-administration/include-exclude-teams-from-antivirus-dlp";
@@ -211,7 +209,7 @@ std::wstring KnownFolder(REFKNOWNFOLDERID id) {
     CoTaskMemFree(value);
     return path;
 }
-} // namespace
+}
 
 WindowsInstallRoots QueryWindowsInstallRoots() {
     return {KnownFolder(FOLDERID_ProgramFiles), KnownFolder(FOLDERID_ProgramFilesX86),
@@ -242,4 +240,4 @@ const WindowsMapping* MatchWindowsApplication(
     }
     return nullptr;
 }
-} // namespace window_sweaters::colorways
+}

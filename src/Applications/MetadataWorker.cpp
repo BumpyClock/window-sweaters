@@ -17,7 +17,7 @@ void ValidateLimits(const WorkerLimits& limits) {
         limits.cacheLifetime.count() < 0 || limits.cacheLifetime > std::chrono::minutes(5))
         throw std::invalid_argument("Invalid application metadata worker limits");
 }
-} // namespace
+}
 
 MetadataRequest::MetadataRequest(TargetToken token, std::uint64_t sequence)
     : token_(std::move(token)), sequence_(sequence) {}
@@ -255,4 +255,4 @@ void MetadataWorker::Run(std::stop_token stop) {
     }
 }
 
-} // namespace window_sweaters::applications
+}

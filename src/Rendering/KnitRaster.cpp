@@ -22,7 +22,7 @@ struct KnitRasterScratch::Impl {
         float scale = 1.f;
         std::uint64_t tick = 0;
         std::unique_ptr<WicSurface> color, relief;
-        Brush brushes[2][3]; // [stitch height][main, corner patch, cuff]
+        Brush brushes[2][3];
         std::size_t Bytes() const noexcept {
             std::size_t bytes = 2 * static_cast<std::size_t>(w) * h * 4;
             for (const auto& role : brushes) for (const auto& b : role) bytes += b.bytes;
@@ -62,7 +62,6 @@ struct KnitRasterScratch::Impl {
         slots.push_back(std::move(s));
         return *slots.back();
     }
-    // Tile bitmaps are target-bound: upload once per target and tile identity.
     ComPtr<ID2D1BitmapBrush> TileBrush(Slot& slot, int role, const knitting::Tile& tile, bool stitchHeight,
                                        float px, float py, float repeatWidth) {
         auto& cached = slot.brushes[stitchHeight][role];
@@ -142,8 +141,6 @@ ComPtr<ID2D1Geometry> Ring(ID2D1Factory* factory, const KnitFrameSpec& f) {
     Check(factory->CreateRoundedRectangleGeometry(
         D2D1::RoundedRect(D2D1::RectF(0, 0, ow, oh), f.radiusDip + band, f.radiusDip + band), &outer),
         "Create outer rounded ring");
-    // Upstream tiny-window tuck can invert the inner rectangle. Its hole is
-    // then empty, not a reflected negative-sized rectangle.
     if (f.widthDip <= 2.f * tuck || f.heightDip <= 2.f * tuck) return outer;
     float radius = std::max(0.f, f.radiusDip - tuck);
     Check(factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(
@@ -238,9 +235,6 @@ KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, i
         repeatWidth = available / std::max(1.f, std::round(available / tile.layout.width_dip));
         px = cap;
     } else if (fitted) px = 0.f;
-    // Authored CoreGraphics plates tile a fitted image at an integral device
-    // period. Keep the logical fit/caps, but match that sampler period instead
-    // of accumulating D2D's fractional-period phase drift down each edge.
     if (fitted || patch)
         repeatWidth = std::max(1.f, std::round(repeatWidth * f.deviceScale)) / f.deviceScale;
     ComPtr<ID2D1Geometry> cuffRing;
@@ -284,8 +278,6 @@ KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, i
     Check(surface.target->EndDraw(), "Render knit perimeter side");
     piece.image = surface.Read();
     Poll(control);
-    // Stitch height takes the same clips, orientation and brush transforms as the
-    // colour, so its pixel grid is screen space and the lighting needs no rotation.
     {
         auto& rt = *relief.target.Get();
         auto heightBrush = scratch.TileBrush(slot, 0, tile, true, px, py, repeatWidth);
@@ -368,7 +360,6 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     auto inset = f.physicalPaddingPixels ? f.physicalPaddingPixels : naturalInset;
     if (inset + 1u < naturalInset || inset > naturalInset + 1u)
         throw std::invalid_argument("Authoritative physical padding differs by more than one pixel");
-    // Desktop margin for the drop shadow, matching the native geometry envelope.
     const auto margin = geometry::ShadowMarginPixels(inset);
     double contentWidth = f.contentWidthPixels ? f.contentWidthPixels
         : std::ceil(static_cast<double>(f.widthDip) * f.deviceScale);
@@ -379,7 +370,6 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     float irad = std::max(0.f, f.radiusDip - f.tuckDip);
     float depth = f.bandDip + f.tuckDip + irad * (1.f - 0.7071067811865475244f) + 1.f;
     depth = std::min(depth, std::min(ow, oh) * 0.5f);
-    // Bound the complete allocation before generating a tile or any surface.
     double narrow = std::ceil(depth * f.deviceScale) + 2. + margin;
     if (2. * narrow * (width + height) > 16. * 1024. * 1024.)
         throw std::invalid_argument("Perimeter byte limit exceeded");

@@ -35,7 +35,7 @@ PhysicalRect RelativeTo(const PhysicalRect& rect, const PhysicalRect& outer) noe
             static_cast<std::int32_t>(static_cast<std::int64_t>(rect.right) - outer.left),
             static_cast<std::int32_t>(static_cast<std::int64_t>(rect.bottom) - outer.top)};
 }
-} // namespace
+}
 
 GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
                                GeometryLimits limits) noexcept {
@@ -129,15 +129,13 @@ GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
     const PhysicalRect outer{static_cast<std::int32_t>(left), static_cast<std::int32_t>(top),
         static_cast<std::int32_t>(right), static_cast<std::int32_t>(bottom)};
     const auto& area = limits.clipPolicy == ClipPolicy::WorkArea ? work : display;
-    // A visible shadow margin alone is not a decoration: the band must reach the clip.
     const PhysicalRect band{static_cast<std::int32_t>(left + margin), static_cast<std::int32_t>(top + margin),
         static_cast<std::int32_t>(right - margin), static_cast<std::int32_t>(bottom - margin)};
     const auto clip = Intersect(outer, area);
     if (!Valid(Intersect(band, area))) return HiddenReason::OutsideClip;
     if (Contains(target, clip)) return HiddenReason::NoExteriorSpace;
 
-    // Covers the renderer's corner/AA/tuck depth, including fractional far-edge rounding.
-    // All factors are bounded above before multiplication, including the byte stride.
+    // Bound every factor before multiplying, including the byte stride.
     const auto depth = static_cast<std::uint64_t>(std::ceil((style.widthDip + radius + 2.0) * scale)) + 1
         + static_cast<std::uint64_t>(margin);
     const auto bytes = 4ull * (2ull * width * std::min(depth, height)
@@ -149,4 +147,4 @@ GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
         physicalPadding, facts.dpi, facts.monitorIdentity, square, cornerDecision, bytes};
 }
 
-} // namespace window_sweaters::geometry
+}

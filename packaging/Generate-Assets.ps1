@@ -5,8 +5,7 @@ if (!$OutputDirectory) { $OutputDirectory = Join-Path $PSScriptRoot 'Assets' }
 Add-Type -AssemblyName System.Drawing
 [void][IO.Directory]::CreateDirectory($OutputDirectory)
 
-# Original yarn-ball artwork: a circular skein, curved wraps and one loose tail.
-# Fixed geometry and colours; no fonts, external images, randomness or timestamps.
+# Original yarn-ball artwork.
 $sizes = [ordered]@{
     'StoreLogo.png' = @(50, 50)
     'Square44x44Logo.png' = @(44, 44)

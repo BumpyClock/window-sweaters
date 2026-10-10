@@ -18,7 +18,6 @@ struct collection_chart {
 
 #define COUNT_OF(array) (sizeof(array) / sizeof((array)[0]))
 
-// Pinned import shape; Windows-authored designs extend the catalogue without changing it.
 _Static_assert(COUNT_OF(k_collection) == 47, "The pinned source has 47 chart repeats");
 _Static_assert(COUNT_OF(k_chart_views) == COUNT_OF(k_collection), "Every chart has a view");
 _Static_assert(COUNT_OF(k_theme_views) == 37, "The pinned source has 37 authored app themes");

@@ -64,7 +64,6 @@ SnapshotResult BuildApplicationSnapshot(const EligibilityPreferences& preference
         }
         observed.emplace(hwnd, &window);
         if (const auto* metadata = std::get_if<AppMetadata>(window.metadata.get())) {
-            // A process fact is shared; a verified window property is not.
             if (metadata->Provenance() != MetadataProvenance::WindowApplicationId) {
                 const auto known = processMetadata.find(process);
                 if (known != processMetadata.end() &&
@@ -102,4 +101,4 @@ SnapshotResult BuildApplicationSnapshot(const EligibilityPreferences& preference
     return snapshot;
 }
 
-} // namespace window_sweaters::applications
+}

@@ -367,7 +367,6 @@ TrackerConfig MakeTrackerConfig(const Options& options) {
     }
     config.excludedClasses = {HostClass, L"WindowSweaters.Overlay", L"WindowSweaters.Settings",
         L"WindowSweaters.Settings.Activation"};
-    // External helper PIDs can be reused. Classify their complete lifetimes at allocation instead.
     config.excludedPids = {GetCurrentProcessId()};
     return config;
 }
@@ -750,7 +749,6 @@ private:
             !AppendMenuW(menu, MF_STRING, QuitCommand, L"Quit")) { DestroyMenu(menu); return; }
         POINT position{};
         GetCursorPos(&position);
-        // The tray gesture authorizes activation of the menu host, never the decoration.
         SetForegroundWindow(window_);
         const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
             position.x, position.y, 0, window_, nullptr);
@@ -868,8 +866,6 @@ private:
     }
 
     HRESULT FinishInitialPublication() {
-        // Initial tracker batches can encounter a GPU fault and arm recovery.
-        // The revoked device has no composition object to wait on.
         if (!recovery_.CanRender(recovery_.Generation())) return S_FALSE;
         if (!graphics_.Composition()) return E_UNEXPECTED;
         const auto generation = recovery_.Generation();
@@ -935,8 +931,6 @@ private:
                     (void)hwnd;
                     entry->placementPending = entry->state.requestedVisible && !entry->state.excluded && !committed_.paused;
                 }
-                // One bounded receiver pass, followed by existing tracker maintenance.
-                // Each target still revalidates lifetime/config/policy/geometry.
                 RetryPlacement();
                 if (stopped_ || update.generation != recovery_.Generation()) return;
             } else if (action == RecoveryAction::NotifyUnavailable) {
@@ -1023,8 +1017,7 @@ private:
         } else {
             observation = visibility_->Observe(token, overlay);
         }
-        // Public desktop COM may pump WM_CLOSE and remove this entry. Neither the
-        // Entry reference nor native authority may survive that reentrancy.
+        // Desktop COM may pump WM_CLOSE and remove this entry; keep no Entry reference or native authority across it.
         if (stopped_ || !(entry = Find(target))) return false;
         if (!EligibleNow(*entry)) { Hide(*entry); RetireRenderRetry(*entry); return false; }
         policy = VisibilityPolicy();
@@ -1060,8 +1053,6 @@ private:
             }
             ++counters_.creates;
             if (contract_) contract_->recreateOverlay = false;
-            // Retirement above rejects old results; the next submission coalesces
-            // same-target work without ending its still-current tracking lifetime.
             entry->placementPending = true;
             probeDirty_ = true;
             return false;
@@ -1106,7 +1097,6 @@ private:
             if (VisibilityAllows(target) && !shown) {
                 entry = Find(target);
                 if (!entry) continue;
-                // Nothing pumps between this accepted probe and reactivation; Prepare still validates after it.
                 const HRESULT result = PlaceAndShow(target, entry->visibilityToken);
                 if (FAILED(result)) {
                     if (auto remaining = Find(target)) Hide(*remaining);
@@ -1357,8 +1347,6 @@ private:
             entry.state.target.generation, entry.iconEpoch, recovery_.Generation()};
     }
 
-    // Both tiles came from the same immutable configuration and owner; only the
-    // automatic proposal changed. Compare the effective inputs before retiring pixels.
     static bool SameAutomaticAppearance(const window_sweaters::knitting::TileSpec& a,
         const window_sweaters::knitting::TileSpec& b) {
         if (a.baseArgb != b.baseArgb || a.stitch != b.stitch || a.material != b.material ||
@@ -1421,7 +1409,6 @@ private:
             if (!budget || entry->iconPending || entry->iconPalette ||
                 entry->iconAttempts >= 4 || GetTickCount64() < entry->nextIconRetry) continue;
             const auto& owner = std::get<applications::AppMetadata>(*entry->metadata);
-            // By App never needs to sample an authored owner. Shared Zigzag does.
             if (committed_.design_selection == contracts::DesignSelection::by_app &&
                 colorways::MatchWindowsApplication(owner.Identity(), installRoots_)) continue;
             auto input = integration::MakeIconInput(owner.Identity(), owner.ExecutableSource());
@@ -1537,7 +1524,6 @@ private:
         const auto rect = window_sweaters::host::TrackedRect(input.physicalTargetBounds);
         const RECT outer = NativeRect(input.physicalOuterBounds);
         const auto& previous = entry.overlay.Bounds();
-        // Moving within a monitor is a SetWindowPos/clip update, never a GPU upload.
         if (previous.left == outer.left && previous.top == outer.top &&
             entry.render.prepared->clipRelativeToOuter ==
                 window_sweaters::host::TrackedRect(input.clipRelativeToOuter)) return S_OK;
@@ -1551,7 +1537,6 @@ private:
         return S_OK;
     }
 
-    // probed: the caller's accepted probe with no pumping boundary since; reused only while still current.
     HRESULT Prepare(TargetId target, std::optional<window_sweaters::geometry::RenderInput>* matched = nullptr,
         const std::optional<window_sweaters::visibility::ProbeToken>& probed = {}) {
         auto current = Find(target);
@@ -1621,8 +1606,6 @@ private:
         } else {
             entry.render.pending.reset();
             entry.render.prepared.reset();
-            // A full host-wide queue is not an invalid appearance. Keep a bounded
-            // exact-input gate and retry when a consumed completion frees capacity.
             if (result == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA)) {
                 entry.render.retry = request;
                 entry.render.failed.reset();
@@ -1717,7 +1700,6 @@ private:
             ++counters_.uploads;
             ++counters_.draws;
             ++counters_.geometryUpdates;
-            // Upload neither pumps nor ends probe authority: the post-probe validation and geometry above show it.
             result = ShowCurrent(request.token.target, publication);
             if (FAILED(result)) {
                 if (auto remaining = Find(request.token.target)) Hide(*remaining);
@@ -1779,13 +1761,11 @@ private:
             return current->appearance && std::holds_alternative<AppearanceFailure>(current->appearance->result)
                 ? S_FALSE : S_OK;
         }
-        // Preparation's probe, post-pump validation and geometry read authorize this move too.
         std::optional<window_sweaters::geometry::RenderInput> matched;
         const HRESULT result = Prepare(identity, &matched, probed);
         return result == S_OK ? ShowCurrent(identity, matched) : result;
     }
 
-    // Caller owns the probe, post-probe validation and geometry read; no pumping boundary may follow them.
     HRESULT ShowCurrent(TargetId identity, const std::optional<window_sweaters::geometry::RenderInput>& fresh) {
         auto current = Find(identity);
         if (stopped_ || !current) return S_FALSE;
@@ -1815,7 +1795,6 @@ private:
             result = entry.overlay.Show();
             if (FAILED(result)) { Hide(entry); return result; }
             ++counters_.shows;
-            // Showing can change our position in the band. Never move the target.
             result = entry.overlay.ReorderBelow(target);
             if (FAILED(result)) {
                 Hide(entry);
@@ -1834,7 +1813,7 @@ private:
 
     HRESULT ApplyBatch(const ActionBatch& actions) {
         bool capacityFreed{};
-        bool publish{}; // One application publication per batch, also before an early failure.
+        bool publish{};
         HRESULT failure = S_OK;
         for (auto action : actions) {
             if (stopped_ && action.kind != ActionKind::Remove) continue;
@@ -1856,8 +1835,6 @@ private:
                     ++counters_.staleActions;
                     continue;
                 }
-                // Retain a resource-free entry if preparation loses a race to suppression.
-                // A later settled Show must still have a lifetime to recover.
                 if (!Validate(action)) { ++counters_.staleActions; continue; }
                 entry = Find(action.target);
                 if (!entry) { ++counters_.staleActions; continue; }
@@ -1906,7 +1883,6 @@ private:
                     const HRESULT result = PlaceAndShow(action.target);
                     if (FAILED(result)) { failure = result; break; }
                 } else if (entry->state.requestedVisible && !committed_.paused && entry->render.prepared) {
-                    // MovePrepared reads geometry once, after its pumping probe; unavailable geometry hides and retries.
                     const HRESULT result = MovePrepared(action.target);
                     if (FAILED(result)) { failure = result; break; }
                     if (result == S_FALSE && !stopped_) {
@@ -1916,12 +1892,11 @@ private:
             } else {
                 if (action.kind==ActionKind::Show) publish=true;
                 if (!Validate(action)) {
-                    // The old work token is rejected. Retry current immutable input, not its result.
                     if (auto pending = Find(action.target)) pending->placementPending = true;
                     ++counters_.staleActions;
                     continue;
                 }
-                entry = Find(action.target); // Revalidation can remove or replace a lifetime.
+                entry = Find(action.target);
                 if (!entry) { ++counters_.staleActions; continue; }
                 const HRESULT result = PlaceAndShow(action.target);
                 if (FAILED(result)) { failure = result; break; }
@@ -1963,8 +1938,7 @@ private:
         recoveryRetry_.reset();
         renderRetries_.clear();
         visibilityOrder_.clear();
-        // Stop invalidates COM authority immediately. Keep the object alive until
-        // Host destruction, after any reentrant desktop operation has unwound.
+        // Stop invalidates COM authority; keep the object alive until Host destruction.
         if (visibility_) visibility_->Stop();
         if (window_) { KillTimer(window_, ProbeTimer); KillTimer(window_, ConfigurationTimer); KillTimer(window_, RecoveryTimer); }
         for (auto& [hwnd, entry] : entries_) {
@@ -2021,8 +1995,6 @@ private:
     window_sweaters::contracts::Configuration committed_;
     window_sweaters::knitting::TileSpec appearance_;
     const window_sweaters::colorways::WindowsInstallRoots installRoots_;
-    // Queue revision advances only for shared appearance changes. Target epochs
-    // retire app-policy work without canceling another application's preparation.
     std::uint64_t renderRevision_{};
     window_sweaters::applications::CompletionGate metadataGate_;
     std::unique_ptr<window_sweaters::applications::MetadataWorker> metadataWorker_;
@@ -2120,8 +2092,6 @@ void Host::RunConsumerContracts() {
         invalidSelection.eligibility==Eligibility::Destroyed &&
         invalidSelection.failure==std::string_view("native_query"),
         "Exact fixture selector reports native invalid-window stage without creating a target");
-    // A ready slot held until the receiver consumes it forces a real >32 pending
-    // burst, without replacing or blocking the production renderer with a stub.
     host.queueLimits_.maxReady = 1;
     require(SUCCEEDED(window_sweaters::rendering::RenderQueue::Create(
         host.window_, host.queueLimits_, host.queue_)) &&
@@ -2258,8 +2228,6 @@ void Host::RunConsumerContracts() {
     require(host.queue_->Status().renderRequests == idle.renderRequests,
         "Consumed retry gates leave no static polling or regeneration");
 
-    // Exercise the last retry losing visibility inside Validate, when there
-    // will be no future ready message to revisit its former FIFO entry.
     auto& last = *host.entries_.at(10001);
     last.render.retry = last.render.prepared;
     last.render.prepared.reset();
@@ -3111,7 +3079,7 @@ void Host::RunConsumerContracts() {
         require(host.Prepare(host.entries_.at(10001)->state.target) == S_FALSE &&
             host.entries_.at(10001)->render.pending.has_value(), "Submit actual worker input before a pumped drain");
     };
-    auto drainUntilProbe = [&] { // One ready message at a time: later completions must not mask the pumped one.
+    auto drainUntilProbe = [&] {
         const auto deadline = GetTickCount64() + 30000;
         while (contract.duringVisibilityProbe && GetTickCount64() < deadline) {
             MsgWaitForMultipleObjectsEx(0, nullptr, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -3356,9 +3324,6 @@ void Host::RunConsumerContracts() {
     std::puts("PASS: actual pumping Prepare/Move/Show/Retry consumers reject removed lifetimes, shutdown, obsolete configuration/size and stale placement");
     std::puts("PASS: injected shared GPU recovery recreates actual D3D/DComp, rejects late generations, preserves target/config/CPU cache, and bounds failure/Stop (injection, not a driver reset)");
 
-    // The last test runs real NativeVisibility against a fake public manager.
-    // Its query pumps Shutdown, so the Host must retain the adapter object until
-    // both the native operation and this outer consumer scope have unwound.
     host.visibility_ = std::make_unique<NativeVisibility>(host.window_, desktopManager);
     const auto started = host.visibility_->Start();
     require(SUCCEEDED(started.notifications) && SUCCEEDED(started.virtualDesktop),

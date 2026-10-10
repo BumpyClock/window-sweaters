@@ -177,7 +177,6 @@ void RenderPublicationTokens() {
     const auto translated = geometry::BuildRenderInput(moved, {16, 8});
     const auto& b = std::get<geometry::RenderInput>(translated);
     Check(MatchesRenderInput(request, token, 7, 1, b), "Move and monitor clipping reuse prepared pixels");
-    // 20px band padding plus a 10px drop-shadow margin per side.
     Check(b.physicalOuterBounds.left == -50 && b.physicalOuterBounds.top == -60 &&
         b.physicalOuterBounds.Width() == 461 && b.physicalOuterBounds.Height() == 361,
         "GPU placement uses current B, not queued A, with authoritative physical padding");
@@ -397,4 +396,4 @@ int RunHostContractTests() {
     return 0;
 }
 
-} // namespace window_sweaters::host
+}

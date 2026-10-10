@@ -33,7 +33,7 @@ ExecutablePathQuery QueryImage(HANDLE process) {
         return MetadataUnavailable{UnavailableReason::InvalidMetadata, QueryStage::ExecutablePath};
     return ExecutablePath{std::wstring(buffer.data(), size)};
 }
-} // namespace
+}
 
 std::optional<MetadataUnavailable> ValidateProcessLifetime(HANDLE process, const ProcessInstance& expected) {
     const DWORD pid = GetProcessId(process);
@@ -69,4 +69,4 @@ MetadataResult QueryProcessMetadata(const ProcessInstance& expected) {
     return QueryProcessMetadata(process, expected);
 }
 
-} // namespace window_sweaters::applications
+}

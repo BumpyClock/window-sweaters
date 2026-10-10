@@ -12,7 +12,6 @@ inline constexpr std::size_t GeometryReprobeLimit = 512;
 inline constexpr std::size_t GeometryReprobeBudget = 32;
 
 // DWM may still report the previous frame when a LOCATIONCHANGE hint is drained.
-// Finite delayed owner-thread queries cover that lag without turning movement into rendering.
 class GeometryReprobe final {
 public:
     bool Request(TargetId target, Milliseconds now) {
@@ -61,4 +60,4 @@ private:
     std::deque<Retry> retries_;
 };
 
-} // namespace window_sweaters::tracking
+}

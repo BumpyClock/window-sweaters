@@ -29,7 +29,7 @@ bool ExcludedClass(const std::wstring& name, const Policy& policy) {
         != policy.excludedClasses.end();
 }
 
-} // namespace
+}
 
 Eligibility Evaluate(const Observation& observation, const Policy& policy) {
     if (std::holds_alternative<DestroyedWindow>(observation)) {
@@ -151,8 +151,6 @@ ActionBatch TrackingModel::Observe(const Observation& observation, Dirty dirty, 
             return actions;
         }
     }
-    // A CREATE newer than our first observation also detects same-process/same-class HWND reuse.
-    // Duplicate or delayed CREATE events predating this generation cannot replace it.
     if (found != targets_.end()
         && (found->second.snapshot.identity != snapshot.identity
             || (createdAt && *createdAt > found->second.bornAt && *createdAt <= now))) {
@@ -195,8 +193,6 @@ ActionBatch TrackingModel::Observe(const Observation& observation, Dirty dirty, 
         entry.lastSizeChange.reset();
     }
 
-    // MOVESIZESTART/END are hints only. A stable sample after a quiet interval ends resizing,
-    // even when END is lost; END alone cannot prematurely expose a still-changing size.
     const bool mayShow = eligibility == Eligibility::Eligible && !entry.lastSizeChange;
     if (!mayShow) {
         Hide(entry, actions);
@@ -298,4 +294,4 @@ bool TrackingModel::SealFixtureIdentity(const WindowIdentity& identity) {
     return true;
 }
 
-} // namespace window_sweaters::tracking
+}

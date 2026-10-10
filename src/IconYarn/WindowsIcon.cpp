@@ -96,7 +96,6 @@ bool LocalPath(std::wstring_view path) noexcept {
 
 thread_local std::uint64_t bytesRead = 0;
 
-// Bounded range reads from the validated handle; no whole-file buffer.
 class Source final {
 public:
     Source(HANDLE file, HANDLE event, std::uint64_t size, std::stop_token stop,
@@ -157,7 +156,6 @@ FileResult OpenExecutable(const std::wstring& path, std::stop_token stop,
     const wchar_t root[]{path[0], L':', L'\\', 0};
     if (GetDriveTypeW(root) != DRIVE_FIXED)
         return Fallback{FallbackReason::UnsupportedSource};
-    // Reject intermediate junctions/symlinks before opening, not just the final file.
     for (std::size_t end = path.find(L'\\', 3); end != std::wstring::npos;
          end = path.find(L'\\', end + 1)) {
         const DWORD attributes = GetFileAttributesW(path.substr(0, end).c_str());
@@ -180,7 +178,6 @@ FileResult OpenExecutable(const std::wstring& path, std::stop_token stop,
         return Fallback{FallbackReason::IconUnavailable, GetLastError()};
     if (attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))
         return Fallback{FallbackReason::UnsupportedSource};
-    // Parent attributes can change between query/open. Verify the opened handle's final location.
     std::array<wchar_t, 4097> finalPath{};
     const DWORD characters = GetFinalPathNameByHandleW(file.Get(), finalPath.data(),
         static_cast<DWORD>(finalPath.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -345,7 +342,7 @@ bool BoundedImage(std::span<const std::uint8_t> bytes) noexcept {
     return bytes.size() >= minimum;
 }
 
-} // namespace
+}
 
 PixelResult PixelsFromOwnedIcon(HICON icon) {
     if (!icon) return Fallback{FallbackReason::IconUnavailable};
@@ -383,8 +380,7 @@ PixelResult PixelsFromOwnedIcon(HICON icon) {
         raw.resize(static_cast<std::size_t>(width) * imageHeight * 4);
         status = image->CopyPixels(nullptr, width * 4, static_cast<UINT>(raw.size()), raw.data());
     }
-    // WIC's HICON bridge labels premultiplied GDI icon bytes as BGRA. Reinterpret
-    // those bytes as PBGRA before scaling/conversion, or alpha is multiplied twice.
+    // WIC labels premultiplied HICON bytes as BGRA; reinterpret as PBGRA or alpha is applied twice.
     if (SUCCEEDED(status)) status = factory->CreateBitmapFromMemory(width, imageHeight,
         GUID_WICPixelFormat32bppPBGRA, width * 4, static_cast<UINT>(raw.size()),
         raw.data(), &premultiplied);
@@ -400,8 +396,7 @@ PixelResult PixelsFromOwnedIcon(HICON icon) {
         static_cast<UINT>(sizeof pixels), reinterpret_cast<BYTE*>(pixels.data()));
     if (FAILED(status))
         return Fallback{FallbackReason::DecodeFailed, static_cast<std::uint32_t>(status)};
-    // A byte swap preserves exact premultiplication; WIC's RGBA converter can
-    // unpremultiply/re-premultiply and lose one byte at partial-alpha boundaries.
+    // Byte swap, not WIC RGBA conversion: WIC unpremultiplies and re-premultiplies, losing a byte at partial alpha.
     for (auto& pixel : pixels) std::swap(pixel.r, pixel.b);
     return pixels;
 }
@@ -453,4 +448,4 @@ PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
     return SamplePalette(std::get<IconPixels>(pixels));
 }
 
-} // namespace window_sweaters::icon_yarn
+}

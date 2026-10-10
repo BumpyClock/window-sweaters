@@ -98,13 +98,11 @@ Transition TargetVisibility::ApplyPolicy(const PolicySnapshot& policy) noexcept 
     }
     policyRevision_ = policy.Revision();
     ++sequence_;
-    // Even an enabling change needs a fresh observation before old work can publish.
     const auto reason = policy.MayWork() ? Suppression::QueryUncertain : policy.Reason();
     return Suppress(reason);
 }
 
 ProbeToken TargetVisibility::BeginProbe(const PolicySnapshot& policy) noexcept {
-    // ApplyPolicy's hide effect must be consumed by the host before beginning work.
     if (policyRevision_ != policy.Revision()) return {target_, policy.Revision(), 0};
     ++sequence_;
     pendingAssociation_.reset();
@@ -176,4 +174,4 @@ bool PollGate::Due(Milliseconds now, const PolicySnapshot& policy) noexcept {
     return true;
 }
 
-} // namespace window_sweaters::visibility
+}

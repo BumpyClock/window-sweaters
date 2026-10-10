@@ -87,8 +87,6 @@ private:
     contracts::ApplicationsSnapshot controls_;
     std::uint64_t generation_{};
 };
-// Application observation polling has its own lease/worker, never an appearance
-// debounce or own-chain rebase. Every command uses the exact displayed CAS base.
 class AppsSession {
 public:
     AppsSession(Options options,std::function<void(AppsConnectionState)> publish,SessionTransport transport={});

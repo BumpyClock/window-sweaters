@@ -144,7 +144,6 @@ private:
     std::optional<DesktopId> pendingAssociation_;
 };
 
-// Host uses a round-robin batch of at most PollBudget targets; never a redraw timer.
 class PollGate final {
 public:
     bool Due(Milliseconds now, const PolicySnapshot& policy) noexcept;
@@ -154,4 +153,4 @@ private:
     std::uint64_t policyRevision_{};
 };
 
-} // namespace window_sweaters::visibility
+}

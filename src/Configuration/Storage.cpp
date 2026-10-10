@@ -87,7 +87,6 @@ LoadedConfiguration Storage::Load() const noexcept {
                 result.state=StorageState::corrupt; return result;
             }
             // Only disk schema3 migrates protocol4. Network clients must speak protocol5.
-            // Preserve the original bytes until the next acknowledged atomic save.
             if (schema==3) {
                 if (Get(bytes,12+4,2)!=4 || Get(bytes,12+64,4)!=3 ||
                     Get(bytes,12+88,4)>static_cast<unsigned>(contracts::DesignSelection::by_app)) {
@@ -116,8 +115,7 @@ LoadedConfiguration Storage::Load() const noexcept {
             Get(bytes,expected_size-4,4)!=Crc(std::span(bytes).first(expected_size-4))) {
             result.state=StorageState::corrupt; return result;
         }
-        // Migration is in memory only. The original file survives until a validated
-        // mutation completes the same atomic replacement as every other save.
+        // Migration is in memory only; the original file survives until a validated save.
         result.configuration.schema=contracts::configuration_schema;
         result.configuration.revision=Get(bytes,8,8);
         result.configuration.paused=Get(bytes,16,4)==1;

@@ -41,8 +41,7 @@ CornerQuery QueryCornerFacts(HWND window) noexcept {
     if (facts.regionType == ERROR) {
         const auto error = GetLastError();
         if (error != ERROR_SUCCESS) return QueryFailure{QueryStatus::RegionFailed, error};
-        // ERROR without an explicit error is also the documented no-region result.
-        // This is a policy observation, not proof of a rectangular pixel outline.
+        // ERROR without an explicit error is the documented no-region result.
     } else if (facts.regionType == NULLREGION || facts.regionType == SIMPLEREGION
                || facts.regionType == COMPLEXREGION) {
         facts.regionBounds = Physical(region);
@@ -68,15 +67,14 @@ CornerEligibility Eligibility(const NativeCornerFacts& facts) noexcept {
         return CornerEligibility::StandardFrame;
     return CornerEligibility::HintOnly;
 }
-} // namespace
+}
 
 WindowQuery QueryWindowGeometry(HWND window) noexcept {
     if (!window || !IsWindow(window)) return QueryFailure{QueryStatus::InvalidWindow};
     if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
                                      DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
         return QueryFailure{QueryStatus::CallerNotPerMonitorV2};
-    // GetDpiForWindow reports 96/system DPI for unaware/system-aware windows, not
-    // their monitor's actual scale. Do not silently use that as physical render DPI.
+    // GetDpiForWindow reports system DPI for unaware/system-aware windows, not monitor scale.
     const auto awareness = GetWindowDpiAwarenessContext(window);
     if (!awareness) return QueryFailure{QueryStatus::InvalidWindow};
     if (GetAwarenessFromDpiAwarenessContext(awareness) != DPI_AWARENESS_PER_MONITOR_AWARE)
@@ -165,7 +163,6 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     WindowFacts facts{target, Physical(info.rcMonitor), Physical(info.rcWork), dpi,
         reinterpret_cast<std::uintptr_t>(monitor), placement.showCmd == SW_SHOWMAXIMIZED, preference,
         Eligibility(std::get<NativeCornerFacts>(cornerFacts))};
-    // Validate native coordinates before they leave the adapter.
     const auto checked = BuildRenderInput(facts);
     if (std::holds_alternative<GeometryFailure>(checked)) {
         const auto error = std::get<GeometryFailure>(checked);
@@ -176,4 +173,4 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     return facts;
 }
 
-} // namespace window_sweaters::geometry
+}

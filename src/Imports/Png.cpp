@@ -138,8 +138,7 @@ std::vector<std::uint8_t> PixelOnlyPng(std::span<const std::uint8_t> encoded) {
     for (std::size_t offset = 8; offset < encoded.size();) {
         const auto length = BigEndian(encoded.subspan(offset, 4));
         const std::string_view type(reinterpret_cast<const char*>(encoded.data() + offset + 4), 4);
-        // Do not expose compressed text/profiles/EXIF to WIC metadata handlers.
-        // Pixel decoding needs only these CRC-validated image chunks.
+        // Keep only image chunks; WIC metadata handlers would otherwise parse text, profile and EXIF data.
         if (type == "IHDR" || type == "PLTE" || type == "IDAT" || type == "IEND" || type == "tRNS")
             bytes.insert(bytes.end(), encoded.begin() + offset, encoded.begin() + offset + length + 12);
         offset += static_cast<std::size_t>(length) + 12;
@@ -184,8 +183,7 @@ bool LocalDrive(wchar_t letter) {
     const wchar_t drive[]{letter, L':', L'\0'};
     std::array<wchar_t, 32768> target{};
     if (!QueryDosDeviceW(drive, target.data(), static_cast<DWORD>(target.size()))) return false;
-    // Reject DOS-device indirection (including SUBST), not merely remote drive
-    // labels, before opening any path. Final handle location is checked too.
+    // Reject DOS-device mappings (SUBST) before opening; drive type alone does not catch them.
     constexpr std::wstring_view prefix = L"\\Device\\HarddiskVolume";
     const std::wstring_view mapping(target.data());
     if (!mapping.starts_with(prefix)) return false;
@@ -249,7 +247,7 @@ bool SameFile(const Snapshot& a, const Snapshot& b) {
         a.basic.LastWriteTime.QuadPart == b.basic.LastWriteTime.QuadPart &&
         a.basic.ChangeTime.QuadPart == b.basic.ChangeTime.QuadPart;
 }
-} // namespace
+}
 
 namespace detail {
 Result<std::string> HashContent(std::uint32_t width, std::uint32_t height,
@@ -276,7 +274,7 @@ Result<std::string> HashContent(std::uint32_t width, std::uint32_t height,
         for (unsigned shift = 0; shift != 32; shift += 8)
             canonical.push_back(static_cast<std::uint8_t>(value >> shift));
     };
-    append(1); // Normalized-chart hash schema, fixed little-endian integers.
+    append(1);
     append(width); append(height);
     append(material.flags); append(material.corner_argb); append(material.cuff_argb);
     for (const auto cell : cells) append(cell);
@@ -294,7 +292,7 @@ Result<std::string> HashContent(std::uint32_t width, std::uint32_t height,
     }
     return result;
 }
-} // namespace detail
+}
 
 Result<DecodedChart> DecodePng(std::span<const std::uint8_t> encoded) {
     return detail::CheckedAllocation<DecodedChart>([&]() -> Result<DecodedChart> {
@@ -368,8 +366,7 @@ Result<DecodedChart> DecodePng(std::span<const std::uint8_t> encoded) {
         ComPtr<IWICFormatConverter> converter;
         hr = factory->CreateFormatConverter(&converter);
         if (FAILED(hr)) return DecodeError(hr, "WIC pixel converter creation failed");
-        // Straight RGBA, no dither, quantization, premultiplication, or profile
-        // transform: user RGB must not change when alpha is made opaque.
+        // Straight RGBA: WIC dither, premultiply or profile conversion would alter user RGB.
         hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
             WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom);
         if (FAILED(hr)) return DecodeError(hr, "WIC RGBA conversion failed");
@@ -485,4 +482,4 @@ Result<FileImport> ImportPngFile(std::wstring_view path) {
     });
 }
 
-} // namespace window_sweaters::imports
+}

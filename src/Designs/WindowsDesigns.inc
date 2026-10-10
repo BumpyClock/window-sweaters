@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Authored for the Windows port; not imported. ImportCatalogue.py never reads or writes this file.
+// Authored for the Windows port; not imported.
 // Same chart contract as AuthoredCharts.inc: top-down rows, '.' is base yarn, a..f index the yarn.
-// To add a design: append its rows/yarn, a chart view, a theme view, and a WindowsThemeCoverage entry.
-// Preview: python scripts/preview-designs.py [theme-id ...]
 
 static const char* const k_edge_rows[] = {
     "......aaa.........aaa...",
@@ -212,7 +210,6 @@ static const ChartView k_windows_chart_views[] = {
 
 #undef WINDOWS_CHART
 
-// upstream_match is NULL: these themes have no macOS source metadata.
 static const ThemeView k_windows_theme_views[] = {
     { "microsoft-edge", "Microsoft Edge", NULL, "atelier-edge", 0xff1d5b93u,
       "Ocean blue, foam white, sea-glass teal, aqua, seafoam", "Foam-capped breakers curling over a seafoam line" },

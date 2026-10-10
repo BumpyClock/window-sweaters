@@ -9,7 +9,6 @@
 
 namespace window_sweaters::rendering {
 
-// The host UI thread owns one device set; overlays release their references first.
 class GraphicsDevice final {
 public:
     GraphicsDevice() = default;
@@ -52,7 +51,6 @@ public:
 
     HWND Window() const noexcept { return window_; }
     const RECT& Bounds() const noexcept { return bounds_; }
-    // DComp commits issued by this overlay; moves with an unchanged clip add none.
     std::uint32_t CommitCount() const noexcept { return commits_; }
 
 private:
@@ -62,7 +60,7 @@ private:
 
     HWND window_{};
     RECT bounds_{};
-    RECT clip_{}; // clip last committed on visual_
+    RECT clip_{};
     std::uint32_t commits_{};
     Microsoft::WRL::ComPtr<IDCompositionDevice> composition_;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> context_;

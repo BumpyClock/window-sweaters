@@ -13,9 +13,6 @@ constexpr HRESULT arithmeticOverflow = HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERF
 }
 
 bool GraphicsRecovery::IsRecoverable(HRESULT result) noexcept {
-    // DEVICE_HUNG is also a debugging signal, not permission for indefinite retry.
-    // https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/dxgi-error
-    // https://learn.microsoft.com/en-us/windows/win32/learnwin32/drawing-with-direct2d
     switch (result) {
     case D2DERR_RECREATE_TARGET:
     case DXGI_ERROR_DEVICE_REMOVED:
@@ -65,7 +62,6 @@ RecoveryUpdate GraphicsRecovery::BeginFault(HRESULT result, std::uint64_t observ
 
     lastError_ = result;
     state_ = RecoveryState::Recovering;
-    // Saturation is terminal: state revokes authority even when no higher token exists.
     if (generation_ == std::numeric_limits<std::uint64_t>::max()) {
         auto update = Update();
         update.Add(RecoveryAction::HideCurrent);
@@ -126,4 +122,4 @@ RecoveryUpdate GraphicsRecovery::Stop() noexcept {
     return update;
 }
 
-} // namespace window_sweaters::rendering
+}

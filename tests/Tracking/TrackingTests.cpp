@@ -735,7 +735,7 @@ void NativeSelectedTracker() {
     std::cout << "PASS: real cross-process hidden tracker seals suppressed selections before Create, avoids unrelated enumeration and permanently retires destroyed authority\n";
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     try {

@@ -15,8 +15,7 @@ struct MutationResult {
     contracts::Configuration configuration{};
     DWORD error=ERROR_SUCCESS;
 };
-// Caller must hold cross-session OS write ownership for the canonical storage directory
-// and user for the entire lifetime. A session-only singleton is not sufficient.
+// Caller must hold cross-session OS write ownership for the entire lifetime; a session-only singleton is insufficient.
 class ConfigurationServer {
 public:
     explicit ConfigurationServer(ServerOptions options);
@@ -29,7 +28,6 @@ public:
     std::uint64_t Revision() const;
     std::uint64_t EligibilityRevision(applications::AppIdentity const& identity) const;
     void PublishApplications(std::vector<applications::RunningApplicationWindow> windows);
-    // Diagnostic: application snapshot rebuilds (publication or configuration revision change).
     std::uint64_t ApplicationBuilds() const;
     std::future<MutationResult> SubmitLocal(bool paused, float width, std::uint64_t expected_revision);
     std::future<MutationResult> SubmitLocal(contracts::Configuration const& expected);

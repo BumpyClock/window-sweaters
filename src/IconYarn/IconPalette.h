@@ -51,10 +51,9 @@ PaletteResult SamplePalette(std::span<const PremultipliedRgba8> pixels) noexcept
 std::uint32_t Soften(std::uint32_t opaqueArgb) noexcept;
 std::uint32_t ZigzagContrast(std::uint32_t opaqueArgb) noexcept;
 
-// The caller supplies a persistent, canonical, kind-prefixed UTF-8 identity, never a PID,
-// title, display name or executable basename. FNV is deliberately case-sensitive.
+// Persistent canonical kind-prefixed UTF-8 identity only, never PID, title, display name or executable basename; FNV is case-sensitive.
 enum class Motif { Zigzag, Picnic, Twinkle };
 Motif StableMotif(std::string_view canonicalAppIdentity) noexcept;
 std::string_view MotifName(Motif motif) noexcept;
 
-} // namespace window_sweaters::icon_yarn
+}

@@ -25,11 +25,10 @@ std::size_t InputBytes(const IconInput& input) noexcept {
 }
 
 std::size_t RequestBytes(const WorkRequest& request) noexcept {
-    // Conservative charge includes vector growth/node overhead and shared ownership.
     return InputBytes(*request.Input()) + 2 * sizeof(Completion) + 128;
 }
 
-} // namespace
+}
 
 WorkRequest::WorkRequest(WorkToken token, std::uint64_t sequence,
                          std::shared_ptr<const IconInput> input)
@@ -43,7 +42,6 @@ std::optional<WorkRequest> CompletionGate::Begin(WorkToken token, IconInput inpu
     if (!Valid(token, input) || nextSequence_ == std::numeric_limits<std::uint64_t>::max() ||
         (!pending_.contains(token.targetId) && pending_.size() >= maxTargets_))
         return std::nullopt;
-    // Do not retain arbitrarily over-reserved caller strings.
     IconInput bounded{std::string(input.canonicalAppIdentity.data(), input.canonicalAppIdentity.size()),
                       input.iconRevision,
                       std::wstring(input.executablePath.data(), input.executablePath.size())};
@@ -255,4 +253,4 @@ void PreparationWorker::Stop() {
     statistics_.pendingBytes = statistics_.subscribers = statistics_.cacheBytes = 0;
 }
 
-} // namespace window_sweaters::icon_yarn
+}

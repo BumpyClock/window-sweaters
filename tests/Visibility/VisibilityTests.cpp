@@ -461,7 +461,6 @@ void NativeFakeQueriesNeverMoveUserDesktops() {
     SetDisplayOn(native);
     DWORD sessionId{};
     ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
-    // A locked or noninteractive test runner remains conservatively suppressed.
     if (native.Snapshot().MayWork()) {
         const auto target = NativeTarget(targetWindow.window);
         const ProbeToken token{target, native.Snapshot().Revision(), 1};

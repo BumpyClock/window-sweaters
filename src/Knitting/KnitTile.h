@@ -24,8 +24,7 @@ struct ChartAppearance {
     bool operator==(const ChartAppearance&) const = default;
 };
 
-// Owns the cells independently of catalogue/import-cache lifetime. Alpha below
-// 128 is the base-yarn sentinel; every other cell retains its original RGB.
+// Alpha below 128 is the base-yarn sentinel; every other cell retains its original RGB.
 class Chart {
 public:
     Chart(std::string semanticId, std::uint64_t contentRevision,
@@ -49,16 +48,14 @@ struct TileSpec {
     std::uint32_t baseArgb = 0xff4e8098u;
     Stitch stitch = Stitch::Stockinette;
     Material material = Material::Plain;
-    // Legacy invalidation token, never a catalogue index.
     std::uint64_t chartRevision = 0;
-    float deviceScale = 1.f; // Supported logical-to-physical range: 1/8x..8x.
+    float deviceScale = 1.f;
     int rasterScale = 0;
     Sampling sampling = Sampling::Linear;
     std::shared_ptr<const Chart> chart;
 };
 
 // Physical pixels, top-down rows, little-endian premultiplied BGRA.
-// Tile pixels are opaque; logical +y is the inward direction of an edge.
 struct RasterImage {
     std::uint32_t width = 0, height = 0, stride = 0;
     std::vector<std::uint32_t> pixels;
@@ -68,10 +65,8 @@ struct RasterImage {
 struct Tile {
     TileSpec spec;
     ws_knit_layout layout{};
-    // image is unlit albedo (occlusion only); height is a same-size periodic
-    // greyscale stitch height (blue channel) for screen-space lighting.
+    // height is a same-size periodic greyscale stitch height in the blue channel.
     RasterImage image, height;
-    // Process-unique immutable identity (renderer resource caches key on it).
     std::uint64_t serial = 0;
     std::size_t ByteSize() const noexcept {
         return image.ByteSize() + height.ByteSize() + (spec.chart ? spec.chart->ByteSize() : 0);
@@ -96,8 +91,6 @@ private:
     std::uint64_t hits_ = 0;
 };
 
-// Throws invalid_argument for invalid/unsupported inputs, system_error for
-// D2D/WIC failures. Callers need a COM apartment; no target HWND/device is used.
 TileSpec NormalizeTileSpec(TileSpec spec);
 void SavePng(const RasterImage& image, const wchar_t* path);
 

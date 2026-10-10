@@ -30,8 +30,6 @@ struct AppItemEdit {
     AppItemChange change;
     std::size_t index,destination;
 };
-// Native controls stay keyed by AppIdentity; only membership/order changes
-// touch the items collection. Metadata, toggles and acknowledgments do not.
 inline std::vector<AppItemEdit> ReconcileApplicationItems(std::vector<applications::AppIdentity> current,
     std::span<contracts::ApplicationRow const> desired) {
     std::vector<AppItemEdit> edits;

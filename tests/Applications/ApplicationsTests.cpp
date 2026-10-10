@@ -843,7 +843,7 @@ void NativeTests() {
         worker.Statistics().cacheHits == 1, "destroyed hidden root cannot reuse production cached process identity");
     Check(worker.Stop().empty(), "native worker COM and query lifetime shut down with no unreported work");
 }
-} // namespace
+}
 
 int main(int argc, char* argv[]) {
     if (argc == 2 && std::strcmp(argv[1], "--owner-lifetime-fixture") == 0) return EXIT_SUCCESS;

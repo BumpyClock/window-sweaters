@@ -94,7 +94,7 @@ Result<std::monostate> Validate(const ImportCatalogue& catalogue) {
     }
     return std::monostate{};
 }
-} // namespace
+}
 
 struct CatalogueAccess {
     static Result<std::uint64_t> AllocateRevision(ImportCatalogue& candidate) {
@@ -134,8 +134,6 @@ struct CatalogueAccess {
             const auto name = replace->new_name ? *replace->new_name : chart->Name();
             if (!detail::ValidChartName(name))
                 return Error{ErrorCode::InvalidName, "Invalid replacement chart name"};
-            // A rename may not bypass known-source material retention by
-            // turning an unrelated chart into a replacement of another source.
             const auto* named_source = BuiltIn(name);
             if (named_source && chart->Name() != name &&
                 chart->SourceMaterial() != InitialMaterial(name))
@@ -224,4 +222,4 @@ Result<ImportCatalogue> RestoreCatalogue(const StoredCatalogue& stored) {
     });
 }
 
-} // namespace window_sweaters::imports
+}

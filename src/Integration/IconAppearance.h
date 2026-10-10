@@ -9,8 +9,6 @@
 
 namespace window_sweaters::integration {
 
-// Kind is part of the salt. Executable equality is Windows ordinal-insensitive;
-// package AUMIDs are exact. Neither a source path nor a process lifetime is a salt.
 inline std::variant<icon_yarn::IconInput, icon_yarn::Fallback> MakeIconInput(
     const applications::AppIdentity& identity, std::wstring_view executableSource,
     std::uint64_t iconRevision = 0) {
@@ -67,4 +65,4 @@ inline std::shared_ptr<const knitting::Chart> MakeGeneratedChart(
         literal->width, literal->height, std::move(cells), literal->appearance);
 }
 
-} // namespace window_sweaters::integration
+}

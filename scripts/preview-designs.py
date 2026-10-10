@@ -19,7 +19,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DESIGNS = ROOT / 'src' / 'Designs'
 HEX = r'0x([0-9a-fA-F]{8})u'
 
-# 3x5 glyphs, rows top-down, for strip labels.
 FONT = dict(zip('abcdefghijklmnopqrstuvwxyz0123456789-', (
     '010101111101101', '110101110101110', '011100100100011', '110101101101110', '111100110100111',
     '111100110100100', '011100101101011', '101101111101101', '111010010010111', '001001001101010',
@@ -32,7 +31,6 @@ FONT = dict(zip('abcdefghijklmnopqrstuvwxyz0123456789-', (
 
 
 def load_catalogue():
-    """Return (charts, themes): charts maps name -> (rows, yarn); themes is [(id, chart, base, windows)]."""
     charts = {}
     authored = (DESIGNS / 'AuthoredCharts.inc').read_text(encoding='utf-8')
     for m in re.finditer(r'\{ "([\w-]+)", \{(.*?)\},\s*\{(.*?)\} \}', authored, re.S):
@@ -60,7 +58,6 @@ def rgb(argb):
 
 
 def render(entries, path, cells=96, px=7):
-    """entries: [(label, rows, yarn, base_argb)]. Writes an RGB PNG."""
     width = cells * px
     canvas = []
     paper, ink = (250, 248, 243), (60, 60, 60)
@@ -68,7 +65,7 @@ def render(entries, path, cells=96, px=7):
         unused = sorted({ch for row in rows for ch in row if ch != '.' and ord(ch) - 97 >= len(yarn)})
         if unused:
             sys.exit(f'{label}: cells {", ".join(unused)} have no yarn')
-        for y in range(5):  # label line
+        for y in range(5):
             line = [paper] * width
             for i, ch in enumerate(label.lower()[:width // 8]):
                 glyph = FONT.get(ch, '0' * 15)

@@ -54,8 +54,6 @@ struct TileBudget {
     std::size_t retained{}, pixels{}, cells{};
 };
 
-// The core's public layout function covers uncharted tiles. Chart repeats use a
-// conservative rounding bound, not a second renderer/cache implementation.
 TileBudget BoundTile(knitting::TileSpec spec) {
     spec = knitting::NormalizeTileSpec(std::move(spec));
     auto material = spec.material == knitting::Material::Raised
@@ -78,8 +76,6 @@ TileBudget BoundTile(knitting::TileSpec spec) {
         const float nr = rows * std::max(1.f, std::ceil(8.f / (step * rows)));
         if (!std::isfinite(nc) || !std::isfinite(nr) || nc > 4096.f || nr > 4096.f)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
-        // +1 covers lround and float rounding; scale 4 is the largest automatic
-        // choice, so reservations remain safe near the core's step threshold.
         const double wd = std::max(8., std::ceil(static_cast<double>(sw * nc)) + 1.);
         const double hd = std::max(8., std::ceil(static_cast<double>(step * nr)) + 1.);
         const int scale = spec.rasterScale ? spec.rasterScale : 4;
@@ -92,15 +88,10 @@ TileBudget BoundTile(knitting::TileSpec spec) {
                 * (static_cast<std::uint64_t>(nr) + 4u);
             if (count > 256u * 1024u)
                 throw RenderError{RenderErrorKind::ResourceQuota, Quota};
-            // MakeTile reserves the validated complete count before appending.
-            // This bounds peak scratch, with no overlapping growth allocations.
-            // v145 x64 large vectors add up to 47 alignment/bookkeeping bytes:
-            // 39 in Release, 47 in Debug (including its allocation sentinel).
             cells = count * sizeof(knitting::detail::YarnCell) + 47u;
         }
     }
     const auto pixels = static_cast<std::size_t>(width * height * 4u);
-    // Albedo plus an equal-size stitch height image.
     return {sizeof(knitting::Tile) + 2 * pixels + (spec.chart ? spec.chart->ByteSize() : 0),
             pixels, static_cast<std::size_t>(cells)};
 }
@@ -173,9 +164,6 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
         }
         const auto outputBytes = static_cast<std::size_t>(output);
         b.readyBytes = errorBytes + sizeof(KnitPerimeter) + outputBytes + tile.retained;
-        // Four output vectors, one side's live colour and stitch-height WIC bitmaps
-        // plus the height read-back, uploaded tile copies (albedo and height) and
-        // the core's eight simultaneous tile-generation pixel buffers.
         b.transientBytes = b.requestBytes + sizeof(KnitPerimeter) + outputBytes
             + static_cast<std::size_t>(3. * narrow * std::max(w, h) * 4.)
             + 2 * retainedTiles + 8 * largestPixels + largestCells;
@@ -387,8 +375,6 @@ struct RenderQueue::Impl {
                         status.scratchTargets = counts.targets;
                         status.scratchUploads = counts.uploads;
                         if (aborted || !Current(job)) { ++status.staleCancelled; continue; }
-                        // The reservation precedes all rendering. Never publish a
-                        // success whose actual retained charge exceeds that bound.
                         auto bytes = ReadyBytes(result);
                         if (bytes > job.budget.readyBytes || bytes > limits.maxReadyBytes - status.readyBytes) {
                             result.outcome = RenderError{RenderErrorKind::ResourceQuota, Quota};
@@ -438,8 +424,7 @@ struct RenderQueue::Impl {
             status.notificationPending = false;
             status.active = status.transientBytes = status.residentCacheBytes = 0;
         }
-        // PeekMessage can dispatch sent messages. Do not hold the queue mutex
-        // across that owner-thread reentrancy boundary.
+        // PeekMessage can dispatch sent messages; do not hold the queue mutex across it.
         if (GetCurrentThreadId() == owner && closingReceiver) {
             MSG message{};
             while (PeekMessageW(&message, closingReceiver, RenderQueue::ReadyMessage,
@@ -647,4 +632,4 @@ RenderQueueStatus RenderQueue::Status() const noexcept {
     std::lock_guard lock(impl_->mutex);
     return impl_->status;
 }
-} // namespace window_sweaters::rendering
+}

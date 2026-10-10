@@ -52,7 +52,6 @@ void GraphicsDevice::Destroy() noexcept {
 LRESULT CALLBACK Overlay::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
     switch (message) {
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
-    // This is defensive only: cross-process click-through comes from LAYERED|TRANSPARENT.
     case WM_NCHITTEST: return HTTRANSPARENT;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
@@ -81,7 +80,6 @@ HRESULT Overlay::Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& gra
         WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP, OverlayClass, L"Window Sweaters Border",
         WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, instance, nullptr);
     if (!window_) return LastError();
-    // DComp supplies per-pixel alpha. No redirected GDI bitmap or UpdateLayeredWindow is mixed in.
     if (!SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA)) return LastError();
 
     composition_ = graphics.Composition();
@@ -147,8 +145,6 @@ HRESULT Overlay::UploadPiece(const KnitRasterPiece& piece, const RECT& exclusion
         context_->BeginDraw();
         context_->PushAxisAlignedClip(extent, D2D1_ANTIALIAS_MODE_ALIASED);
         context_->Clear(D2D1::ColorF(0, 0, 0, 0));
-        // Retain the source's inward tuck beneath the separately validated target;
-        // the central client interior remains transparent.
         context_->PushLayer(D2D1::LayerParameters1(extent, mask.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE), nullptr);
         context_->DrawBitmap(source.Get(), extent, 1.0f, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
         context_->PopLayer();
@@ -157,8 +153,6 @@ HRESULT Overlay::UploadPiece(const KnitRasterPiece& piece, const RECT& exclusion
         context_->SetTarget(nullptr);
     }
     if (SUCCEEDED(result) && uploadedPixels) {
-        // Hidden native fixtures read the real masked GPU pixels. Production
-        // leaves this null and allocates no staging bitmap or CPU perimeter.
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> staging;
         const auto readProperties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);

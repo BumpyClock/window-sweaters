@@ -53,8 +53,6 @@ RecoveryAttempt RequireInitialization(const RecoveryUpdate& update, std::uint64_
     return *update.initialization;
 }
 
-// Native executable, fake Initialize HRESULTs, real production policy. No HWND,
-// GPU resource recreation, actual driver reset, or substitute Host state model.
 struct NativeFaultFixture {
     GraphicsRecovery recovery;
     std::vector<HRESULT> initializeResults;

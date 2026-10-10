@@ -134,8 +134,6 @@ struct Session::Impl {
                     std::lock_guard lock(mutex);
                     if (desired && std::chrono::steady_clock::now()>=due) {
                         auto command=*desired; command.request.request_id=++request_id;
-                        // Each record compacts a contiguous proven own chain from an original
-                        // displayed base. Refreshing a snapshot never advances these chains.
                         for (auto& commit:own_commits) {
                             if (command.request.server==commit.server && command.request.client_lease==commit.lease &&
                                 command.displayed==commit.before) {
@@ -343,8 +341,6 @@ struct AppsSession::Impl {
                     if (result.status==Status::wrong_instance || result.status==Status::client_expired) {
                         last_snapshot={}; Discard(); view.connection.connected=false;
                     }
-                    // Keep the displayed list coherent with the typed terminal
-                    // reply until a new host-owned observation arrives.
                     view.snapshot.configuration_revision=result.configuration.revision;
                     view.snapshot.default_enabled=result.configuration.eligibility.DefaultEnabled();
                     for (auto& row:view.snapshot.applications) {

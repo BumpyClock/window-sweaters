@@ -56,7 +56,7 @@ for ($offset = $debugOffset; $debugSize -and $offset -lt $debugOffset + $debugSi
     }
 }
 if ($changed) {
-    # Ordinary EXEs do not require a PE checksum; clear the now-stale value.
+    # Zeroing is valid: ordinary EXEs do not require a PE checksum.
     [Array]::Clear($bytes, $optional + 64, 4)
     [IO.File]::WriteAllBytes($fullPath, $bytes)
 }

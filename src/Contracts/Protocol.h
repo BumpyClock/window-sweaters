@@ -77,8 +77,7 @@ inline std::vector<std::byte> Encode(Message const& value) {
     put(108, value.configuration.design_id.size(), 4);
     for (std::size_t i=0; i<value.configuration.design_id.size(); ++i)
         bytes[112+i]=std::byte(static_cast<unsigned char>(value.configuration.design_id[i]));
-    // Tagged sections are the only extension boundary. Unknown tags are rejected,
-    // not interpreted as future rules/imports or silently discarded.
+    // Tagged sections are the only extension boundary; unknown tags are rejected.
     auto section=[&](std::uint32_t tag,payload::Writer const& writer) {
         if (writer.bytes.size()+8>maximum_payload_bytes-bytes.size())
             throw std::length_error("Frame exceeds aggregate bound");

@@ -56,7 +56,6 @@ struct ConfigurationServer::Impl {
     Configuration committed{};
     std::vector<applications::RunningApplicationWindow> application_windows;
     ApplicationsSnapshot application_snapshot;
-    // The snapshot is a pure function of committed and application_windows; publication rebuilds eagerly.
     std::optional<std::uint64_t> application_revision;
     std::uint64_t application_builds{};
     std::map<applications::AppIdentity,std::uint64_t> eligibility_revisions;
@@ -179,8 +178,7 @@ struct ConfigurationServer::Impl {
                 request.operation!=Operation::eligibility))
             return {Status::invalid,current.configuration};
         if (request.server!=server) return {Status::wrong_instance,current.configuration};
-        // Only an explicit snapshot handshake can admit a client. Retired tokens never
-        // become new sessions, so bounded retirement cannot revive an old mutation.
+        // Only an explicit snapshot handshake admits a client; retired tokens never revive.
         std::unique_lock lease_lock(mutex);
         bool local=request.client==local_client && request.client_lease==0;
         ClientLease* lease=local?nullptr:FindLease(request);
@@ -319,7 +317,6 @@ void ConfigurationServer::Start() {
         impl_->listener=std::thread([state=impl_.get(),pipe=std::move(pipe)]() mutable {state->Listen(std::move(pipe));});
     } catch (...) {
         impl_->stopping=true; impl_->wake.notify_all();
-        // Start failures are exceptional; the destructor joins a worker that was created.
         throw;
     }
 }

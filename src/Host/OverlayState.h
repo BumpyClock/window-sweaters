@@ -48,4 +48,4 @@ struct OverlayState {
 
 int RunHostContractTests();
 
-} // namespace window_sweaters::host
+}

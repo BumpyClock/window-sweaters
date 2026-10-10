@@ -18,7 +18,6 @@ using namespace window_sweaters::designs;
 
 extern "C" int catalogue_c_smoke(void);
 
-// Pinned upstream shape only; the full catalogue size is derived, never hardcoded.
 static_assert(std::size(expected_charts) == 47);
 static_assert(std::size(expected_themes) == 37);
 constexpr std::size_t pinned_alias_count = 44;

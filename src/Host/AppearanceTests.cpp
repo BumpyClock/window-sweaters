@@ -7,8 +7,6 @@
 #include <windows.h>
 #include <objbase.h>
 
-// The isolated adapter project supplies resolver dependencies; the existing
-// Host test target remains buildable until its runtime/project ownership handoff.
 #ifdef WS_HOST_BY_APP_ADAPTER_TESTS
 namespace {
 using namespace window_sweaters;
@@ -134,8 +132,6 @@ void KnownOwners() {
         {false, L"C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE", "microsoft-outlook", 0xff176bb7},
         {true, L"MSTeams_8wekyb3d8bbwe!MSTeams", "microsoft-teams", 0xff9283c1},
     };
-    // Additional catalogue themes are integration inputs, not prerequisites
-    // for the original 37-design baseline or its verified Windows mappings.
     const Fixture additionalFixtures[] = {
         {false, L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "microsoft-edge", 0xff1d5b93},
         {false, L"C:\\Users\\Fixture\\AppData\\Local\\Programs\\Zed\\Zed.exe", "zed", 0xff1d2026},

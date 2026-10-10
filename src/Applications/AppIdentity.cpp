@@ -67,7 +67,6 @@ std::optional<std::wstring> NormalizePath(std::wstring_view input) {
         if (component.empty() || component == L"." || component == L".." ||
             component.back() == L'.' || component.back() == L' ' ||
             component.find_first_of(L"<>:\"|?*") != std::wstring_view::npos) return std::nullopt;
-        // UNC server/share labels are not filesystem leaf components.
         if ((drive || components >= 2) && ReservedDosName(component)) return std::nullopt;
         ++components;
         if (end == std::wstring::npos) break;
@@ -82,7 +81,7 @@ std::optional<std::wstring> NormalizePath(std::wstring_view input) {
 std::wstring Basename(const AppIdentity& path) {
     return path.Key().substr(path.Key().find_last_of(L'\\') + 1);
 }
-} // namespace
+}
 
 AppIdentity::AppIdentity(IdentityKind kind, std::wstring key) : kind_(kind), key_(std::move(key)) {}
 
@@ -174,4 +173,4 @@ MetadataResult ResolveMetadata(const PackagedIdentityQuery& packaged, const Exec
         alias, DisplayNameProvenance::ExecutableBasename, alias);
 }
 
-} // namespace window_sweaters::applications
+}

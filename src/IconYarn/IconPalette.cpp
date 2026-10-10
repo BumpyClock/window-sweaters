@@ -3,8 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Palette mathematics adapted from saragordic/window-sweaters src/autoyarn.m,
-// a49dff52483dafdbe27f972bd271cd28d37cef1c. GPL-3.0; see repository LICENSE/NOTICE.md.
+// Adapted from saragordic/window-sweaters src/autoyarn.m @ a49dff52483dafdbe27f972bd271cd28d37cef1c (GPL-3.0).
 namespace window_sweaters::icon_yarn {
 namespace {
 
@@ -40,7 +39,6 @@ std::uint32_t FromHsl(Hsl value) noexcept {
         const double c = t < 1.0 / 6 ? p + (q - p) * 6 * t
                        : t < .5 ? q
                        : t < 2.0 / 3 ? p + (q - p) * (2.0 / 3 - t) * 6 : p;
-        // Upstream truncates, rather than rounds, each byte.
         color |= static_cast<std::uint32_t>(c * 255) << (16 - i * 8);
     }
     return color;
@@ -51,7 +49,7 @@ std::uint32_t BinColor(unsigned bin) noexcept {
                        | (((bin >> 4) & 15) * 17 << 8) | ((bin & 15) * 17);
 }
 
-} // namespace
+}
 
 std::uint32_t Soften(std::uint32_t opaqueArgb) noexcept {
     Hsl value = ToHsl(opaqueArgb);
@@ -145,4 +143,4 @@ std::string_view MotifName(Motif motif) noexcept {
     return {};
 }
 
-} // namespace window_sweaters::icon_yarn
+}

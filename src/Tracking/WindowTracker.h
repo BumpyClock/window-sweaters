@@ -55,12 +55,10 @@ struct NativeQueryFailure {
     HRESULT result{S_OK};
 };
 
-// Per-thread counts of Query's costly native calls; lets tests prove prefiltered candidates stay cheap.
 struct NativeQueryCounts { unsigned processOpens{}, dwmReads{}; };
 NativeQueryCounts& QueryCounts() noexcept;
 
 // Receiver HWND, all calls, hook installation/removal and destruction belong to one UI thread.
-// No overlay ownership and no worker callbacks live here.
 class WindowTracker final {
 public:
     explicit WindowTracker(HWND receiver, TrackerConfig config = {});
@@ -119,4 +117,4 @@ private:
     bool reconciliationRequested_{};
 };
 
-} // namespace window_sweaters::tracking
+}

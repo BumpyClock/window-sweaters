@@ -1,5 +1,9 @@
 # Agent notes
 
+## Comments
+
+Write no comments or docstrings by default. Add one only when the code cannot express a constraint and its absence would plausibly cause a bug, such as a required Win32 call order or a lifetime invariant. Keep `SPDX-License-Identifier` lines, licence and provenance headers, and the "do not edit by hand" markers in imported `src/Designs/*.inc` files.
+
 ## Chart designs
 
 Use this section when you add or change a chart in `src/Designs/WindowsDesigns.inc`. Do not hand-edit the imported `AuthoredCharts.inc`, `ChartViews.inc` or `ThemeViews.inc`.

@@ -2,7 +2,6 @@
 #include "..\..\src\Configuration\Pipe.h"
 #include <atomic>
 #include <stdexcept>
-// Single-instance pipe that never answers; with busy=true a held client makes every other open fail with ERROR_PIPE_BUSY.
 struct StallPipe {
     std::wstring name;
     window_sweaters::configuration::Handle server,held;

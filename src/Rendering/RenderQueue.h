@@ -15,8 +15,6 @@
 
 namespace window_sweaters::rendering {
 
-// Submit copies this value into shared, const storage. No live host/model/device
-// references cross the worker boundary; placement does not affect the tile key.
 struct RenderRequest {
     tracking::WorkToken token;
     std::uint64_t configRevision{};
@@ -45,11 +43,7 @@ struct RenderQueueLimits {
     std::size_t maxPerimeterBytes{64u * 1024u * 1024u};
     std::size_t maxTransientBytes{128u * 1024u * 1024u};
     std::size_t cacheBytes{8u * 1024u * 1024u};
-    // Retained worker-owned D2D/WIC targets and uploaded tile bitmaps, reported
-    // as Status.scratchBytes. Not part of any transient reservation.
     std::size_t scratchBytes{16u * 1024u * 1024u};
-    // Bounded lifetime high-water ledger. Exhaustion rejects new HWND keys,
-    // rather than forgetting tombstones and resurrecting cancelled work.
     std::size_t maxTargetKeys{4096};
 };
 
@@ -60,8 +54,6 @@ struct RenderQueueStatus {
     std::size_t pending{}, maxPending{}, pendingBytes{}, maxPendingBytes{};
     std::size_t ready{}, maxReady{}, readyBytes{}, maxReadyBytes{};
     std::size_t active{};
-    // Reservations bound pixel buffers, tile scratch, retained tiles and input.
-    // They exclude opaque D2D/WIC allocator overhead, not a measured heap total.
     std::size_t transientBytes{}, maxTransientBytes{}, residentCacheBytes{}, scratchBytes{};
     std::uint64_t scratchFactories{}, scratchTargets{}, scratchUploads{};
     std::uint64_t renderRequests{}, acceptedRequests{}, renderPreparations{};
@@ -71,14 +63,10 @@ struct RenderQueueStatus {
 };
 
 #ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
-// Gates only surround the real production renderer; there is no substitute
-// preparation implementation. Gates must release when stop is requested.
 struct RenderQueueTestHooks {
     std::function<void(std::stop_token)> beforeFirstDequeue;
     std::function<void(const RenderRequest&, std::stop_token)> beforeRender;
     std::function<void(const RenderRequest&, std::stop_token)> afterRender;
-    // Runs on the worker at each stop poll inside the renderer (1-based count),
-    // before the current-ness check, so a test can supersede at a chosen stage.
     std::function<void(const RenderRequest&, std::uint32_t poll, std::stop_token)> duringRender;
 };
 #endif
@@ -96,34 +84,13 @@ public:
     RenderQueue(const RenderQueue&) = delete;
     RenderQueue& operator=(const RenderQueue&) = delete;
 
-    // One queue per host, one MTA worker and one worker-owned TileCache.
-    // Create, Start and all mutations/drains are receiver-owner-thread only.
-    // Configuration revision zero is the valid cold-start/default snapshot;
-    // deviceGeneration must be nonzero.
     HRESULT Start(std::uint64_t configRevision, std::uint64_t deviceGeneration) noexcept;
-    // S_OK opens/replaces a host pending gate; S_FALSE/FAILED opens none.
-    // Every accepted current job completes, with sleeping ready backpressure.
-    // Coalescing retires earlier same-target work. Cancel/Invalidate/Stop and
-    // terminal Status.error explicitly retire affected host gates; the host
-    // must retire those gates itself, not wait for a cancelled completion.
-    // S_FALSE rejects stale/cancelled tokens. Quota failures are explicit HRESULTs.
     HRESULT Submit(const RenderRequest& request) noexcept;
-    // Successful cancellation also seals an as-yet-unsubmitted newer lifetime.
-    // Old PID/start/generation cancellation cannot retire a reused HWND.
     HRESULT Cancel(const tracking::TargetId& target) noexcept;
-    // Revisions must advance monotonically; old pending/active/ready work dies.
     HRESULT Invalidate(std::uint64_t configRevision, std::uint64_t deviceGeneration) noexcept;
     bool OwnsNotification(WPARAM cookie, LPARAM reserved) const noexcept;
-    // Call from the consumed ReadyMessage only. No worker invokes host callbacks.
-    // Before attachment the host MUST revalidate tracking/model acceptance,
-    // config/device generations and current geometry; movement never submits.
     HRESULT Drain(WPARAM cookie, LPARAM reserved, std::vector<RenderReady>& results) noexcept;
-    // Receiver must remain alive until Stop returns. Cancels queued jobs, joins
-    // the finite in-flight render, then closes/removes reserved notifications.
-    // A stopped queue cannot be restarted. Drain output is now host-owned.
     HRESULT Stop() noexcept;
-    // Thread-safe. A failed PostMessage faults the queue, releases undeliverable
-    // results, and is visible here/at Submit/Drain; no hidden retry or idle timer.
     RenderQueueStatus Status() const noexcept;
 
 private:
@@ -132,4 +99,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace window_sweaters::rendering
+}

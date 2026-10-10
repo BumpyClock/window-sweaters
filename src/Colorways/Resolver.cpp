@@ -79,7 +79,7 @@ std::optional<ResolutionError> ValidatePattern(const PatternChoice& pattern) {
 }
 
 bool Opaque(std::uint32_t color) noexcept { return (color >> 24) == 0xff; }
-} // namespace
+}
 
 std::span<const std::uint32_t> BasketColors(Basket basket) noexcept {
     switch (basket) {
@@ -107,8 +107,7 @@ std::uint32_t StableHash(std::wstring_view key) noexcept {
             const auto low = static_cast<std::uint32_t>(key[i + 1]);
             if (low >= 0xdc00 && low <= 0xdfff) units = 2;
         }
-        // Non-linguistic invariant casing is context independent. Map a complete
-        // scalar to avoid splitting surrogate pairs or allocating a full path copy.
+        // Map complete scalars; never split surrogate pairs.
         std::array<wchar_t, 6> uppercase{};
         const int mapped = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE,
             key.data() + i, static_cast<int>(units), uppercase.data(),
@@ -173,7 +172,6 @@ ResolutionResult ResolveAppearance(
             if (rule.application == *application) { personal = &rule; break; }
         }
     }
-    // A sample without identity cannot be a completed, bound app proposal.
     const auto* sample = application && automatic ? &*automatic : nullptr;
     auto global = settings.global_pattern;
     if (global) {
@@ -225,4 +223,4 @@ ResolutionResult ResolveAppearance(
     return ResolvedAppearance{*color->color, contrast, *pattern->pattern, color->source, pattern->source, policy,
         theme ? std::optional<std::string_view>(theme->id) : std::nullopt, mapping};
 }
-} // namespace window_sweaters::colorways
+}

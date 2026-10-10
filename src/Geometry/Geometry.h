@@ -52,7 +52,6 @@ enum class QueryStatus : std::uint8_t {
 
 struct QueryFailure {
     QueryStatus status;
-    // Raw HRESULT for DWM errors; raw GetLastError for Win32 errors; zero if absent.
     std::int64_t nativeError{};
     bool operator==(const QueryFailure&) const = default;
 };
@@ -82,9 +81,7 @@ enum class GeometryFailure : std::uint8_t {
     DimensionLimit, AllocationLimit, InvalidCornerEligibility
 };
 
-// Transparent desktop margin outside the band that holds the knit's soft drop
-// shadow: half the integer band padding, rounded up. The renderer's natural
-// shadow reach (offset plus blur) stays within half a band.
+// Renderer shadow reach (offset plus blur) must stay within this margin.
 constexpr std::uint32_t ShadowMarginPixels(std::uint32_t paddingPixels) noexcept {
     return paddingPixels / 2u + paddingPixels % 2u;
 }
@@ -93,29 +90,23 @@ struct RenderInput {
     const PhysicalRect physicalTargetBounds;
     const PhysicalRect physicalOuterBounds;
     const PhysicalRect clipRelativeToOuter;
-    // Subtract the content shape using radiusDip * deviceScale, not a square
-    // rectangle for rounded targets; retain the exterior corner/tuck below content.
+    // Subtract content using radiusDip * deviceScale; a square cut is wrong for rounded targets.
     const PhysicalRect targetRelativeToOuter;
     const double widthDip;
-    // Target/content radius; rounded outer radius is radiusDip + widthDip.
     const double radiusDip;
     const double deviceScale;
-    // Leading gutter plus shadow margin: render the continuous ring at this DIP offset.
     const double frameOriginDip;
-    // Band padding only. The outer bounds add ShadowMarginPixels(padding) per side.
     const std::uint32_t physicalPaddingPixels;
     const std::uint32_t dpi;
     const std::uintptr_t monitorIdentity;
     const bool squareCorners;
     const CornerDecision cornerDecision;
-    // Upper bound for four retained BGRA perimeter pieces, not a full-window image.
     const std::uint64_t perimeterBytesUpperBound;
 };
 
 using GeometryResult = std::variant<RenderInput, HiddenReason, GeometryFailure, QueryFailure>;
 
-// Pure; preserves query failures as failures, never as guessed renderable geometry.
 GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style = {},
                                GeometryLimits limits = {}) noexcept;
 
-} // namespace window_sweaters::geometry
+}

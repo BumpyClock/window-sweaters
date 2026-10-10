@@ -133,7 +133,6 @@ int ws_knit_emit_plain(const ws_knit_gauge* g, const ws_knit_layout* l,
             float purl = (i & 1) ? sw * 0.16f : 0.f;
             float start = -2 * l->row_step;
             w.move(w.context, x + purl, start);
-            /* A collinear quadratic is the same straight rib as CGPath's line. */
             w.quadratic(w.context, x + purl, (start + h) * 0.5f, x + purl, h);
         }
         return 1;
@@ -167,8 +166,6 @@ int ws_knit_blur(float* a, int w, int h, float* tmp) {
     return 1;
 }
 
-/* lit=0 bakes albedo only: occlusion and fibre, with the light direction left to
- * the screen-space pass (flat normal, so no stitch faces a tile-space light). */
 static int shade_tile(const ws_knit_gauge* g, int raised, int scale, int lit,
                       const float* hf, const uint32_t* flat, int w, int h, uint32_t* out) {
     if (!ws_knit_validate_gauge(g) || !hf || !flat || !out || scale <= 0 || scale > 8
@@ -213,7 +210,6 @@ int ws_knit_albedo(const ws_knit_gauge* g, int raised, int scale,
     return shade_tile(g, raised, scale, 0, hf, flat, w, h, out);
 }
 
-/* Signed distance to a rounded rectangle at (x0, y0) and its outward normal. */
 static float rounded_box(float px, float py, float x0, float y0, float w, float h,
                          float r, float* gx, float* gy) {
     float hx = w * 0.5f, hy = h * 0.5f, cx = px - x0 - hx, cy = py - y0 - hy;
@@ -229,8 +225,6 @@ static float rounded_box(float px, float py, float x0, float y0, float w, float 
     return qy - r;
 }
 
-/* Stitch height at (x, y) from a premultiplied grey map; pixels the map does not
- * cover (alpha 0) or beyond the piece take the centre height, so edges add no slope. */
 static float stitch_height(const uint32_t* m, int w, int h, int x, int y, float centre) {
     if (x < 0 || y < 0 || x >= w || y >= h) return centre;
     uint32_t q = m[(size_t)y * w + x], a = q >> 24;
@@ -246,8 +240,6 @@ int ws_knit_shade_ring_relief(const ws_knit_ring* k, float ox, float oy, float s
         || !isfinite(k->outer_radius) || !isfinite(k->inner_radius)
         || k->width <= 0.f || k->height <= 0.f
         || k->outer_radius < 0.f || k->inner_radius < 0.f) return 0;
-    /* Frontal key light from the upper left: both tube flanks fall off, the
-     * lower/right flanks more, matching a window lit from above. */
     const float lx = -0.26f, ly = -0.42f, lz = 0.87f;
     const float ambient = 0.56f, tilt = 1.05f, crease = 0.22f;
     int hole = k->inset > 0.f && k->width > 2.f * k->inset && k->height > 2.f * k->inset;
@@ -263,14 +255,11 @@ int ws_knit_shade_ring_relief(const ws_knit_ring* k, float ox, float oy, float s
                                           k->height - 2.f * k->inset, k->inner_radius, &ix, &iy)
                             : half - out;
             out = fmaxf(0.f, out); in = fmaxf(0.f, in);
-            /* u: -1 at the outer silhouette, +1 where yarn tucks under the window. */
             float u = 2.f * out / fmaxf(1e-4f, out + in) - 1.f;
             float bend = u < 0.f ? -powf(-u, 1.6f) : powf(u, 1.6f);
             float s = sinf(bend * tilt), c = cosf(bend * tilt);
-            /* The outer flank faces away from the hole (+g), the inner one toward it. */
             float slope = 0.f;
             if (hm) {
-                /* Stitch slope in piece pixels (already screen space) tilts the tube normal. */
                 float h0 = stitch_height(hm, w, h, x, y, 0.f);
                 if (hm[(size_t)y * w + x] >> 24) {
                     float k2 = relief * scale * 0.6f;
@@ -314,8 +303,6 @@ int ws_knit_fray_ring(const ws_knit_ring* k, int side, float depth, float pitch,
             float fx = ox + (x + 0.5f) / scale, fy = oy + (y + 0.5f) / scale, gx, gy;
             float out = -rounded_box(fx, fy, 0.f, 0.f, k->width, k->height, k->outer_radius, &gx, &gy);
             if (out >= depth + 1.f / scale) continue;
-            /* Stitches bulge between columns and part at column joins; loose
-             * fibre roughens the outermost half. */
             float along = side == 0 ? fx : side == 1 ? fy : side == 2 ? k->width - fx : k->height - fy;
             float bump = 0.5f - 0.5f * cosf(tau * (along - phase) / pitch);
             uint32_t grain = ws_knit_mix((uint32_t)(int)floorf(fx * scale) * 73856093u
@@ -339,8 +326,6 @@ int ws_knit_ring_drop_shadow(const ws_knit_ring* k, int side, float band,
         || !isfinite(scale) || scale <= 0.f
         || !isfinite(k->width) || !isfinite(k->height) || !isfinite(k->outer_radius)
         || k->width <= 0.f || k->height <= 0.f || k->outer_radius < 0.f) return 0;
-    /* Cast away from the upper-left ring light; the furthest tail (offset plus
-     * spread) stays within half a band, the margin the overlay reserves. */
     const float peak = 0.3f, dx = 0.07f * band, dy = 0.12f * band;
     const float core = 0.1f * band, spread = 0.36f * band;
     for (int y = 0; y < h; ++y)
@@ -348,20 +333,16 @@ int ws_knit_ring_drop_shadow(const ws_knit_ring* k, int side, float band,
             uint32_t px = p[(size_t)y * w + x], a = px >> 24;
             if (a == 255u) continue;
             float fx = ox + (x + 0.5f) / scale, fy = oy + (y + 0.5f) / scale, gx, gy;
-            /* Mitre partition: the nearest outer edge owns a pixel (ties go to the
-             * earlier side), so overlapping piece rectangles never double it. */
             float edge[4] = {fy, k->width - fx, k->height - fy, fx};
             int owner = 0;
             for (int i = 1; i < 4; ++i) if (edge[i] < edge[owner]) owner = i;
             if (owner != side) continue;
-            /* Only the outer half of the band and beyond: never the window hole. */
             if (rounded_box(fx, fy, 0.f, 0.f, k->width, k->height, k->outer_radius, &gx, &gy)
                 < -0.5f * band) continue;
             float d = rounded_box(fx - dx, fy - dy, 0.f, 0.f, k->width, k->height,
                                   k->outer_radius, &gx, &gy);
             float t = fminf(1.f, fmaxf(0.f, (d + core) / (core + spread)));
             float s = 1.f - t * t * (3.f - 2.f * t);
-            /* Black shadow under premultiplied yarn: only alpha grows. */
             uint32_t add = (uint32_t)(peak * s * s * (float)(255u - a) + 0.5f);
             if (add) p[(size_t)y * w + x] = (px & 0x00ffffffu) | ((a + add) << 24);
         }
