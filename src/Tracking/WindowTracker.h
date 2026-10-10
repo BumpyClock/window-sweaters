@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 #include "TrackingModel.h"
+#include "GeometryReprobe.h"
 
 #include <deque>
 #include <unordered_map>
@@ -67,11 +68,14 @@ private:
     struct Pending {
         Dirty dirty{Dirty::None};
         std::optional<Milliseconds> createdAt;
+        bool geometryHint{};
+        std::optional<TargetId> reprobeTarget;
     };
     static void CALLBACK WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
                                      LONG objectId, LONG childId, DWORD threadId, DWORD eventTime);
     void OnWinEvent(DWORD event, HWND hwnd, LONG objectId, LONG childId, DWORD eventTime) noexcept;
-    void Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Milliseconds> createdAt = std::nullopt);
+    void Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Milliseconds> createdAt = std::nullopt,
+                 bool geometryHint = false, std::optional<TargetId> reprobeTarget = std::nullopt);
     void PostDispatch() noexcept;
     void Drain(ActionBatch& actions, Milliseconds now);
     void Reconcile(Milliseconds now);
@@ -83,6 +87,7 @@ private:
     DWORD ownerThreadId_{};
     TrackerConfig config_;
     TrackingModel model_;
+    GeometryReprobe geometryReprobe_;
     TrackerStats stats_;
     std::vector<HWINEVENTHOOK> hooks_;
     std::unordered_map<WindowHandle, Pending> pending_;

@@ -44,6 +44,7 @@
     <ClCompile Include="..\..\src\Tracking\WindowTracker.cpp" />
     <ClInclude Include="..\..\src\Tracking\TrackingModel.h" />
     <ClInclude Include="..\..\src\Tracking\WindowTracker.h" />
+    <ClInclude Include="..\..\src\Tracking\GeometryReprobe.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

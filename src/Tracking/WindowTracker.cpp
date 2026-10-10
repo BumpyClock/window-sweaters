@@ -272,6 +272,7 @@ void WindowTracker::ShutdownHooks() noexcept {
     hooks_.clear();
     pending_.clear();
     queue_.clear();
+    geometryReprobe_.Clear();
     reconciliation_.clear();
     reconciliationIndex_ = 0;
     dispatchPosted_ = false;
@@ -321,7 +322,8 @@ void WindowTracker::OnWinEvent(DWORD event, HWND hwnd, LONG objectId, LONG child
     }
     try {
         Enqueue(reinterpret_cast<WindowHandle>(hwnd), dirty,
-                event == EVENT_OBJECT_CREATE ? std::optional{EventTimestamp(eventTime)} : std::nullopt);
+                event == EVENT_OBJECT_CREATE ? std::optional{EventTimestamp(eventTime)} : std::nullopt,
+                Has(dirty, Dirty::Geometry));
     } catch (...) {
         ++stats_.queueOverflows;
         reconciliationRequested_ = true;
@@ -338,9 +340,12 @@ void WindowTracker::PostDispatch() noexcept {
     }
 }
 
-void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Milliseconds> createdAt) {
+void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Milliseconds> createdAt,
+                            bool geometryHint, std::optional<TargetId> reprobeTarget) {
     if (auto found = pending_.find(hwnd); found != pending_.end()) {
         found->second.dirty = found->second.dirty | dirty;
+        found->second.geometryHint = found->second.geometryHint || geometryHint;
+        if (!reprobeTarget) found->second.reprobeTarget.reset();
         if (createdAt && (!found->second.createdAt || *createdAt > *found->second.createdAt)) {
             found->second.createdAt = createdAt;
         }
@@ -348,7 +353,7 @@ void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Millis
     } else if (pending_.size() < TrackerQueueLimit
                && (model_.Current(hwnd) || pending_.size() < TrackerQueueLimit - TrackerTargetLimit)) {
         // Insert both structures atomically, including allocation failure.
-        pending_.emplace(hwnd, Pending{dirty, createdAt});
+        pending_.emplace(hwnd, Pending{dirty, createdAt, geometryHint, reprobeTarget});
         try {
             queue_.push_back(hwnd);
         } catch (...) {
@@ -364,11 +369,18 @@ void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Millis
 
 void WindowTracker::Probe(WindowHandle hwnd, const Pending& pending, Milliseconds now,
                           ActionBatch& actions) {
+    if (pending.reprobeTarget && model_.Current(hwnd) != pending.reprobeTarget) return;
     const auto observation = Query(reinterpret_cast<HWND>(hwnd));
     if (std::holds_alternative<UncertainWindow>(observation)) {
         ++stats_.uncertainQueries;
     }
     Append(actions, model_.Observe(observation, pending.dirty, now, pending.createdAt));
+    const auto current = model_.Current(hwnd);
+    if (!current) geometryReprobe_.Cancel(hwnd);
+    else if (pending.geometryHint && !geometryReprobe_.Request(*current, now)) {
+        ++stats_.queueOverflows;
+        reconciliationRequested_ = true;
+    }
 }
 
 void WindowTracker::Drain(ActionBatch& actions, Milliseconds now) {
@@ -425,6 +437,10 @@ bool WindowTracker::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam, Ac
         return true;
     }
     if (message == WM_TIMER && wParam == TrackerTimerId) {
+        for (const auto& target : geometryReprobe_.TakeDue(now)) {
+            if (model_.Current(target.hwnd) == target)
+                Enqueue(target.hwnd, Dirty::Geometry, std::nullopt, false, target);
+        }
         for (const auto hwnd : model_.SettlingHandles()) {
             Enqueue(hwnd, Dirty::Settlement);
         }

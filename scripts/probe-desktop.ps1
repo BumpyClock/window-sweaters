@@ -256,6 +256,7 @@ $hostProbe = $null
 $hostWindow = [IntPtr]::Zero
 $overlayWindow = [IntPtr]::Zero
 $fixtureRecords = @()
+$controlEvidence = [System.Collections.Generic.List[object]]::new()
 $pixelEvidence = [ordered]@{}
 $shutdownEvidence = 'not-requested; stop the host through the fixture UI'
 $failure = $null
@@ -276,6 +277,24 @@ try {
     $controlsReady = $fixtureRecords | Where-Object type -eq 'fixture.controls_ready' | Select-Object -First 1
     if (-not $controlsReady) {
         throw "Fixture PID $FixturePid did not report creating the accessible test controls; rebuild the fixture binary."
+    }
+    $controlStates = @($fixtureRecords | Where-Object type -eq 'fixture.control_state')
+    if ([bool]$controlsReady.child_controls_valid -ne $true -or
+        [int]$controlsReady.is_window_visible_child_count -ne [int]$controlsReady.expected_control_count -or
+        $controlStates.Count -ne [int]$controlsReady.expected_control_count) {
+        throw 'Fixture did not verify the full visible child-control tree after showing the top-level window.'
+    }
+    $idleQueryInvariant = $fixtureRecords |
+        Where-Object type -eq 'fixture.idle_query_invariant' |
+        Select-Object -First 1
+    if (-not $idleQueryInvariant -or
+        -not $idleQueryInvariant.passed -or
+        [int]$idleQueryInvariant.update_call_delta -ne 0 -or
+        [int]$idleQueryInvariant.status_write_delta -ne 0 -or
+        [int]$idleQueryInvariant.counter_write_delta -ne 0 -or
+        [int]$idleQueryInvariant.settings_write_delta -ne 0 -or
+        [int]$idleQueryInvariant.lifecycle_write_delta -ne 0) {
+        throw 'Fixture idle query invariant failed: WM_GETTEXT/WM_NCHITTEST/WM_PAINT/WM_CTLCOLORSTATIC rewrote UI status.'
     }
     if ([uint32]$fixtureReady.pid -ne [uint32]$FixturePid) {
         throw "fixture.ready PID $($fixtureReady.pid) does not match explicitly supplied PID $FixturePid."
@@ -312,9 +331,14 @@ try {
         $controls = @(
             @{ name = 'start_host_hwnd'; title = 'Start test host' },
             @{ name = 'stop_host_hwnd'; title = 'Stop test host' },
+            @{ name = 'run_lifecycle_hwnd'; title = 'Run lifecycle checks' },
+            @{ name = 'open_settings_hwnd'; title = 'Open native settings' },
             @{ name = 'keyboard_input_hwnd'; title = 'Click here, then type a short test string.' },
             @{ name = 'scroll_list_hwnd'; title = '' },
-            @{ name = 'status_hwnd'; title = '' }
+            @{ name = 'status_hwnd'; title = '' },
+            @{ name = 'evidence_hwnd'; title = '' },
+            @{ name = 'settings_status_hwnd'; title = '' },
+            @{ name = 'lifecycle_status_hwnd'; title = '' }
         )
         foreach ($control in $controls) {
             $controlValue = $controlsReady.PSObject.Properties[$control.name].Value
@@ -326,6 +350,52 @@ try {
             if ($control.title -and [WindowSweaters.Probe.Native]::GetTitle($controlWindow) -ne $control.title) {
                 throw "$($control.name) has an unexpected accessible title."
             }
+            $stateName = switch ($control.name) {
+                'start_host_hwnd' { 'start_host' }
+                'stop_host_hwnd' { 'stop_host' }
+                'run_lifecycle_hwnd' { 'run_lifecycle' }
+                'open_settings_hwnd' { 'open_settings' }
+                'keyboard_input_hwnd' { 'keyboard_input' }
+                'scroll_list_hwnd' { 'scroll_list' }
+                'status_hwnd' { 'status' }
+                'evidence_hwnd' { 'counters' }
+                'settings_status_hwnd' { 'settings_status' }
+                'lifecycle_status_hwnd' { 'lifecycle_status' }
+            }
+            $state = $controlStates | Where-Object name -eq $stateName | Select-Object -First 1
+            if (-not $state -or
+                (ConvertTo-Hwnd $state.hwnd) -ne $controlWindow -or
+                -not $state.created -or
+                -not $state.owned_child -or
+                -not $state.class_matches -or
+                -not $state.title_matches -or
+                -not $state.is_window_visible -or
+                -not $state.inside_parent_client) {
+                throw "$($control.name) failed its fixture-owned visible-child invariant."
+            }
+            $controlBounds = Get-RectArray -Window $controlWindow
+            $probeX = [int](($controlBounds[0] + $controlBounds[2]) / 2)
+            $probeY = [int](($controlBounds[1] + $controlBounds[3]) / 2)
+            $currentHit = Get-PointOwner -X $probeX -Y $probeY
+            $controlEvidence.Add([ordered]@{
+                name = $state.name
+                hwnd = $state.hwnd
+                class = $state.class
+                accessible_text = $state.title
+                is_window_visible_child = $state.is_window_visible
+                inside_parent_client = $state.inside_parent_client
+                screen_bounds = $state.screen_bounds
+                hit_hwnd = $state.hit_hwnd
+                hit_pid = $state.hit_pid
+                hit_class = $state.hit_class
+                hit_is_control = $state.hit_is_control
+                covered_by_other_process = ([uint32]$state.hit_pid -ne [uint32]$FixturePid)
+                current_sample = @($probeX, $probeY)
+                current_hit_hwnd = $currentHit.hwnd
+                current_hit_pid = $currentHit.pid
+                current_hit_class = $currentHit.class
+                currently_occluded = ($currentHit.window -ne $controlWindow)
+            })
         }
         if (-not [WindowSweaters.Probe.Native]::IsWindowVisible($fixtureTarget)) {
             throw 'Fixture target exists but is not visible; screen pixel evidence is unavailable.'
@@ -371,12 +441,12 @@ try {
         $hostWindow = ConvertTo-Hwnd $hostProbe.host_hwnd
         $overlayWindow = ConvertTo-Hwnd $hostProbe.overlay_hwnd
         $reportedTarget = ConvertTo-Hwnd $hostProbe.target_hwnd
-        if ($reportedTarget -ne $fixtureTarget) {
-            throw 'The host probe target HWND differs from this fixture target.'
-        }
         try { $hostProcess = [System.Diagnostics.Process]::GetProcessById([int]$hostPid) } catch {}
 
         if ($hostProcess) {
+            if ($reportedTarget -ne $fixtureTarget) {
+                throw 'The host probe target HWND differs from this fixture target.'
+            }
             if ((Get-ProcessPath $hostProcess) -ne [IO.Path]::GetFullPath($expectedHostPath)) {
                 throw "Fixture reports host PID $hostPid, but it is not the sibling test host $expectedHostPath."
             }
@@ -469,8 +539,12 @@ try {
                 }
                 $hostExitCode = $hostProcess.ExitCode
                 Start-Sleep -Milliseconds 250
-                $hostWindowExists = [WindowSweaters.Probe.Native]::IsWindow($hostWindow)
-                $overlayWindowExists = [WindowSweaters.Probe.Native]::IsWindow($overlayWindow)
+                $hostWindowExists = [WindowSweaters.Probe.Native]::IsWindow($hostWindow) -and
+                    ([WindowSweaters.Probe.Native]::GetProcessId($hostWindow) -eq $hostPid) -and
+                    ([WindowSweaters.Probe.Native]::GetClass($hostWindow) -eq 'WindowSweaters.Host')
+                $overlayWindowExists = [WindowSweaters.Probe.Native]::IsWindow($overlayWindow) -and
+                    ([WindowSweaters.Probe.Native]::GetProcessId($overlayWindow) -eq $hostPid) -and
+                    ([WindowSweaters.Probe.Native]::GetClass($overlayWindow) -eq 'WindowSweaters.Overlay')
                 $shutdownEvidence = [ordered]@{
                     host_pid = $hostPid
                     exit_code = $hostExitCode
@@ -502,11 +576,18 @@ try {
                 $hostState = 'stopped cleanly through fixture-owned host window'
             }
         } else {
+            if (-not $hostProbe.stopped -and $reportedTarget -ne $fixtureTarget) {
+                throw 'A non-stopped host probe refers to a different fixture target.'
+            }
             $hostExitEvent = $fixtureRecords |
                 Where-Object { $_.type -eq 'host.lifecycle' -and $_.event -in @('stopped', 'failed') } |
                 Select-Object -Last 1
-            $hostWindowExists = [WindowSweaters.Probe.Native]::IsWindow($hostWindow)
-            $overlayWindowExists = [WindowSweaters.Probe.Native]::IsWindow($overlayWindow)
+            $hostWindowExists = [WindowSweaters.Probe.Native]::IsWindow($hostWindow) -and
+                ([WindowSweaters.Probe.Native]::GetProcessId($hostWindow) -eq $hostPid) -and
+                ([WindowSweaters.Probe.Native]::GetClass($hostWindow) -eq 'WindowSweaters.Host')
+            $overlayWindowExists = [WindowSweaters.Probe.Native]::IsWindow($overlayWindow) -and
+                ([WindowSweaters.Probe.Native]::GetProcessId($overlayWindow) -eq $hostPid) -and
+                ([WindowSweaters.Probe.Native]::GetClass($overlayWindow) -eq 'WindowSweaters.Overlay')
             $hostState = if ($hostExitEvent -and $hostExitEvent.event -eq 'stopped' -and $hostExitEvent.code -eq 0) {
                 'stopped cleanly; retained fixture/host evidence only'
             } else {
@@ -542,6 +623,7 @@ try {
             target_bounds = if ($fixtureReadyProcess) { Get-RectArray -Window $fixtureTarget } else { $fixtureReady.target_bounds }
             result_file = $fixtureRecordsPath
             message_count = @($fixtureRecords | Where-Object type -eq 'window.message').Count
+            idle_query_invariant = $idleQueryInvariant
             counters = [ordered]@{
                 center_clicks = Get-MessageCount -Records $fixtureRecords -Role 'target' -Message 'WM_LBUTTONDOWN'
                 receiver_clicks = Get-MessageCount -Records $fixtureRecords -Role 'receiver' -Message 'WM_LBUTTONDOWN'
@@ -553,6 +635,8 @@ try {
                 }).Count
                 controls = @($fixtureRecords | Where-Object type -eq 'control.command')
             }
+            settings_requests = @($fixtureRecords | Where-Object type -eq 'fixture.settings_request')
+            controls = $controlEvidence.ToArray()
         }
         host = [ordered]@{
             state = $hostState
@@ -561,10 +645,43 @@ try {
             overlay_hwnd = if ($hostProbe) { $hostProbe.overlay_hwnd } else { $null }
             composition = if ($hostProbe) { $hostProbe.composition } else { $null }
             shutdown = $shutdownEvidence
+            latest_snapshot = if ($hostProbe) {
+                [ordered]@{
+                    fullTargetId = [ordered]@{
+                        hwnd = $hostProbe.target_hwnd
+                        pid = $hostProbe.target_pid
+                        process_start = $hostProbe.target_process_start
+                        generation = $hostProbe.target_generation
+                    }
+                    target_bounds = @($hostProbe.target_bounds)
+                    overlay_bounds = @($hostProbe.overlay_bounds)
+                    overlay_visible = $hostProbe.overlay_visible
+                    stopped = $hostProbe.stopped
+                    tracked_entries = $hostProbe.tracked_entries
+                    counters = [ordered]@{
+                        creates = $hostProbe.creates
+                        removes = $hostProbe.removes
+                        geometry_updates = $hostProbe.geometry_updates
+                        draws = $hostProbe.draws
+                        pure_moves = $hostProbe.pure_moves
+                        hides = $hostProbe.hides
+                        shows = $hostProbe.shows
+                        reorders = $hostProbe.reorders
+                        stale_actions = $hostProbe.stale_actions
+                        placement_failures = $hostProbe.placement_failures
+                        tracker_callbacks = $hostProbe.tracker_callbacks
+                        tracker_coalesced = $hostProbe.tracker_coalesced
+                        tracker_uncertain_queries = $hostProbe.tracker_uncertain_queries
+                        tracker_error = $hostProbe.tracker_error
+                    }
+                }
+            } else { $null }
         }
         visible_pixels = $pixelEvidence
         taskbar_alt_tab = 'not measured; inspect the computer-use window list or Alt+Tab separately'
         fixture_lifecycle = [ordered]@{
+            events = @($fixtureRecords | Where-Object type -eq 'fixture.lifecycle')
+            last_event = @($fixtureRecords | Where-Object type -eq 'fixture.lifecycle' | Select-Object -Last 1)
             target_destroyed = @($fixtureRecords | Where-Object {
                 $_.type -eq 'window.message' -and $_.role -eq 'target' -and $_.message -eq 'WM_DESTROY'
             }).Count -gt 0

@@ -318,6 +318,81 @@ void FixtureStartupSelection() {
     Check(model.Size() == 0, "No foreign target is selected across startup reuse");
 }
 
+void DelayedGeometryObservations() {
+    TrackingModel model{DefaultPolicy()};
+    GeometryReprobe reprobe;
+    auto window = Window();
+    const auto initial = model.Observe(window, Dirty::Lifecycle, 0);
+    const auto target = initial[0].target;
+    const WorkToken token{target, 1};
+    // LOCATIONCHANGE can precede DWM's extended-frame update; this first sample remains old.
+    Expect(model.Observe(window, Dirty::Geometry, 10), {});
+    Check(reprobe.Request(target, 10), "Schedule finite compositor-lag probes after an event");
+    Check(reprobe.TakeDue(109).empty(), "No immediate hot-loop retry");
+    const auto first = reprobe.TakeDue(110);
+    Check(first == std::vector<TargetId>{target}, "First delayed sample is due after 100 ms");
+    window.rect = {114, 214, 914, 814};
+    const auto move = model.Observe(window, Dirty::Geometry, 110);
+    Expect(move, {ActionKind::Move});
+    Check(move[0].rect == PhysicalRect{114, 214, 914, 814}
+          && !move[0].rebuildAppearance && move[0].appearanceRevision == 1
+          && model.Accepts(token), "Fresh delayed sample repositions without regeneration or suppression");
+    Check(reprobe.TakeDue(110).empty(), "One target cannot be queried twice in one tick");
+    Check(reprobe.TakeDue(210) == std::vector<TargetId>{target}, "Second bounded lag sample");
+    Expect(model.Observe(window, Dirty::Geometry, 210), {});
+    Check(reprobe.TakeDue(310) == std::vector<TargetId>{target}, "Third bounded lag sample");
+    Expect(model.Observe(window, Dirty::Geometry, 310), {});
+    Check(reprobe.Size() == 0 && reprobe.TakeDue(410).empty()
+          && reprobe.TakeDue(5000).empty(), "Completed event has no recurring queries or rendering");
+
+    Check(reprobe.Request(target, 600), "New geometry hint schedules only its own lifetime");
+    Check(reprobe.Request(target, 650), "Duplicate hints coalesce");
+    Check(reprobe.Size() == 1 && reprobe.TakeDue(700) == std::vector<TargetId>{target},
+          "Duplicate hint cannot postpone the first deadline");
+    Expect(model.Observe(DestroyedWindow{window.hwnd}, Dirty::Lifecycle, 710), {ActionKind::Remove});
+    const auto rediscovered = model.Observe(window, Dirty::Lifecycle, 720)[0].target;
+    Check(rediscovered != target && model.Current(window.hwnd) != target,
+          "Queued delayed probe cannot authorize a reused HWND lifetime");
+    Check(reprobe.Request(rediscovered, 720), "Reuse replaces delayed identity rather than copying a pointer");
+    Check(reprobe.TakeDue(800).empty() && reprobe.TakeDue(820) == std::vector<TargetId>{rediscovered},
+          "New lifetime owns its own delay");
+    reprobe.Cancel(window.hwnd);
+    Check(reprobe.Size() == 0 && reprobe.TakeDue(1000).empty(), "Confirmed death cancels delayed sampling");
+
+    Check(reprobe.Request(rediscovered, 1100), "Pending retry before shutdown");
+    reprobe.Clear();
+    Check(reprobe.TakeDue(1200).empty(), "Stop discards delayed work");
+}
+
+void DelayedGeometryBudgets() {
+    GeometryReprobe reprobe;
+    for (std::size_t index = 0; index < GeometryReprobeLimit; ++index)
+        Check(reprobe.Request({index + 1, 200, 123456789, index + 1}, 0), "Fill bounded delayed registry");
+    Check(!reprobe.Request({GeometryReprobeLimit + 1, 200, 123456789, 1}, 0)
+          && reprobe.Size() == GeometryReprobeLimit, "Delayed registry is capped");
+    Check(reprobe.Request({1, 200, 123456789, 1}, 90), "Existing delayed target survives capacity");
+    Check(reprobe.TakeDue(99).empty(), "Capacity does not bypass minimum delay");
+    std::vector<unsigned> queries(GeometryReprobeLimit, 0);
+    for (unsigned round = 1; round <= GeometryReprobeAttempts; ++round) {
+        std::size_t total{};
+        for (std::size_t batch = 0; batch < GeometryReprobeLimit / GeometryReprobeBudget; ++batch) {
+            const auto due = reprobe.TakeDue(round * GeometryReprobeDelayMs);
+            Check(due.size() == GeometryReprobeBudget && due.size() <= TrackerDispatchBudget,
+                  "At most 32 delayed candidates share the existing 64-query dispatch budget");
+            for (const auto& target : due) {
+                Check(target.hwnd && target.hwnd <= GeometryReprobeLimit, "Full lifetime due payload");
+                ++queries[target.hwnd - 1];
+            }
+            total += due.size();
+        }
+        Check(total == GeometryReprobeLimit, "Round-robin sampling cannot starve later targets");
+        Check(reprobe.TakeDue(round * GeometryReprobeDelayMs).empty(),
+              "All sampled targets wait until another tick");
+    }
+    for (const auto count : queries) Check(count == GeometryReprobeAttempts, "Per-hint retry bound");
+    Check(reprobe.Size() == 0 && reprobe.TakeDue(10000).empty(), "No polling after finite retry exhaustion");
+}
+
 void NativeReceiverContract() {
     Check(std::holds_alternative<DestroyedWindow>(WindowTracker::Query(nullptr)), "Null HWND query");
     const HWND receiver = CreateWindowExW(0, L"STATIC", L"Tracking contract receiver",
@@ -363,7 +438,9 @@ int main(int argc, char** argv) {
         AppearanceAndCapacity();
         CurrentSnapshotContract();
         FixtureStartupSelection();
-        std::cout << "PASS: 9 deterministic tracking contract scenarios (scripted, not desktop evidence)\n";
+        DelayedGeometryObservations();
+        DelayedGeometryBudgets();
+        std::cout << "PASS: 11 deterministic tracking contract scenarios (scripted, not desktop evidence)\n";
         if (argc == 2 && std::string_view{argv[1]} == "--native-contract") {
             NativeReceiverContract();
             std::cout << "PASS: isolated native receiver/query rejection contract (not cross-process fixture evidence)\n";

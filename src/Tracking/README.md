@@ -153,6 +153,15 @@ eligible, stable sample after 250 ms of size quiet restores the overlay, even
 without a matching loop-end notification. A loop-end hint does not prematurely
 expose changing dimensions. Settlement is timer-backed and reuses the same gate.
 
+Location/move-size event drains also schedule three finite delayed observations
+at least 100 ms apart. DWM's first extended-frame sample can lag behind the native
+position event; waiting only for the two-second reconciliation could miss a
+short-lived move before a fixture resets it. Delayed queries run on the owner
+timer, coalesce per full lifetime, preserve the first deadline during bursts, and
+admit at most 32 candidates per tick into the existing 64-query drain budget.
+They never renew themselves, never render directly, reject replaced lifetimes,
+and are cleared on Stop. Stable samples produce no actions or regeneration.
+
 Callbacks filter object/child IDs, fixture scope, own/excluded PIDs, and desktop
 roots, then merge dirty bits and post a drain. They do not render, query files,
 extract icons, run a user callback, or mutate windows. `WINEVENT_SKIPOWNPROCESS`,
