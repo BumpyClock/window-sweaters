@@ -425,10 +425,163 @@ void NativeReceiverContract() {
     Check(std::holds_alternative<DestroyedWindow>(WindowTracker::Query(receiver)), "Confirmed native death");
 }
 
+void SelectedLifetimeIsolation() {
+    for (const auto hidden : {false,true}) {
+        auto selected=Window(101);
+        selected.minimized=!hidden;
+        selected.visible=!hidden;
+        auto policy=DefaultPolicy();
+        policy.mode=TrackingMode::SelectedOnly;
+        policy.maxTargets=2;
+        policy.selectedTargets={{selected.hwnd,selected.identity},{102,Window(102).identity}};
+        TrackingModel model(policy);
+        for (WindowHandle hwnd=1000;hwnd<1600;++hwnd) {
+            auto unrelated=Window(hwnd); unrelated.minimized=(hwnd%2)==0;
+            Expect(model.Observe(unrelated,Dirty::Lifecycle,1),{});
+        }
+        Check(model.Size()==0,"Unselected eligible/suppressed windows cannot consume selected tracker capacity");
+        Expect(model.Observe(selected,Dirty::Lifecycle,10),{});
+        const auto original=model.Current(101);
+        Check(original && original->generation==1 && model.SelectionActive(101),
+            "Initially suppressed selection receives its real tracking generation before any Create");
+        Expect(model.Observe(DestroyedWindow{101},Dirty::Lifecycle,11),{});
+        selected.visible=true; selected.minimized=false;
+        Expect(model.Observe(selected,Dirty::Lifecycle,12,12),{});
+        Check(!model.Current(101) && !model.SelectionActive(101),
+            "Destroyed uncreated selection permanently retires same-HWND/PID/thread/class replacement");
+        auto other=Window(102);
+        const auto created=model.Observe(other,Dirty::Lifecycle,13);
+        Expect(created,{ActionKind::Create,ActionKind::Show,ActionKind::Reorder});
+        Check(created[0].target==TargetId{102,200,123456789,2},
+            "Second selection retains reserved capacity and independent lifetime");
+        model.Clear();
+        Check(!model.SelectionActive(102),"Stop cannot reopen a selected lifetime");
+        Expect(model.Observe(other,Dirty::Lifecycle,14),{});
+    }
+    for (const auto replacement:{0,1,2,3}) {
+        auto selected=Window();
+        selected.minimized=true;
+        auto policy=DefaultPolicy(); policy.mode=TrackingMode::SelectedOnly;
+        policy.selectedTargets={{selected.hwnd,selected.identity}};
+        TrackingModel model(policy);
+        Expect(model.Observe(selected,Dirty::Lifecycle,10),{});
+        auto changed=selected;
+        if (replacement==0) ++changed.identity.pid;
+        if (replacement==1) ++changed.identity.processStart;
+        if (replacement==2) ++changed.identity.observedIdentity;
+        Expect(model.Observe(changed,Dirty::Lifecycle,20,replacement==3?std::optional<Milliseconds>{20}:std::nullopt),{});
+        selected.minimized=false;
+        Expect(model.Observe(selected,Dirty::Lifecycle,21),{});
+        Check(!model.SelectionActive(100),"Identity or newer CREATE retires original suppressed authority permanently");
+    }
+    auto selected=Window(); selected.visible=false;
+    auto policy=DefaultPolicy(); policy.mode=TrackingMode::SelectedOnly;
+    policy.selectedTargets={{selected.hwnd,selected.identity}};
+    TrackingModel model(policy);
+    Expect(model.Observe(selected,Dirty::Lifecycle,10),{});
+    const auto original=model.Current(100);
+    Expect(model.Observe(UncertainWindow{100},Dirty::Lifecycle,11),{});
+    selected.visible=true;
+    Expect(model.Observe(selected,Dirty::Lifecycle,12),{ActionKind::Create,ActionKind::Show,ActionKind::Reorder});
+    Check(model.Current(100)==original,"Suppression/uncertainty recovery retains the initially selected generation");
+}
+
+int SelectedNativeChild(HANDLE pipe) {
+    std::array<HWND,2> windows{};
+    for (auto& window:windows)
+        window=CreateWindowExW(0,L"STATIC",L"",WS_OVERLAPPEDWINDOW,0,0,200,200,
+            nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    const std::array<UINT_PTR,2> values{reinterpret_cast<UINT_PTR>(windows[0]),reinterpret_cast<UINT_PTR>(windows[1])};
+    DWORD written{};
+    const bool success=windows[0] && windows[1] && WriteFile(pipe,values.data(),sizeof(values),&written,nullptr) &&
+        written==sizeof(values);
+    CloseHandle(pipe);
+    if (!success) return 1;
+    MSG message{};
+    while (GetMessageW(&message,nullptr,0,0)>0) {
+        if (message.message==WM_APP+77) break;
+        TranslateMessage(&message); DispatchMessageW(&message);
+    }
+    for (const auto window:windows) if (IsWindow(window)) DestroyWindow(window);
+    return 0;
+}
+
+void NativeSelectedTracker() {
+    SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
+    HANDLE read{},write{};
+    Check(CreatePipe(&read,&write,&security,0)!=FALSE,"Create private hidden-child metadata pipe");
+    SetHandleInformation(read,HANDLE_FLAG_INHERIT,0);
+    std::array<wchar_t,32768> path{};
+    Check(GetModuleFileNameW(nullptr,path.data(),static_cast<DWORD>(path.size()))!=0,"Locate private tracking child image");
+    std::wstring command=L"\""+std::wstring(path.data())+L"\" --selected-native-child "+
+        std::to_wstring(reinterpret_cast<UINT_PTR>(write));
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION process{};
+    const bool started=CreateProcessW(path.data(),command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,
+        nullptr,nullptr,&startup,&process)!=FALSE;
+    CloseHandle(write);
+    Check(started,"Start only private hidden tracking child");
+    struct Cleanup {
+        HANDLE read;
+        PROCESS_INFORMATION process;
+        ~Cleanup() {
+            PostThreadMessageW(process.dwThreadId,WM_APP+77,0,0);
+            WaitForSingleObject(process.hProcess,10000);
+            CloseHandle(read); CloseHandle(process.hThread); CloseHandle(process.hProcess);
+        }
+    } cleanup{read,process};
+    std::array<UINT_PTR,2> handles{};
+    DWORD bytes{};
+    const auto deadline=GetTickCount64()+10000;
+    DWORD available{};
+    while (GetTickCount64()<deadline && PeekNamedPipe(read,nullptr,0,nullptr,&available,nullptr) && available<sizeof(handles))
+        Sleep(10);
+    Check(available>=sizeof(handles) && ReadFile(read,handles.data(),sizeof(handles),&bytes,nullptr) &&
+        bytes==sizeof(handles),"Read only private hidden-child HWND metadata");
+    const HWND receiver=CreateWindowExW(0,L"STATIC",L"",WS_OVERLAPPEDWINDOW,0,0,200,200,
+        nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    Check(receiver!=nullptr,"Create private selected-tracker receiver");
+    struct ReceiverCleanup { HWND window; ~ReceiverCleanup(){DestroyWindow(window);} } receiverCleanup{receiver};
+    TrackerConfig config;
+    config.mode=TrackingMode::SelectedOnly;
+    config.maxTargets=2;
+    for (const auto handle:handles) {
+        const auto observation=WindowTracker::Query(reinterpret_cast<HWND>(handle));
+        const auto* window=std::get_if<AliveWindow>(&observation);
+        Check(window && !window->visible,"Selected native child starts hidden/suppressed without GUI presentation");
+        config.selectedTargets.push_back({static_cast<WindowHandle>(handle),window->identity});
+    }
+    WindowTracker tracker(receiver,config);
+    ActionBatch initial;
+    Check(tracker.Start(initial) && initial.empty() && tracker.Model().Size()==2,
+        "Real tracker initially seals two suppressed selections and excludes unrelated desktop enumeration");
+    const auto original=tracker.Model().Current(static_cast<WindowHandle>(handles[0]));
+    Check(original.has_value(),"Real selected tracker has generation before any Host Create");
+    SendMessageW(reinterpret_cast<HWND>(handles[0]),WM_CLOSE,0,0);
+    const auto destroyDeadline=GetTickCount64()+10000;
+    while (tracker.Model().SelectionActive(static_cast<WindowHandle>(handles[0])) && GetTickCount64()<destroyDeadline) {
+        MSG message{};
+        while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
+            ActionBatch actions;
+            tracker.HandleMessage(message.message,message.wParam,message.lParam,actions);
+        }
+        ActionBatch actions;
+        tracker.HandleMessage(WM_TIMER,TrackerTimerId,0,actions);
+        Sleep(10);
+    }
+    Check(!tracker.Model().SelectionActive(static_cast<WindowHandle>(handles[0])) &&
+        !tracker.Model().Current(static_cast<WindowHandle>(handles[0])) && tracker.Model().Size()==1,
+        "Real suppressed child destruction permanently retires its original authority without Remove action");
+    Check(tracker.Stop().empty(),"Stopping only hidden/uncreated selected tracker emits no GUI removal work");
+    std::cout << "PASS: real cross-process hidden tracker seals suppressed selections before Create, avoids unrelated enumeration and permanently retires destroyed authority\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
+        if (argc==3 && std::string_view(argv[1])=="--selected-native-child")
+            return SelectedNativeChild(reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(std::strtoull(argv[2],nullptr,10))));
         DiscoveryMovementAndOrdering();
         ResizeSettlementWithoutEnd();
         QueryFailureRetainsLifetime();
@@ -440,9 +593,11 @@ int main(int argc, char** argv) {
         FixtureStartupSelection();
         DelayedGeometryObservations();
         DelayedGeometryBudgets();
-        std::cout << "PASS: 11 deterministic tracking contract scenarios (scripted, not desktop evidence)\n";
+        SelectedLifetimeIsolation();
+        std::cout << "PASS: 12 deterministic tracking contract scenarios, including suppressed selections/reuse/capacity (scripted, not desktop evidence)\n";
         if (argc == 2 && std::string_view{argv[1]} == "--native-contract") {
             NativeReceiverContract();
+            NativeSelectedTracker();
             std::cout << "PASS: isolated native receiver/query rejection contract (not cross-process fixture evidence)\n";
         } else if (argc != 1) {
             throw std::runtime_error("Usage: TrackingTests.exe [--native-contract]");

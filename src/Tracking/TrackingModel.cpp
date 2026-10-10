@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <utility>
+#include <stdexcept>
 
 namespace window_sweaters::tracking {
 namespace {
@@ -49,7 +50,11 @@ Eligibility Evaluate(const Observation& observation, const Policy& policy) {
         || !window.ordinaryTopLevel || ExcludedClass(window.className, policy)
         || (policy.mode == TrackingMode::FixtureOnly
             && (window.hwnd != policy.fixtureTarget
-                || (policy.fixtureIdentity && window.identity != *policy.fixtureIdentity)))) {
+                || (policy.fixtureIdentity && window.identity != *policy.fixtureIdentity)))
+        || (policy.mode == TrackingMode::SelectedOnly &&
+            std::none_of(policy.selectedTargets.begin(), policy.selectedTargets.end(), [&](const auto& selected) {
+                return selected.hwnd == window.hwnd && selected.identity == window.identity;
+            }))) {
         return Eligibility::Unsupported;
     }
     if (!window.visible || window.minimized || window.cloaked || window.maximized || window.fullscreen) {
@@ -64,7 +69,33 @@ bool MatchesFixtureSelection(const AliveWindow& window, const WindowIdentity& se
         && window.className == L"WindowSweaters.TestFixture" && title == L"WindowSweaters Fixture";
 }
 
-TrackingModel::TrackingModel(Policy policy) : policy_(std::move(policy)) {}
+TrackingModel::TrackingModel(Policy policy) : policy_(std::move(policy)) {
+    if (policy_.mode != TrackingMode::SelectedOnly) {
+        if (!policy_.selectedTargets.empty()) throw std::invalid_argument("Selected targets require SelectedOnly tracking");
+        return;
+    }
+    if (policy_.selectedTargets.empty() || policy_.selectedTargets.size() > MaximumSelectedTargets ||
+        policy_.selectedTargets.size() > policy_.maxTargets)
+        throw std::invalid_argument("Invalid selected target count");
+    for (std::size_t i=0;i<policy_.selectedTargets.size();++i) {
+        const auto& selected=policy_.selectedTargets[i];
+        if (!selected.hwnd || !selected.identity.pid || !selected.identity.processStart || !selected.identity.observedIdentity)
+            throw std::invalid_argument("Invalid selected target lifetime");
+        for (std::size_t j=0;j<i;++j)
+            if (policy_.selectedTargets[j].hwnd==selected.hwnd) throw std::invalid_argument("Duplicate selected HWND");
+    }
+    retiredSelections_.reserve(policy_.selectedTargets.size());
+}
+
+bool TrackingModel::SelectionActive(WindowHandle hwnd) const noexcept {
+    return policy_.mode != TrackingMode::SelectedOnly ||
+        (std::any_of(policy_.selectedTargets.begin(),policy_.selectedTargets.end(),
+            [hwnd](const auto& selected) { return selected.hwnd==hwnd; }) &&
+         std::find(retiredSelections_.begin(),retiredSelections_.end(),hwnd)==retiredSelections_.end());
+}
+void TrackingModel::RetireSelection(WindowHandle hwnd) {
+    if (policy_.mode==TrackingMode::SelectedOnly && SelectionActive(hwnd)) retiredSelections_.push_back(hwnd);
+}
 
 Action TrackingModel::MakeAction(ActionKind kind, const Entry& entry, bool rebuild) {
     return {kind, entry.id, entry.snapshot.rect, entry.snapshot.dpi,
@@ -83,8 +114,10 @@ ActionBatch TrackingModel::Observe(const Observation& observation, Dirty dirty, 
     ActionBatch actions;
     const auto eligibility = Evaluate(observation, policy_);
     const auto hwnd = HandleOf(observation);
+    if (policy_.mode==TrackingMode::SelectedOnly && !SelectionActive(hwnd)) return actions;
     auto found = targets_.find(hwnd);
     if (eligibility == Eligibility::Destroyed) {
+        RetireSelection(hwnd);
         if (found != targets_.end()) {
             if (found->second.created) {
                 actions.push_back(MakeAction(ActionKind::Remove, found->second));
@@ -105,6 +138,19 @@ ActionBatch TrackingModel::Observe(const Observation& observation, Dirty dirty, 
     }
 
     const auto& snapshot = std::get<AliveWindow>(observation);
+    if (policy_.mode==TrackingMode::SelectedOnly) {
+        const auto selected=std::find_if(policy_.selectedTargets.begin(),policy_.selectedTargets.end(),
+            [hwnd](const auto& value) { return value.hwnd==hwnd; });
+        if (snapshot.identity!=selected->identity ||
+            (found!=targets_.end() && createdAt && *createdAt>found->second.bornAt && *createdAt<=now)) {
+            RetireSelection(hwnd);
+            if (found!=targets_.end()) {
+                if (found->second.created) actions.push_back(MakeAction(ActionKind::Remove,found->second));
+                targets_.erase(found);
+            }
+            return actions;
+        }
+    }
     // A CREATE newer than our first observation also detects same-process/same-class HWND reuse.
     // Duplicate or delayed CREATE events predating this generation cannot replace it.
     if (found != targets_.end()
@@ -193,6 +239,8 @@ ActionBatch TrackingModel::Clear() {
         }
     }
     targets_.clear();
+    if (policy_.mode==TrackingMode::SelectedOnly)
+        for (const auto& selected:policy_.selectedTargets) RetireSelection(selected.hwnd);
     return actions;
 }
 

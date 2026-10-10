@@ -59,7 +59,12 @@ struct UncertainWindow { WindowHandle hwnd{}; };
 using Observation = std::variant<AliveWindow, DestroyedWindow, UncertainWindow>;
 
 enum class Eligibility { Eligible, Suppressed, Unsupported, Destroyed, Uncertain };
-enum class TrackingMode { Production, FixtureOnly };
+enum class TrackingMode { Production, FixtureOnly, SelectedOnly };
+inline constexpr std::size_t MaximumSelectedTargets = 2;
+struct WindowSelection {
+    WindowHandle hwnd{};
+    WindowIdentity identity;
+};
 
 struct Policy {
     TrackingMode mode{TrackingMode::Production};
@@ -70,6 +75,7 @@ struct Policy {
     std::vector<std::wstring> excludedClasses;
     std::size_t maxTargets{512};
     Milliseconds resizeQuietPeriod{250};
+    std::vector<WindowSelection> selectedTargets;
 };
 
 Eligibility Evaluate(const Observation& observation, const Policy& policy);
@@ -136,6 +142,7 @@ public:
     bool SealFixtureIdentity(const WindowIdentity& identity);
     std::size_t Size() const noexcept { return targets_.size(); }
     const Policy& GetPolicy() const noexcept { return policy_; }
+    bool SelectionActive(WindowHandle hwnd) const noexcept;
 
 private:
     struct Entry {
@@ -155,6 +162,8 @@ private:
     Policy policy_;
     std::uint64_t nextGeneration_{1};
     std::unordered_map<WindowHandle, Entry> targets_;
+    std::vector<WindowHandle> retiredSelections_;
+    void RetireSelection(WindowHandle hwnd);
 };
 
 } // namespace window_sweaters::tracking

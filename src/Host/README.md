@@ -67,12 +67,21 @@ Original charts retain their authored flags, corners, cuffs, palettes, and mater
 normalization; they are not recolored or exaggerated for visibility. Fine plain
 yarn may look nearly solid from a distance.
 
-The host and Settings preview map the same semantic appearance into the same
-production knitting core. By-app selection currently uses the explicitly reported
-saved plain-yarn fallback; the Settings Finder image is only a labelled example,
-not the Host's production selection. Automatic application
-theme assignment is not implemented by this integration. Stable application
-identity now supplies eligibility and native Settings snapshots, not theme rules.
+The host and Settings preview use the same production knitting core. In By-app
+mode, each validated owner resolves through the reviewed Windows identity
+mappings. Authored charts retain their literal palettes and finishing flags.
+Unmatched owners use the resolver's stable identity-based Wool color and plain
+pattern; icon sampling is not integrated yet. Explicit plain or original design
+selection preserves the saved manual appearance instead of applying app rules.
+The Settings Finder image remains a labelled example, not the selected owner's
+actual appearance.
+
+Known-folder roots are queried once outside target rendering. Each entry retains
+its resolved immutable appearance. Changed owner facts or effective appearance
+retire that entry's render epoch before queue publication; unchanged owner facts
+and unrelated eligibility changes do not regenerate its yarn. Resolution errors
+are reported and suppress unsafe publication, rather than becoming a successful
+plain fallback.
 
 ## Application eligibility
 
@@ -111,6 +120,28 @@ effective change advances only its identity's revision, including a disable/
 re-enable pair between Host polls. The central gate refreshes current
 configuration before publication and checks this per-owner fence; an unrelated
 configuration revision cannot retire another owner's queued result.
+
+## Isolated real-application preview
+
+`--inspect-preview <HWND>` performs a read-only metadata and authored-resolution
+check. Its token includes HWND, PID, process birth, and a native thread/class
+fingerprint. It does not launch, focus, move, or change the application.
+
+A preview launch accepts at most two `--preview-target <token>` selections and
+requires `--test-mode`, an explicit `--storage-dir`, `--endpoint-suffix`, and
+`--probe-output`. Native facts are revalidated at startup. The tracker applies
+the bounded selection before enumeration, event queuing, and admission.
+Suppressed selected windows receive their original tracking generations before
+first rendering. Destruction or replacement permanently retires a selection;
+later HWND reuse cannot authorize a new window.
+
+Preview settings and exceptions stay in the supplied isolated directory. No
+unselected application enters its registry. Use the sibling Settings process
+with the same test directory and endpoint; its ordinary controls update the
+preview host. The probe's `targets` array records each admitted lifetime,
+resolved chart/color, render epoch, metadata/error state, and overlay visibility.
+These diagnostics do not establish physical input, desktop-transition, or
+Store-installed qualification.
 
 The Host publishes accepted target-owner metadata to the configuration binding.
 The server derives current snapshots from committed preferences: disabled

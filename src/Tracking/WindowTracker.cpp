@@ -25,6 +25,7 @@ Policy MakePolicy(const TrackerConfig& config) {
     policy.excludedClasses = config.excludedClasses;
     policy.maxTargets = std::min(config.maxTargets, TrackerTargetLimit);
     policy.resizeQuietPeriod = std::max<Milliseconds>(config.resizeQuietPeriod, TrackerTimerPeriodMs);
+    policy.selectedTargets = config.selectedTargets;
     return policy;
 }
 
@@ -199,6 +200,16 @@ bool WindowTracker::Start(ActionBatch& initialActions) {
             stats_.lastWin32Error = ERROR_INVALID_PARAMETER;
             return false;
         }
+        if (config_.mode==TrackingMode::SelectedOnly) {
+            for (const auto& selected:config_.selectedTargets) {
+                const auto observation=Query(reinterpret_cast<HWND>(selected.hwnd));
+                const auto eligibility=Evaluate(observation,model_.GetPolicy());
+                if (eligibility!=Eligibility::Eligible && eligibility!=Eligibility::Suppressed) {
+                    stats_.lastWin32Error=ERROR_INVALID_WINDOW_HANDLE;
+                    return false;
+                }
+            }
+        }
         auto policy = MakePolicy(config_);
         const auto observation = Query(config_.fixtureTarget);
         if (Evaluate(observation, policy) != Eligibility::Eligible
@@ -245,6 +256,19 @@ bool WindowTracker::Start(ActionBatch& initialActions) {
             return false;
         }
         started_ = true;
+        if (config_.mode==TrackingMode::SelectedOnly) {
+            const auto now=GetTickCount64();
+            for (const auto& selected:config_.selectedTargets) {
+                const auto observation=Query(reinterpret_cast<HWND>(selected.hwnd));
+                const auto eligibility=Evaluate(observation,model_.GetPolicy());
+                if (eligibility!=Eligibility::Eligible && eligibility!=Eligibility::Suppressed) {
+                    stats_.lastWin32Error=ERROR_INVALID_WINDOW_HANDLE;
+                    ShutdownHooks();
+                    return false;
+                }
+                Append(initialActions,model_.Observe(observation,Dirty::Lifecycle,now));
+            }
+        }
         reconciliationRequested_ = true;
         const auto now = GetTickCount64();
         Reconcile(now);
@@ -303,6 +327,8 @@ void WindowTracker::OnWinEvent(DWORD event, HWND hwnd, LONG objectId, LONG child
         || (config_.mode == TrackingMode::FixtureOnly && hwnd != config_.fixtureTarget)) {
         return;
     }
+    if (config_.mode==TrackingMode::SelectedOnly &&
+        !model_.SelectionActive(reinterpret_cast<WindowHandle>(hwnd))) return;
     DWORD pid{};
     GetWindowThreadProcessId(hwnd, &pid);
     if (pid == GetCurrentProcessId()
@@ -323,7 +349,8 @@ void WindowTracker::OnWinEvent(DWORD event, HWND hwnd, LONG objectId, LONG child
     try {
         Enqueue(reinterpret_cast<WindowHandle>(hwnd), dirty,
                 event == EVENT_OBJECT_CREATE ? std::optional{EventTimestamp(eventTime)} : std::nullopt,
-                Has(dirty, Dirty::Geometry));
+                Has(dirty, Dirty::Geometry), std::nullopt,
+                config_.mode==TrackingMode::SelectedOnly && event==EVENT_OBJECT_DESTROY);
     } catch (...) {
         ++stats_.queueOverflows;
         reconciliationRequested_ = true;
@@ -341,10 +368,12 @@ void WindowTracker::PostDispatch() noexcept {
 }
 
 void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Milliseconds> createdAt,
-                            bool geometryHint, std::optional<TargetId> reprobeTarget) {
+                            bool geometryHint, std::optional<TargetId> reprobeTarget, bool destroyed) {
+    if (config_.mode==TrackingMode::SelectedOnly && !model_.SelectionActive(hwnd)) return;
     if (auto found = pending_.find(hwnd); found != pending_.end()) {
         found->second.dirty = found->second.dirty | dirty;
         found->second.geometryHint = found->second.geometryHint || geometryHint;
+        found->second.destroyed = found->second.destroyed || destroyed;
         if (!reprobeTarget) found->second.reprobeTarget.reset();
         if (createdAt && (!found->second.createdAt || *createdAt > *found->second.createdAt)) {
             found->second.createdAt = createdAt;
@@ -353,7 +382,7 @@ void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Millis
     } else if (pending_.size() < TrackerQueueLimit
                && (model_.Current(hwnd) || pending_.size() < TrackerQueueLimit - TrackerTargetLimit)) {
         // Insert both structures atomically, including allocation failure.
-        pending_.emplace(hwnd, Pending{dirty, createdAt, geometryHint, reprobeTarget});
+        pending_.emplace(hwnd, Pending{dirty, createdAt, geometryHint, reprobeTarget, destroyed});
         try {
             queue_.push_back(hwnd);
         } catch (...) {
@@ -370,6 +399,11 @@ void WindowTracker::Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Millis
 void WindowTracker::Probe(WindowHandle hwnd, const Pending& pending, Milliseconds now,
                           ActionBatch& actions) {
     if (pending.reprobeTarget && model_.Current(hwnd) != pending.reprobeTarget) return;
+    if (pending.destroyed) {
+        Append(actions,model_.Observe(DestroyedWindow{hwnd},Dirty::Lifecycle,now));
+        geometryReprobe_.Cancel(hwnd);
+        return;
+    }
     const auto observation = Query(reinterpret_cast<HWND>(hwnd));
     if (std::holds_alternative<UncertainWindow>(observation)) {
         ++stats_.uncertainQueries;
@@ -399,7 +433,11 @@ void WindowTracker::Reconcile(Milliseconds now) {
     if (reconciliationIndex_ >= reconciliation_.size()
         && (reconciliationRequested_ || now >= nextReconciliation_)) {
         reconciliation_ = model_.Handles();
-        if (config_.mode == TrackingMode::FixtureOnly) {
+        if (config_.mode==TrackingMode::SelectedOnly) {
+            reconciliation_.clear();
+            for (const auto& selected:config_.selectedTargets)
+                if (model_.SelectionActive(selected.hwnd)) reconciliation_.push_back(selected.hwnd);
+        } else if (config_.mode == TrackingMode::FixtureOnly) {
             if (reconciliation_.empty()) {
                 reconciliation_.push_back(reinterpret_cast<WindowHandle>(config_.fixtureTarget));
             }

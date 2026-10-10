@@ -36,6 +36,8 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="HostContractTests.cpp" />
+    <ClCompile Include="..\Colorways\Resolver.cpp" />
+    <ClCompile Include="..\Colorways\WindowsMappings.cpp" />
     <ClCompile Include="..\Rendering\Overlay.cpp" />
     <ClCompile Include="..\Rendering\Stacking.cpp" />
     <ClCompile Include="..\Rendering\RenderQueue.cpp" />

@@ -31,6 +31,7 @@ struct TrackerConfig {
     std::vector<std::wstring> excludedClasses;
     std::size_t maxTargets{512};
     Milliseconds resizeQuietPeriod{250};
+    std::vector<WindowSelection> selectedTargets;
 };
 
 struct TrackerStats {
@@ -70,12 +71,14 @@ private:
         std::optional<Milliseconds> createdAt;
         bool geometryHint{};
         std::optional<TargetId> reprobeTarget;
+        bool destroyed{};
     };
     static void CALLBACK WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
                                      LONG objectId, LONG childId, DWORD threadId, DWORD eventTime);
     void OnWinEvent(DWORD event, HWND hwnd, LONG objectId, LONG childId, DWORD eventTime) noexcept;
     void Enqueue(WindowHandle hwnd, Dirty dirty, std::optional<Milliseconds> createdAt = std::nullopt,
-                 bool geometryHint = false, std::optional<TargetId> reprobeTarget = std::nullopt);
+                 bool geometryHint = false, std::optional<TargetId> reprobeTarget = std::nullopt,
+                 bool destroyed = false);
     void PostDispatch() noexcept;
     void Drain(ActionBatch& actions, Milliseconds now);
     void Reconcile(Milliseconds now);

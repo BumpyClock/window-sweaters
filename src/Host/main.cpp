@@ -12,6 +12,7 @@
 #include <shellapi.h>
 #include <sddl.h>
 #include <aclapi.h>
+#include <array>
 #include <cerrno>
 #include <atomic>
 #include <condition_variable>
@@ -48,10 +49,13 @@ constexpr wchar_t Usage[] =
     L"WindowSweaters.Host.exe [--target <decimal-or-0x-HWND>] [--test-mode] [--probe-output <path>]\n"
     L"  No --target: track supported ordinary application windows.\n"
     L"  --target: track only an exact WindowSweaters Fixture lifetime, never an arbitrary app.\n"
-    L"  --test-mode requires --target and isolated fixture storage/IPC.\n"
+    L"  --test-mode requires a fixture target or explicit preview selections, with isolated storage/IPC.\n"
     L"  --storage-dir <absolute-path> --endpoint-suffix <safe-name>: test mode only; use both.\n"
     L"  Without overrides, test mode derives storage/IPC from an owned --probe-output parent.\n"
-    L"  --probe-output requires --target; writes fixture snapshots and action counters.\n"
+    L"  --probe-output requires a fixture/preview target; writes appearance snapshots and action counters.\n"
+    L"  --inspect-preview <HWND>: read-only owner metadata and a lifetime-bound selection token.\n"
+    L"  --preview-target <HWND:PID:birth:fingerprint> (up to two): isolated explicit real-app preview.\n"
+    L"  Preview requires --test-mode, --storage-dir, --endpoint-suffix and --probe-output; no production profile.\n"
     L"WindowSweaters.Host.exe --integration-contract  (scripted checks; no desktop launch)\n"
     L"WindowSweaters.Host.exe --help\n";
 
@@ -66,11 +70,43 @@ private:
     HANDLE value_;
 };
 
+using PreviewSelection = WindowSelection;
+
+std::optional<std::uint64_t> ParseUnsigned(std::wstring_view text) {
+    if (text.empty() || text.size()>20 || text[0]<L'0' || text[0]>L'9') return std::nullopt;
+    const std::wstring value(text);
+    wchar_t* end{};
+    errno=0;
+    const bool hex=value.starts_with(L"0x") || value.starts_with(L"0X");
+    for (const auto c:text)
+        if (c==L' ' || c==L'\t' || c==L'\r' || c==L'\n') return std::nullopt;
+    const auto number=std::wcstoull(value.c_str(),&end,hex?16:10);
+    return errno!=ERANGE && end!=value.c_str() && *end==L'\0' ?
+        std::optional<std::uint64_t>(number) : std::nullopt;
+}
+
+std::optional<PreviewSelection> ParsePreviewSelection(std::wstring_view text) {
+    std::array<std::uint64_t,4> parts{};
+    for (std::size_t i=0;i<parts.size();++i) {
+        const auto end=text.find(L':');
+        if ((i+1<parts.size())!=(end!=std::wstring_view::npos)) return std::nullopt;
+        const auto value=ParseUnsigned(text.substr(0,end));
+        if (!value || !*value) return std::nullopt;
+        parts[i]=*value;
+        if (end!=std::wstring_view::npos) text.remove_prefix(end+1);
+    }
+    if (parts[0]>std::numeric_limits<UINT_PTR>::max() || parts[1]>UINT32_MAX) return std::nullopt;
+    return PreviewSelection{static_cast<WindowHandle>(parts[0]),
+        {static_cast<std::uint32_t>(parts[1]),parts[2],parts[3]}};
+}
+
 struct Options {
     HWND target{};
     bool testMode{};
     bool help{};
     bool integrationContract{};
+    WindowHandle inspectPreview{};
+    std::vector<PreviewSelection> preview;
     std::optional<WindowIdentity> fixtureIdentity;
     std::filesystem::path probeOutput;
     window_sweaters::integration::ConfigurationHostOptions configuration;
@@ -78,7 +114,7 @@ struct Options {
 
 class ComApartment final {
 public:
-    ComApartment() noexcept : result_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
+    explicit ComApartment(DWORD mode=COINIT_APARTMENTTHREADED) noexcept : result_(CoInitializeEx(nullptr, mode)) {}
     ~ComApartment() { if (SUCCEEDED(result_)) CoUninitialize(); }
     HRESULT Result() const noexcept { return result_; }
     ComApartment(const ComApartment&) = delete;
@@ -113,6 +149,18 @@ bool ParseOptions(Options& options) {
         } else if (std::wcscmp(arguments[index], L"--integration-contract") == 0) {
             valid = count == 2;
             options.integrationContract = true;
+        } else if (std::wcscmp(arguments[index], L"--inspect-preview") == 0 && index+1<count) {
+            const auto value=ParseUnsigned(arguments[++index]);
+            valid=count==3 && !options.inspectPreview && value && *value &&
+                *value<=std::numeric_limits<UINT_PTR>::max();
+            if (valid) options.inspectPreview=static_cast<WindowHandle>(*value);
+        } else if (std::wcscmp(arguments[index], L"--preview-target") == 0 && index+1<count) {
+            const auto selection=ParsePreviewSelection(arguments[++index]);
+            valid=selection && options.preview.size()<2;
+            if (valid) {
+                for (const auto& previous:options.preview) if (previous.hwnd==selection->hwnd) valid=false;
+                if (valid) options.preview.push_back(*selection);
+            }
         } else if (std::wcscmp(arguments[index], L"--target") == 0 && index + 1 < count) {
             const wchar_t* text = arguments[++index];
             wchar_t* end{};
@@ -146,12 +194,15 @@ bool ParseOptions(Options& options) {
             valid = valid && ((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') ||
                 (c >= L'0' && c <= L'9') || c == L'-' || c == L'_');
     }
-    return valid && (!options.testMode || options.target)
-        && (options.probeOutput.empty() || options.target);
+    if (!options.preview.empty())
+        valid=valid && !options.target && options.testMode && !storage.empty() && !suffix.empty() &&
+            !options.probeOutput.empty() && options.probeOutput.is_absolute();
+    return valid && (!options.testMode || options.target || !options.preview.empty())
+        && (options.probeOutput.empty() || options.target || !options.preview.empty());
 }
 
 bool BindFixtureStorage(Options& options) {
-    if (!options.testMode || !options.configuration.storage_directory.empty()) return true;
+    if (!options.testMode || (!options.configuration.storage_directory.empty() && options.preview.empty())) return true;
     if (options.probeOutput.empty()) return false;
     const auto parent = std::filesystem::weakly_canonical(
         std::filesystem::absolute(options.probeOutput).parent_path());
@@ -170,10 +221,56 @@ bool BindFixtureStorage(Options& options) {
     LocalFree(descriptor);
     if (!owned) return false;
     options.probeOutput = parent / options.probeOutput.filename();
-    options.configuration.storage_directory = parent / L"fixture-configuration";
-    options.configuration.endpoint_suffix = window_sweaters::configuration::TestEndpointSuffix(
-        options.configuration.storage_directory);
+    if (options.configuration.storage_directory.empty()) {
+        options.configuration.storage_directory = parent / L"fixture-configuration";
+        options.configuration.endpoint_suffix = window_sweaters::configuration::TestEndpointSuffix(
+            options.configuration.storage_directory);
+    }
     return true;
+}
+
+std::optional<PreviewSelection> ObservePreviewSelection(WindowHandle hwnd) {
+    const auto observation=WindowTracker::Query(reinterpret_cast<HWND>(hwnd));
+    Policy policy;
+    policy.hostPid=GetCurrentProcessId();
+    const auto eligibility=Evaluate(observation,policy);
+    if (eligibility!=Eligibility::Eligible && eligibility!=Eligibility::Suppressed) return std::nullopt;
+    const auto& window=std::get<AliveWindow>(observation);
+    return PreviewSelection{hwnd,window.identity};
+}
+
+int InspectPreview(WindowHandle hwnd) {
+    ComApartment apartment(COINIT_MULTITHREADED);
+    if (FAILED(apartment.Result())) return 5;
+    const auto selection=ObservePreviewSelection(hwnd);
+    if (!selection) return 3;
+    const auto token=window_sweaters::applications::TargetToken::FromTarget(
+        {hwnd,selection->identity.pid,selection->identity.processStart,1},0);
+    if (!token) return 3;
+    const auto metadata=window_sweaters::applications::QueryWindowOwnerMetadata(*token);
+    std::printf("{\"preview_token\":\"%llu:%lu:%llu:%llu\",",
+        static_cast<unsigned long long>(hwnd),static_cast<unsigned long>(selection->identity.pid),
+        static_cast<unsigned long long>(selection->identity.processStart),
+        static_cast<unsigned long long>(selection->identity.observedIdentity));
+    if (const auto* unavailable=std::get_if<window_sweaters::applications::MetadataUnavailable>(&metadata)) {
+        std::printf("\"metadata_available\":false,\"reason\":%u,\"stage\":%u,\"native_error\":%lu}\n",
+            static_cast<unsigned>(unavailable->reason),static_cast<unsigned>(unavailable->stage),
+            static_cast<unsigned long>(unavailable->nativeError));
+        return 3;
+    }
+    const auto& identity=std::get<window_sweaters::applications::AppMetadata>(metadata).Identity();
+    const auto resolution=window_sweaters::colorways::ResolveAppearance(&identity,{}, {},
+        window_sweaters::colorways::QueryWindowsInstallRoots());
+    if (const auto* error=std::get_if<window_sweaters::colorways::ResolutionError>(&resolution)) {
+        std::printf("\"metadata_available\":true,\"resolution_error\":%u}\n",static_cast<unsigned>(*error));
+        return 3;
+    }
+    const auto& appearance=std::get<window_sweaters::colorways::ResolvedAppearance>(resolution);
+    std::printf("\"metadata_available\":true,\"theme_id\":\"%.*s\",\"base_argb\":%lu}\n",
+        static_cast<int>(appearance.theme_id ? appearance.theme_id->size() : 0),
+        appearance.theme_id ? appearance.theme_id->data() : "",
+        static_cast<unsigned long>(appearance.base_argb));
+    return 0;
 }
 
 std::optional<WindowIdentity> SelectFixture(HWND target) {
@@ -203,6 +300,11 @@ TrackerConfig MakeTrackerConfig(const Options& options) {
     config.mode = options.target ? TrackingMode::FixtureOnly : TrackingMode::Production;
     config.fixtureTarget = options.target;
     config.initialFixtureIdentity = options.fixtureIdentity;
+    if (!options.preview.empty()) {
+        config.mode = TrackingMode::SelectedOnly;
+        config.selectedTargets = options.preview;
+        config.maxTargets = MaximumSelectedTargets;
+    }
     config.excludedClasses = {HostClass, L"WindowSweaters.Overlay", L"WindowSweaters.Settings",
         L"WindowSweaters.Settings.Activation"};
     // External helper PIDs can be reused. Classify their complete lifetimes at allocation instead.
@@ -215,7 +317,8 @@ public:
     Host(HINSTANCE instance, const Options& options,
         window_sweaters::integration::ConfigurationHost& configuration)
         : instance_(instance), options_(options), configuration_(configuration), committed_(configuration.Snapshot()),
-          appearance_(window_sweaters::host::MakeAppearance(committed_)), renderRevision_(committed_.revision),
+          appearance_(window_sweaters::host::MakeAppearance(committed_)),
+          installRoots_(window_sweaters::colorways::QueryWindowsInstallRoots()), renderRevision_(committed_.revision),
           metadataGate_(committed_.revision) {}
     ~Host() { Shutdown(); }
 
@@ -269,8 +372,16 @@ public:
         if (options_.probeOutput.empty()) return true;
         const auto next = std::filesystem::path(options_.probeOutput.wstring() + L".next");
         std::ofstream output(next, std::ios::binary | std::ios::trunc);
-        const auto found = entries_.find(reinterpret_cast<WindowHandle>(options_.target));
+        const auto selected = options_.target ? reinterpret_cast<WindowHandle>(options_.target) :
+            options_.preview.empty() ? WindowHandle{} : options_.preview.front().hwnd;
+        const auto found = entries_.find(selected);
         const Entry* entry = found == entries_.end() ? nullptr : found->second.get();
+        const auto* tile = entry && entry->appearance ?
+            std::get_if<window_sweaters::knitting::TileSpec>(&entry->appearance->result) : nullptr;
+        if (!tile && committed_.design_selection != window_sweaters::contracts::DesignSelection::by_app)
+            tile = &appearance_;
+        const auto* appearanceFailure = entry && entry->appearance ?
+            std::get_if<AppearanceFailure>(&entry->appearance->result) : nullptr;
         const auto targetBounds = entry ? entry->state.pendingRect : PhysicalRect{};
         const RECT bounds = entry ? entry->overlay.Bounds() : RECT{};
         const auto stats = tracker_ ? tracker_->Stats() : finalStats_;
@@ -281,7 +392,7 @@ public:
             << "  \"host_pid\": " << GetCurrentProcessId() << ",\n"
             << "  \"host_hwnd\": " << reinterpret_cast<UINT_PTR>(window_) << ",\n"
             << "  \"overlay_hwnd\": " << reinterpret_cast<UINT_PTR>(entry ? entry->overlay.Window() : nullptr) << ",\n"
-            << "  \"target_hwnd\": " << reinterpret_cast<UINT_PTR>(options_.target) << ",\n"
+            << "  \"target_hwnd\": " << selected << ",\n"
             << "  \"target_pid\": " << (entry ? entry->state.target.pid : 0) << ",\n"
             << "  \"target_process_start\": " << (entry ? entry->state.target.processStart : 0) << ",\n"
             << "  \"target_generation\": " << (entry ? entry->state.target.generation : 0) << ",\n"
@@ -313,9 +424,18 @@ public:
             << "  \"stitch_style\": " << static_cast<unsigned>(committed_.stitch_style)
             << ", \"material_style\": " << static_cast<unsigned>(committed_.material_style)
             << ", \"stitch_rows\": " << committed_.stitch_rows << ", \"yarn_argb\": " << committed_.yarn_argb << ",\n"
-            << "  \"chart_id\": \"" << (appearance_.chart ? appearance_.chart->semanticId : "")
+            << "  \"chart_id\": \"" << (tile && tile->chart ? tile->chart->semanticId : "")
             << "\", \"by_app_plain_fallback\": "
-            << (committed_.design_selection == window_sweaters::contracts::DesignSelection::by_app ? "true" : "false") << ",\n"
+            << (committed_.design_selection == window_sweaters::contracts::DesignSelection::by_app &&
+                tile && !tile->chart ? "true" : "false") << ",\n"
+            << "  \"appearance_resolutions\": " << counters_.appearanceResolutions
+            << ", \"appearance_errors\": " << counters_.appearanceErrors
+            << ", \"appearance_error\": " << (appearanceFailure ? appearanceFailure->result : S_OK)
+            << ", \"resolution_error\": " << (appearanceFailure && appearanceFailure->resolution ?
+                static_cast<int>(*appearanceFailure->resolution) : -1) << ",\n"
+            << "  \"render_epoch\": " << (entry ? entry->renderEpoch : 0)
+            << ", \"metadata_available\": " << (entry && entry->metadata &&
+                std::holds_alternative<window_sweaters::applications::AppMetadata>(*entry->metadata) ? "true" : "false") << ",\n"
             << "  \"render_requests\": " << queueStats.renderRequests << ", \"render_accepted\": " << queueStats.acceptedRequests << ",\n"
             << "  \"render_preparations\": " << queueStats.renderPreparations << ", \"tile_generations\": " << queueStats.tileGenerations << ",\n"
             << "  \"tile_cache_hits\": " << queueStats.cacheHits << ", \"render_pending\": " << queueStats.pending << ",\n"
@@ -332,11 +452,31 @@ public:
             << "  \"tracker_uncertain_queries\": " << stats.uncertainQueries << ", \"tracker_error\": " << stats.lastWin32Error << ",\n"
             << "  \"border_width_pixels\": " << (entry && entry->render.prepared
                 ? entry->render.prepared->frame.physicalPaddingPixels : 0) << ",\n"
-            << "  \"color_rgb\": [" << ((committed_.yarn_argb >> 16) & 255) << ", "
-            << ((committed_.yarn_argb >> 8) & 255) << ", " << (committed_.yarn_argb & 255)
+            << "  \"color_rgb\": [" << (((tile ? tile->baseArgb : committed_.yarn_argb) >> 16) & 255) << ", "
+            << (((tile ? tile->baseArgb : committed_.yarn_argb) >> 8) & 255) << ", " << ((tile ? tile->baseArgb : committed_.yarn_argb) & 255)
             << "], \"render_kind\": \"native-knit\",\n"
-            << "  \"composition\": \"Four narrow BGRA perimeter surfaces / DirectComposition / content-excluded / layered alpha 255 + transparent + no-redirection\"\n"
-            << "}\n";
+            << "  \"composition\": \"Four narrow BGRA perimeter surfaces / DirectComposition / content-excluded / layered alpha 255 + transparent + no-redirection\",\n"
+            << "  \"preview_mode\": " << (!options_.preview.empty() ? "true" : "false") << ", \"targets\": [";
+        bool first=true;
+        for (const auto& [hwnd, target] : entries_) {
+            const auto* effective=target->appearance ?
+                std::get_if<window_sweaters::knitting::TileSpec>(&target->appearance->result) : nullptr;
+            const auto* failure=target->appearance ?
+                std::get_if<AppearanceFailure>(&target->appearance->result) : nullptr;
+            output << (first ? "\n" : ",\n") << "    {\"hwnd\":" << hwnd << ",\"pid\":" << target->state.target.pid
+                << ",\"process_start\":" << target->state.target.processStart << ",\"generation\":" << target->state.target.generation
+                << ",\"render_epoch\":" << target->renderEpoch << ",\"chart_id\":\""
+                << (effective && effective->chart ? effective->chart->semanticId : "") << "\",\"base_argb\":"
+                << (effective ? effective->baseArgb : 0) << ",\"stitch\":" << (effective ? static_cast<unsigned>(effective->stitch) : 0)
+                << ",\"material\":" << (effective ? static_cast<unsigned>(effective->material) : 0)
+                << ",\"metadata_available\":" << (target->metadata &&
+                    std::holds_alternative<window_sweaters::applications::AppMetadata>(*target->metadata) ? "true" : "false")
+                << ",\"appearance_error\":" << (failure ? failure->result : S_OK)
+                << ",\"overlay_hwnd\":" << reinterpret_cast<UINT_PTR>(target->overlay.Window())
+                << ",\"overlay_visible\":" << (target->presentationVisible ? "true" : "false") << "}";
+            first=false;
+        }
+        output << "\n  ]\n}\n";
         output.close();
         if (!output.good()) { DeleteFileW(next.c_str()); return false; }
         if (!MoveFileExW(next.c_str(), options_.probeOutput.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -378,6 +518,16 @@ private:
         std::function<void()> duringVisibilityProbe;
         unsigned failDeviceInitializations{};
         std::optional<HRESULT> nextOverlayCreateFailure;
+        std::optional<window_sweaters::colorways::ResolutionError> nextAppearanceFailure;
+    };
+    struct AppearanceFailure {
+        HRESULT result{};
+        std::optional<window_sweaters::colorways::ResolutionError> resolution;
+    };
+    struct TargetAppearance {
+        std::uint64_t revision{};
+        window_sweaters::applications::ImmutableMetadata owner;
+        std::variant<window_sweaters::knitting::TileSpec, AppearanceFailure> result;
     };
     struct Entry {
         explicit Entry(TargetId target) : state(target), visibility({target.hwnd, target.pid, target.processStart, target.generation}) {}
@@ -390,6 +540,7 @@ private:
         Overlay overlay;
         bool placementPending{};
         window_sweaters::applications::ImmutableMetadata metadata;
+        std::optional<TargetAppearance> appearance;
         bool metadataPending{};
         std::uint64_t nextMetadataQuery{};
         std::uint64_t renderEpoch{};
@@ -400,6 +551,7 @@ private:
         std::uint64_t creates{}, removes{}, geometryUpdates{}, draws{}, pureMoves{};
         std::uint64_t hides{}, shows{}, reorders{}, staleActions{}, placementFailures{};
         std::uint64_t uploads{}, renderErrors{}, staleResults{};
+        std::uint64_t appearanceResolutions{}, appearanceErrors{};
     };
     static constexpr std::uint64_t DeviceGeneration = 1;
 
@@ -579,6 +731,7 @@ private:
             Hide(*entry);
             entry->render.Invalidate();
             AdvanceRenderEpoch(*entry);
+            entry->appearance.reset();
             entry->placementPending = false;
         }
         committed_ = snapshot;
@@ -918,10 +1071,54 @@ private:
         return found==contract_->eligibilityRevisions.end()?0:found->second;
     }
 
+    bool ResolveTargetAppearance(Entry& entry) {
+        using namespace window_sweaters;
+        const bool byApp = committed_.design_selection == contracts::DesignSelection::by_app;
+        const auto* known = entry.metadata ? std::get_if<applications::AppMetadata>(entry.metadata.get()) : nullptr;
+        if (byApp && !known) return false;
+        if (entry.appearance && entry.appearance->revision == renderRevision_) {
+            const auto* bound = entry.appearance->owner ?
+                std::get_if<applications::AppMetadata>(entry.appearance->owner.get()) : nullptr;
+            if (!byApp || (bound && bound->Identity() == known->Identity())) {
+                if (byApp) entry.appearance->owner = entry.metadata;
+                return std::holds_alternative<knitting::TileSpec>(entry.appearance->result);
+            }
+            AdvanceRenderEpoch(entry);
+            Hide(entry);
+            entry.placementPending = entry.state.requestedVisible;
+        }
+        ++counters_.appearanceResolutions;
+        TargetAppearance appearance{renderRevision_, byApp ? entry.metadata : nullptr, AppearanceFailure{E_FAIL, {}}};
+        try {
+            if (byApp && contract_ && contract_->nextAppearanceFailure) {
+                const auto error = *contract_->nextAppearanceFailure;
+                contract_->nextAppearanceFailure.reset();
+                appearance.result = host::MakeByAppAppearance(committed_, error);
+            } else {
+                appearance.result = byApp ? host::MakeAppearance(committed_, known->Identity(), installRoots_) : appearance_;
+            }
+        } catch (const host::AppearanceResolutionError& error) {
+            appearance.result = AppearanceFailure{E_INVALIDARG, error.Error()};
+        } catch (const std::invalid_argument&) {
+            appearance.result = AppearanceFailure{E_INVALIDARG, {}};
+        } catch (const std::bad_alloc&) {
+            appearance.result = AppearanceFailure{E_OUTOFMEMORY, {}};
+        }
+        entry.appearance = std::move(appearance);
+        if (const auto* failure = std::get_if<AppearanceFailure>(&entry.appearance->result)) {
+            ++counters_.appearanceErrors;
+            LogError(L"target appearance rejected; hidden until owner or appearance configuration changes", failure->result);
+            return false;
+        }
+        return true;
+    }
+
     bool EligibleNow(Entry& entry) {
         if (!ConfigurationCurrent()) return false;
         if (entry.state.excluded || !entry.state.requestedVisible || committed_.paused) return false;
-        if (contract_ && !contract_->requireMetadata) return true;
+        if (contract_ && !contract_->requireMetadata &&
+            committed_.design_selection != window_sweaters::contracts::DesignSelection::by_app)
+            return ResolveTargetAppearance(entry);
         auto known=entry.metadata?std::get_if<window_sweaters::applications::AppMetadata>(entry.metadata.get()):nullptr;
         if (!known) return false;
         const auto revision=EligibilityRevision(known->Identity());
@@ -931,7 +1128,8 @@ private:
             entry.placementPending=entry.state.requestedVisible;
         }
         entry.eligibilityObserved=true; entry.eligibilityRevision=revision;
-        return ConfigurationCurrent() && committed_.eligibility.Allows(known->Identity());
+        return ConfigurationCurrent() && committed_.eligibility.Allows(known->Identity()) &&
+            ResolveTargetAppearance(entry);
     }
 
     void AdvanceRenderEpoch(Entry& entry) {
@@ -997,6 +1195,9 @@ private:
                 if ((previous!=nullptr)!=(refreshed!=nullptr) ||
                     (previous && refreshed && previous->Identity()!=refreshed->Identity())) {
                     AdvanceRenderEpoch(*entry); Hide(*entry); entry->eligibilityObserved=false;
+                    entry->appearance.reset();
+                } else if (entry->appearance && entry->appearance->owner) {
+                    entry->appearance->owner = entry->metadata;
                 }
             }
             if (auto known=std::get_if<AppMetadata>(entry->metadata.get()))
@@ -1157,7 +1358,8 @@ private:
         if (entry.render.failed && Matches(*entry.render.failed, entry, *input)) return S_FALSE;
         if (entry.render.retry && Matches(*entry.render.retry, entry, *input)) return S_FALSE;
         const auto request = window_sweaters::host::MakeRenderRequest(
-            {entry.state.target, entry.renderEpoch}, renderRevision_, recovery_.Generation(), *input, appearance_);
+            {entry.state.target, entry.renderEpoch}, renderRevision_, recovery_.Generation(), *input,
+            std::get<window_sweaters::knitting::TileSpec>(entry.appearance->result));
         const HRESULT result = queue_->Submit(request);
         if (result == S_OK) {
             entry.render.pending = request;
@@ -1327,7 +1529,8 @@ private:
         if (stopped_ || !current) return S_FALSE;
         if (!EligibleNow(*current) || queueFaulted_) {
             Hide(*current);
-            return S_OK;
+            return current->appearance && std::holds_alternative<AppearanceFailure>(current->appearance->result)
+                ? S_FALSE : S_OK;
         }
         HRESULT result = Prepare(identity);
         if (result != S_OK) return result;
@@ -1553,6 +1756,7 @@ private:
     window_sweaters::integration::ConfigurationHost& configuration_;
     window_sweaters::contracts::Configuration committed_;
     window_sweaters::knitting::TileSpec appearance_;
+    const window_sweaters::colorways::WindowsInstallRoots installRoots_;
     // Queue revision advances only for shared appearance changes. Target epochs
     // retire app-policy work without canceling another application's preparation.
     std::uint64_t renderRevision_{};
@@ -1614,6 +1818,13 @@ void Host::RunConsumerContracts() {
         ++consumerChecks;
         if (!condition) throw std::runtime_error(message);
     };
+    const auto selection=ParsePreviewSelection(L"123:45:678:90");
+    require(selection && selection->hwnd==123 && selection->identity==WindowIdentity{45,678,90},
+        "Explicit preview selection parses complete process birth and native window fingerprint");
+    for (const auto token:{L"123",L"123:45:678",L"123:45:678:90:1",L"0:45:678:90",L"123:0:678:90",
+        L"123:45:0:90",L"123:45:678:0",L"123:4294967296:678:90",L"123:45:18446744073709551616:90",
+        L"123:45:-678:90",L"123:45:678: 90"})
+        require(!ParsePreviewSelection(token),"Explicit real-app preview rejects partial, zero, overflow and malformed lifetime tokens");
     ComApartment apartment;
     require(SUCCEEDED(apartment.Result()), "Consumer contract COM initialization");
     ContractState contract;
@@ -1667,6 +1878,14 @@ void Host::RunConsumerContracts() {
                 window_sweaters::rendering::RenderQueue::ReadyMessage,
                 window_sweaters::rendering::RenderQueue::ReadyMessage, PM_REMOVE))
                 DispatchMessageW(&message);
+        }
+        if (!complete()) {
+            for (const auto& [handle, entry] : host.entries_)
+                std::printf("Consumer deadline: target=%llu mode=%u epoch=%llu prepared=%d pending=%d retry=%d metadata=%d appearance=%d\n",
+                    static_cast<unsigned long long>(handle), static_cast<unsigned>(host.committed_.design_selection),
+                    static_cast<unsigned long long>(entry->renderEpoch), entry->render.prepared.has_value(),
+                    entry->render.pending.has_value(), entry->render.retry.has_value(), entry->metadata != nullptr,
+                    entry->appearance.has_value());
         }
         require(complete(), "Actual consumer completes current appearance within deadline");
     };
@@ -1817,17 +2036,208 @@ void Host::RunConsumerContracts() {
                 "Committed yarn/stitch/material/row count reaches actual native publication");
         }
     }
+    auto appMetadata=[](std::wstring const& path) {
+        return std::make_shared<applications::MetadataResult const>(
+            applications::ResolveMetadata(applications::NoPackagedIdentity{},applications::ExecutablePath{path}));
+    };
+    host.entries_.at(10001)->metadata=appMetadata(L"C:\\Tools\\Unknown.exe");
     auto byApp = host.committed_;
     byApp.design_selection = contracts::DesignSelection::by_app;
     appearanceChange(byApp);
     require(!host.entries_.at(10001)->render.prepared->tile.chart &&
-        host.entries_.at(10001)->render.prepared->tile.baseArgb == byApp.yarn_argb,
-        "ByApp actual Host publication is honest saved plain-yarn fallback, not Finder");
+        host.entries_.at(10001)->render.prepared->tile.baseArgb == 0xff7c9885u,
+        "ByApp actual Host publication uses identity-stable Wool fallback, never a Finder example or saved manual yarn");
     contract.requireMetadata=true;
-    auto appMetadata=[](wchar_t const* path) {
-        return std::make_shared<applications::MetadataResult const>(
-            applications::ResolveMetadata(applications::NoPackagedIdentity{},applications::ExecutablePath{path}));
-    };
+    {
+        const auto previousConfiguration=host.committed_;
+        auto mappedConfiguration=previousConfiguration;
+        mappedConfiguration.border_width_dip=16.f;
+        appearanceChange(mappedConfiguration);
+        const auto chromeOwner=appMetadata(host.installRoots_.program_files + L"\\Google\\Chrome\\Application\\chrome.exe");
+        const auto teamsOwner=std::make_shared<applications::MetadataResult const>(applications::ResolveMetadata(
+            applications::PackagedAumid{L"MSTeams_8wekyb3d8bbwe!MSTeams"},
+            applications::ExecutablePath{L"C:\\Packages\\Teams\\ms-teams.exe"}));
+        const auto unknownOwner=appMetadata(L"C:\\Tools\\Unknown.exe");
+        add(19001); add(19002); add(19003);
+        require(!host.entries_.at(19001)->overlay.Window() && !host.entries_.at(19002)->render.pending,
+            "ByApp mapped owners wait for accepted identity, never provisional manual yarn");
+        host.entries_.at(19001)->metadata=chromeOwner;
+        host.entries_.at(19002)->metadata=teamsOwner;
+        host.entries_.at(19003)->metadata=unknownOwner;
+        for (auto handle:{WindowHandle{19001},WindowHandle{19002},WindowHandle{19003}})
+            require(SUCCEEDED(host.PlaceAndShow(host.entries_.at(handle)->state.target)), "Mapped/unmatched owner submits real Host worker input");
+        pump(prepared);
+        auto mappedTiles=[&] {
+            const auto& chromeTile=host.entries_.at(19001)->render.prepared->tile;
+            const auto& teamsTile=host.entries_.at(19002)->render.prepared->tile;
+            require(chromeTile.chart && chromeTile.chart->semanticId=="google-chrome" &&
+                chromeTile.baseArgb==0xfff4f0e6u && chromeTile.chart->appearance.flags==56 &&
+                chromeTile.chart->argbCells[4]==0xffd8675bu && chromeTile.chart->argbCells[20]==0xff6ba776u &&
+                chromeTile.chart->argbCells[100]==0xff4285f4u &&
+                chromeTile.stitch==knitting::Stitch::Stockinette && chromeTile.material==knitting::Material::Raised,
+                "Exact mapped executable reaches actual Host publication with literal Chrome palette and finishing");
+            require(teamsTile.chart && teamsTile.chart->semanticId=="microsoft-teams" &&
+                teamsTile.baseArgb==0xff9283c1u && teamsTile.chart->appearance.flags==48 &&
+                teamsTile.chart->argbCells[0]==0xfff4efeeu && teamsTile.chart->argbCells[1]==0 &&
+                teamsTile.stitch==knitting::Stitch::Stockinette && teamsTile.material==knitting::Material::Raised,
+                "Exact packaged owner reaches actual Host publication with literal Teams palette and material");
+        };
+        mappedTiles();
+        Options selectedOptions;
+        selectedOptions.preview.push_back({19001,windows.at(19001).identity});
+        const auto selectedConfig=MakeTrackerConfig(selectedOptions);
+        Policy selectedPolicy;
+        selectedPolicy.mode=selectedConfig.mode;
+        selectedPolicy.selectedTargets=selectedConfig.selectedTargets;
+        selectedPolicy.maxTargets=selectedConfig.maxTargets;
+        TrackingModel selectedModel(selectedPolicy);
+        auto suppressedSelection=windows.at(19001);
+        suppressedSelection.minimized=true;
+        require(selectedModel.Observe(suppressedSelection,Dirty::Lifecycle,1).empty() &&
+            selectedModel.Current(19001).has_value(),
+            "Host preview configuration discovers/seals suppressed selection before first Host Create");
+        require(selectedModel.Observe(windows.at(19002),Dirty::Lifecycle,2).empty() && selectedModel.Size()==1,
+            "Host preview policy rejects unselected owners before tracker target admission");
+        selectedModel.Observe(DestroyedWindow{19001},Dirty::Lifecycle,3);
+        suppressedSelection.minimized=false;
+        require(selectedModel.Observe(suppressedSelection,Dirty::Lifecycle,4,4).empty() &&
+            !selectedModel.Current(19001),
+            "Destroyed initially suppressed preview cannot authorize same-HWND/process/fingerprint restored replacement");
+        auto updateAll=[&](contracts::Configuration snapshot,bool wait) {
+            snapshot.revision=host.committed_.revision+1;
+            host.ApplyConfiguration(snapshot);
+            for (auto handle:{WindowHandle{10001},WindowHandle{19001},WindowHandle{19002},WindowHandle{19003}})
+                require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(windows.at(handle),Dirty::Appearance,GetTickCount64()))),
+                    "All current private owner fixtures observe one committed appearance transaction");
+            if (wait) pump(prepared);
+        };
+        auto manual=host.committed_;
+        manual.design_selection=contracts::DesignSelection::plain;
+        manual.yarn_argb=0xff123456u;
+        manual.stitch_style=contracts::StitchStyle::rib;
+        manual.material_style=contracts::MaterialStyle::plain;
+        updateAll(manual,true);
+        for (auto handle:{WindowHandle{19001},WindowHandle{19002},WindowHandle{19003}}) {
+            const auto& tile=host.entries_.at(handle)->render.prepared->tile;
+            require(!tile.chart && tile.baseArgb==0xff123456u && tile.stitch==knitting::Stitch::Rib &&
+                tile.material==knitting::Material::Plain && tile.gauge.rows==3.5f,
+                "Manual plain overrides differing owners without modifying persisted yarn/stitch/material/gauge");
+        }
+        manual=host.committed_;
+        manual.design_selection=contracts::DesignSelection::original;
+        manual.design_id="messages";
+        updateAll(manual,true);
+        for (auto handle:{WindowHandle{19001},WindowHandle{19002},WindowHandle{19003}}) {
+            const auto& tile=host.entries_.at(handle)->render.prepared->tile;
+            require(tile.chart && tile.chart->semanticId=="messages" && tile.chart->appearance.flags==36 &&
+                tile.baseArgb==0xff123456u && tile.material==knitting::Material::Plain &&
+                tile.stitch==knitting::Stitch::Stockinette,
+                "Manual authored selection retains saved base yarn and its own non-sculpted finishing across owners");
+        }
+        manual=host.committed_; manual.design_selection=contracts::DesignSelection::plain; manual.design_id.clear();
+        updateAll(manual,false);
+        const auto queuedManual=*host.entries_.at(19001)->render.pending;
+        auto automatic=host.committed_; automatic.design_selection=contracts::DesignSelection::by_app;
+        updateAll(automatic,true);
+        require(host.entries_.at(19001)->render.prepared->configRevision!=queuedManual.configRevision &&
+            host.committed_.stitch_style==contracts::StitchStyle::rib &&
+            host.committed_.material_style==contracts::MaterialStyle::plain && host.committed_.yarn_argb==0xff123456u,
+            "Mode change while real work is queued rejects old mode without rewriting saved manual controls");
+        mappedTiles();
+        const auto stable=*host.entries_.at(19003)->render.prepared;
+        require(!stable.tile.chart && stable.tile.baseArgb==0xff7c9885u &&
+            stable.tile.stitch==knitting::Stitch::Rib && stable.tile.material==knitting::Material::Plain,
+            "Unmatched ByApp uses exact stable fallback with saved plain stitch/material");
+        require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{19003},Dirty::Lifecycle,GetTickCount64()))),
+            "Retire unknown owner lifetime before relaunch");
+        windows.at(19003).identity.processStart=5678;
+        require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(windows.at(19003),Dirty::Lifecycle,GetTickCount64()))),
+            "Recreate unknown executable with new process birth");
+        host.entries_.at(19003)->metadata=appMetadata(L"c:\\TOOLS\\unknown.EXE");
+        host.PlaceAndShow(host.entries_.at(19003)->state.target); pump(prepared);
+        require(host.entries_.at(19003)->render.prepared->tile.baseArgb==0xff7c9885u &&
+            host.entries_.at(19003)->state.target.generation!=stable.token.target.generation,
+            "Relaunched unknown identity keeps exact yarn while old HWND/process epoch stays retired");
+        const auto unrelated=*host.entries_.at(19002)->render.prepared;
+        const auto unrelatedEpoch=host.entries_.at(19002)->renderEpoch;
+        const auto resolutionsBefore=host.counters_.appearanceResolutions;
+        auto observationOnly=host.committed_; ++observationOnly.revision;
+        host.ApplyConfiguration(observationOnly);
+        require(host.counters_.appearanceResolutions==resolutionsBefore &&
+            host.entries_.at(19002)->renderEpoch==unrelatedEpoch &&
+            host::SamePreparation(*host.entries_.at(19002)->render.prepared,unrelated),
+            "Observation/eligibility-only revision does not recolor or retire unrelated prepared inputs");
+
+        host.metadataWorker_=std::make_unique<applications::MetadataWorker>(applications::WorkerLimits{},
+            [&](applications::TargetToken const& token) -> applications::MetadataResult {
+                return token.Target().hwnd==19001 || token.Target().hwnd==19002 ? *teamsOwner : *unknownOwner;
+            });
+        struct WorkerStop {
+            Host& host;
+            ~WorkerStop() {
+                if (host.metadataWorker_) {
+                    for (const auto& request:host.metadataWorker_->Stop()) host.metadataGate_.Retire(request);
+                    host.metadataWorker_.reset();
+                }
+            }
+        } workerStop{host};
+        auto& changing=*host.entries_.at(19001);
+        host.AdvanceRenderEpoch(changing); host.Hide(changing);
+        require(SUCCEEDED(host.PlaceAndShow(changing.state.target)) && changing.render.pending.has_value(),
+            "Mapped owner has an actual asynchronous Chrome preparation before owner metadata changes");
+        const auto obsolete=*changing.render.pending;
+        const auto uploadsBefore=host.counters_.uploads;
+        changing.nextMetadataQuery=0;
+        host.PollMetadata();
+        const auto deadline=GetTickCount64()+10000;
+        while ((!changing.metadata || std::get<applications::AppMetadata>(*changing.metadata).Identity()!=
+            std::get<applications::AppMetadata>(*teamsOwner).Identity()) && GetTickCount64()<deadline) {
+            Sleep(5); host.PollMetadata();
+        }
+        require(changing.renderEpoch>obsolete.token.appearanceRevision &&
+            std::get<applications::AppMetadata>(*changing.metadata).Identity()==std::get<applications::AppMetadata>(*teamsOwner).Identity() &&
+            host.entries_.at(19002)->renderEpoch==unrelatedEpoch &&
+            host::SamePreparation(*host.entries_.at(19002)->render.prepared,unrelated),
+            "Accepted same-lifetime async owner change retires only affected target, not unrelated owner");
+        pump(prepared);
+        require(changing.render.prepared->tile.chart->semanticId=="microsoft-teams" &&
+            changing.render.prepared->tile.baseArgb==0xff9283c1u && host.counters_.uploads==uploadsBefore+1,
+            "Late old-owner job cannot upload; current accepted owner alone publishes its exact authored theme");
+        const auto refreshed=*changing.render.prepared;
+        const auto stableEpoch=changing.renderEpoch;
+        const auto stableResolutions=host.counters_.appearanceResolutions;
+        const auto stableRequests=host.queue_->Status().renderRequests;
+        changing.nextMetadataQuery=0;
+        host.PollMetadata();
+        while (changing.metadataPending && GetTickCount64()<deadline) { Sleep(5); host.PollMetadata(); }
+        require(!changing.metadataPending && changing.renderEpoch==stableEpoch &&
+            host.counters_.appearanceResolutions==stableResolutions && host.queue_->Status().renderRequests==stableRequests &&
+            host::SamePreparation(*changing.render.prepared,refreshed),
+            "Same-identity metadata refresh reuses its effective appearance and immutable preparation without churn");
+        for (const auto& request:host.metadataWorker_->Stop()) host.metadataGate_.Retire(request);
+        host.metadataWorker_.reset();
+        changing.appearance.reset(); host.AdvanceRenderEpoch(changing); host.Hide(changing);
+        contract.nextAppearanceFailure=colorways::ResolutionError::UnknownChart;
+        const auto errorsBefore=host.counters_.appearanceErrors;
+        require(host.PlaceAndShow(changing.state.target)==S_FALSE && changing.appearance &&
+            std::get<AppearanceFailure>(changing.appearance->result).resolution==colorways::ResolutionError::UnknownChart &&
+            !changing.render.pending && !changing.presentationVisible,
+            "Typed resolver failure is retained and suppressed, never a successful plain/null appearance");
+        for (int retry=0;retry<4;++retry) host.PlaceAndShow(changing.state.target);
+        require(host.counters_.appearanceErrors==errorsBefore+1 &&
+            host.entries_.at(19002)->renderEpoch==unrelatedEpoch,
+            "Permanent resolution failure diagnostics/retries are bounded to the effective owner/config binding");
+        changing.metadata=chromeOwner;
+        host.PlaceAndShow(changing.state.target); pump(prepared);
+        require(changing.render.prepared->tile.chart->semanticId=="google-chrome",
+            "New accepted owner binding recovers a prior resolution failure without stale fallback");
+        for (auto handle:{WindowHandle{19001},WindowHandle{19002},WindowHandle{19003}}) {
+            host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()));
+            windows.erase(handle);
+        }
+        appearanceChange(previousConfiguration);
+        std::puts("PASS: actual ByApp exe/package authored palettes, stable unknown relaunch, manual override/mode races, target-only async owner epochs and bounded typed resolution failures");
+    }
     auto appA=appMetadata(L"C:\\PrivateFixtures\\One\\app.exe");
     auto appB=appMetadata(L"C:\\PrivateFixtures\\Two\\app.exe");
     host.entries_.at(10001)->metadata=appA;
@@ -2115,6 +2525,8 @@ void Host::RunConsumerContracts() {
         require(result == S_FALSE && !host.Find(lifetime),
             "Actual Prepare/Move/Show consumer rejects pumped Remove without retained Entry/TargetId references");
         host.ApplyBatch(contract.model.Observe(windows.at(10001), Dirty::Lifecycle, GetTickCount64()));
+        host.entries_.at(10001)->metadata=appA;
+        host.PlaceAndShow(host.entries_.at(10001)->state.target);
         pump(prepared);
     }
 
@@ -2379,6 +2791,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         if (!VerifyVersionInfoW(&minimum, versionFields, conditions)) {
             LogError(L"Windows 11 build 22000 minimum", HRESULT_FROM_WIN32(ERROR_OLD_WIN_VERSION));
             return 5;
+        }
+        if (options.inspectPreview) return InspectPreview(options.inspectPreview);
+        for (const auto& selected:options.preview) {
+            const auto current=ObservePreviewSelection(selected.hwnd);
+            if (!current || current->identity!=selected.identity) {
+                LogError(L"select exact captured preview window lifetime", E_INVALIDARG);
+                return 3;
+            }
         }
         if (options.target) {
             options.fixtureIdentity = SelectFixture(options.target);

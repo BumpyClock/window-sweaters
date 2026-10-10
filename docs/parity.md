@@ -13,7 +13,7 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | [#6](https://github.com/BumpyClock/window-sweaters/issues/6) | Native settings, host-owned persistence, secure revisioned IPC | Native WinUI, revisioned IPC/storage, and host binding independently reviewed | Real Session/IPC/storage checks pass; Computer Use verified live width/pause, restart persistence, Settings close with host running, and explicit host quit without automatic restart |
 | [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Catalogue rendering, host appearance wiring, and persisted WinUI controls independently reviewed | 971 renderer checks and 43 production appearance comparisons pass; real Spotify selection, live width/pause, preview, persistence and restart verified through Computer Use |
 | [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Host-owned persistence and native Apps controls integrated and independently reviewed | Computer Use verified per-app changes, default-off overrides, persistence across new PID/HWND, all-off before first rendering, and retained exact-control focus without the former viewport jump |
-| [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Resolver independently reviewed; host integration pending | Debug/Release: 444 checks pass, including Unicode identity stability; installed-app demonstration pending |
+| [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Per-target host resolution and bounded preview tracking integrated and independently reviewed | Clean Debug/Release: 487 Host checks, 616 adapter checks, 43 appearance comparisons, and 12 tracking scenarios plus hidden native tracking; Computer Use verified distinct Word/Excel sweaters and manual override |
 | [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Source palette math and bounded icon preparation independently reviewed; host integration pending | Synthetic and own-executable icon checks pass; cross-feature runtime qualification pending |
 | [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Native import model independently reviewed; host/UI persistence pending | Debug/Release: 1,618 checks pass, including removal/reimport revision safety; real restart qualification pending |
 | [#12](https://github.com/BumpyClock/window-sweaters/issues/12) | Physical geometry, mixed DPI, Snap, clipping | Geometry and GPU corner policy integrated and independently reviewed | 1,645 focused geometry checks and actual GPU rounded-mask readback pass; normal fixture corners inspected at 100%; physical mixed-monitor matrix pending |
@@ -153,3 +153,38 @@ and the next resolver adapter, built all six native Release projects. It passed
 43 original-catalogue appearance comparisons, and the hidden Host integration
 contract. This establishes that the exclusion slice builds and runs against its
 committed 37-design prerequisites. It is not clean-machine or Store qualification.
+
+## Authored Windows app resolution
+
+The clean 37-design candidate resolved the exact default Microsoft Office Word
+and Excel executable identities. Computer Use launched an isolated preview host
+admitting only those two inspected lifetimes, then selected By app in native
+Settings. Word received its blue authored wave chart; Excel received its green
+authored check chart. Both overlays were visible, metadata was available, and
+appearance errors were zero.
+
+Selecting Spotify manually applied the same saved chart and base yarn to both
+owners. Returning to By app restored their distinct authored charts without
+increasing yarn-generation count beyond the manual selection's count. The
+Settings preview continued to label By app as a Finder example.
+
+Independent review found that late preview filtering could admit a replacement
+of an initially suppressed HWND and let unrelated windows exhaust tracking
+capacity. Selected-only tracking now seals suppressed lifetimes at discovery,
+filters before queuing/admission, and permanently retires destroyed selections.
+Model tests include 600 unrelated owners and same-process HWND reuse. A hidden
+native child-process test covers suppressed discovery and destruction. Retained
+review cleared both corrections.
+
+Twelve static observations of the two-app host retained draws at 4, GPU uploads
+at 4, yarn generations at 3, private bytes at 53,649,408, and native handles at
+1,167. This is a bounded two-window observation, not a total compositor-memory
+budget, many-window leak test, or universal zero-CPU claim.
+
+Closing Settings left both decorations running. After the user selected Quit
+from the preview host's tray menu, its process exited and the final probe recorded
+`stopped=true`, zero tracked entries, and an empty target array. No foreign
+application was closed or edited during this preview.
+Native persisted restart of this two-app preview remains unverified; the
+identity/relaunch and configuration persistence checks are separate model and
+IPC evidence.

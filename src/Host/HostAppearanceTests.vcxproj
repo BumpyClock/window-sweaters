@@ -17,15 +17,22 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ItemDefinitionGroup>
     <ClCompile>
+      <PreprocessorDefinitions>WS_HOST_BY_APP_ADAPTER_TESTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
       <RuntimeLibrary Condition="'$(Configuration)' != 'Debug'">MultiThreaded</RuntimeLibrary>
       <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>d2d1.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>d2d1.lib;windowscodecs.lib;ole32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AppearanceTests.cpp" />
     <ClCompile Include="..\Settings\Preview.cpp" />
+    <ClCompile Include="..\Applications\AppIdentity.cpp" />
+    <ClCompile Include="..\Applications\EligibilityPreferences.cpp" />
+    <ClCompile Include="..\Applications\WindowOwnerMetadata.cpp" />
+    <ClCompile Include="..\Applications\ProcessMetadata.cpp" />
+    <ClCompile Include="..\Colorways\Resolver.cpp" />
+    <ClCompile Include="..\Colorways\WindowsMappings.cpp" />
     <ClCompile Include="..\Knitting\KnitTile.cpp" />
     <ClCompile Include="..\Knitting\Chart.cpp" />
     <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>

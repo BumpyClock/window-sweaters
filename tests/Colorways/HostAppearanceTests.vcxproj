@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{C01BA4A7-2A67-446B-B874-894876F5A05B}</ProjectGuid>
+    <RootNamespace>WindowSweaters.Host.ByAppTests</RootNamespace>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'!='Debug'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <TargetName>HostByAppAppearanceTests</TargetName>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\out\issue9-adapter\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\..\out\issue9-adapter\obj\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>WS_HOST_BY_APP_ADAPTER_TESTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'!='Debug'">MultiThreaded</RuntimeLibrary>
+      <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
+      <Optimization Condition="'$(Configuration)'!='Debug'">MaxSpeed</Optimization>
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalDependencies>d2d1.lib;windowscodecs.lib;ole32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- Direct sources avoid rebuilding or overwriting shared Host/library artifacts. -->
+  <ItemGroup>
+    <ClCompile Include="..\..\src\Host\AppearanceTests.cpp" />
+    <ClCompile Include="..\..\src\Settings\Preview.cpp" />
+    <ClCompile Include="..\..\src\Applications\AppIdentity.cpp" />
+    <ClCompile Include="..\..\src\Applications\EligibilityPreferences.cpp" />
+    <ClCompile Include="..\..\src\Applications\WindowOwnerMetadata.cpp" />
+    <ClCompile Include="..\..\src\Applications\ProcessMetadata.cpp" />
+    <ClCompile Include="..\..\src\Colorways\Resolver.cpp" />
+    <ClCompile Include="..\..\src\Colorways\WindowsMappings.cpp" />
+    <ClCompile Include="..\..\src\Knitting\KnitTile.cpp" />
+    <ClCompile Include="..\..\src\Knitting\Chart.cpp" />
+    <ClCompile Include="..\..\src\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
+    <ClCompile Include="..\..\src\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\..\src\Designs\Catalogue.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
