@@ -25,10 +25,14 @@ Link `WindowSweaters.Geometry.vcxproj`, `user32.lib`, and `dwmapi.lib`.
    when supported. This prevents float style conversion from changing the integer
    envelope near a rounding boundary. Validate the returned perimeter's dimensions
    and content inset against this input before attaching its pieces.
-4. Intersect composition with `clipRelativeToOuter`, then subtract
-   `targetRelativeToOuter`. Both rectangles are half-open **local physical pixels**.
+4. Intersect composition with `clipRelativeToOuter`, then subtract the content
+   shape bounded by `targetRelativeToOuter`, with physical radius
+   `radiusDip * deviceScale` clamped to half its shorter extent.
+   Both rectangles are half-open **local physical pixels**.
    Convert to DIP only if the compositor's clip API requires DIP. The subtraction
-   excludes caption/client content, including the upstream renderer's inward tuck.
+   excludes caption/client content without cutting off rounded exterior corners.
+   Do not subtract a square rectangle for a rounded target. The upstream inward
+   tuck may remain below the rounded target's content through correct stacking.
    Retain four narrow perimeter pieces; do not allocate a whole-window backing image.
 5. Requery after movement, display/work-area/DPI changes, and failed queries. The
    caller owns lifetime/appearance/geometry generations, stale-work rejection,
@@ -44,11 +48,31 @@ reported as successful.
 
 ## Conservative corner and clipping policy
 
-- A public DWM preference is a **hint**, not an actual-radius or Snap-state query.
-  Unknown/unsupported/default preferences use square corners. Explicit no-round
-  also uses square corners. Explicit round/small-round hints permit the requested
-  radius, capped by policy at 8/4 DIP and half the target's physical shorter side.
-  These caps are not measured OS radii.
+- A public DWM preference is a **hint**, not outline discovery or an actual-radius
+  or Snap-state query. `WindowFacts.cornerEligibility` separates that hint from
+  the acquired facts that permit the policy. Omitted eligibility is `Unverified`,
+  which conservatively stays square, even with an explicit round hint.
+- `StandardFrame` permits `DefaultRoundPolicy`: the requested target radius capped
+  at **8 DIP** for an ordinary restored Windows 11 top-level window. The native
+  adapter requires both `WS_CAPTION` and `WS_THICKFRAME`, enabled DWM non-client
+  rendering, no child/minimized style, no `WS_EX_TOOLWINDOW`, no layering or
+  no-redirection-bitmap style, and no reported window region. This fixes ordinary
+  automatically rounded windows without treating every `DWMWCP_DEFAULT` window
+  as either square or proven rounded.
+- `HintOnly` covers other non-layered, non-region top-level frames that do not
+  qualify for default rounding. Only explicit round/small-round hints permit the
+  requested radius, capped at **8/4 DIP**. Default stays square. `UnsupportedShape`
+  covers any reported region (including a single rectangle or an empty region),
+  all `WS_EX_LAYERED` windows (a conservative superset of per-pixel-alpha windows),
+  `WS_EX_NOREDIRECTIONBITMAP`, child, and minimized windows. Those shapes stay
+  square even with a round hint. Unsupported corner capability and explicit
+  `DWMWCP_DONOTROUND` also stay square.
+- All rounded radii clamp to half the target's physical shorter side. These are
+  rendering policies, not measured OS radii. Custom non-client handling, invisible
+  shadow windows, VM/remote sessions, or other DWM heuristics can still defeat
+  rounding. Public attributes cannot discover an exact outline for every custom,
+  layered, or region window. The host still owns visibility/shape qualification.
+  Do not use this policy as pixel evidence or mutate a foreign HWND to make it fit.
 - Alignment of any target edge within one physical pixel of the selected
   monitor's work-area edge forces square corners, including when DWM reports a
   round hint. This deliberately includes ordinary edge-aligned windows and is
@@ -66,11 +90,34 @@ reported as successful.
   occlusion is handled by stacking, not by this module.
 
 Native querying reads DWM extended frame bounds, DPI, monitor information,
-placement, awareness, and corner preference twice and rejects changes during the
-bounded query. It cannot make a foreign HWND or multi-API snapshot atomic.
-Only known unsupported corner-attribute
-errors (`E_INVALIDARG`/`E_NOTIMPL`) allow the explicit square fallback; other DWM
-errors remain failures.
+placement, awareness, corner preference, relevant style bits, region type/bounds,
+and DWM non-client rendering twice and rejects changes during the bounded query.
+It cannot make a foreign HWND or multi-API snapshot atomic. `GetWindowRgnBox`
+documents the same `ERROR` return for no region and query errors: the adapter
+clears last-error first, preserves any explicit nonzero error as `RegionFailed`,
+and treats `ERROR` with no explicit error only as **no region reported**, not proof
+of a rectangular pixel outline. No region rectangle is invented in that case.
+Style and non-client failures remain `StyleFailed`/`NonClientRenderingFailed`
+with their native error. Only known unsupported corner-attribute errors
+(`E_INVALIDARG`/`E_NOTIMPL`) allow the explicit square capability fallback; other
+DWM errors remain failures.
+
+`RenderInput.radiusDip` is the **target/content** radius, not the outer border
+radius. For rounded geometry, physical target radius is `radiusDip * deviceScale`;
+continuous outer radius is `(radiusDip + widthDip) * deviceScale`, independent of
+integer padding rounding. For the default 10-DIP band:
+
+| DPI / scale | Round/default target → outer (px) | Small target → outer (px) |
+| --- | --- | --- |
+| 96 / 100% | 8 → 18 | 4 → 14 |
+| 120 / 125% | 10 → 22.5 | 5 → 17.5 |
+| 144 / 150% | 12 → 27 | 6 → 21 |
+| 192 / 200% | 16 → 36 | 8 → 28 |
+
+An inward tuck inset uses `max(0, radiusDip - tuckDip) * deviceScale`, further
+clamped to half the inset content extent; it does not reuse the outer radius.
+Square decisions keep the content and exterior square. Renderer/compositor
+integration owns actual masks and antialiasing.
 
 Before returning render geometry, checks bound coordinates, outer dimensions
 (default/hard maximum 32768 pixels), finite style/DPI, and the four-piece BGRA
@@ -90,16 +137,25 @@ msbuild tests\Geometry\WindowSweaters.Geometry.Tests.vcxproj /m /v:minimal /p:Co
 ```
 
 The standalone projects pin C++20, v145, SDK 10.0.26100.0, and Windows 11 x64.
-Tests cover 100/125/150/200% transforms, transfers both directions, negative origins,
-fractional DIP width/gutters, all edge clips, work-area/display clipping, Snap
-fallbacks, uncertain/removed-monitor inputs, tiny/oversized geometry, finite values,
-coordinate overflow, and byte budgets. Native smoke tests cover invalid HWNDs
-without opening or driving a desktop window.
+Tests cover default eligible/ineligible facts, unsupported/square/round/small
+preferences, their target/outer/tuck radius relationships at 100/125/150/200%,
+transfers both directions, negative origins, fractional DIP width/gutters,
+all edge clips, work-area/display clipping, Snap fallbacks, uncertain/removed-monitor
+inputs, tiny/oversized geometry, finite values, coordinate overflow, and byte budgets.
+The native contract creates only its own hidden HWNDs and reads documented
+bounds/DPI/eligibility facts. It covers ordinary styles, missing caption/thick frame,
+disabled non-client rendering, tool/layered/no-redirection styles, and a custom
+region with all four preferences. Only these owned hidden fixtures are mutated;
+no user-app pixels are read and no window is shown. The test alone links `gdi32.lib`
+for its owned region. Thread PMv2 awareness is restored after fixture cleanup.
 
-Missing evidence: #4 stacking integration, #5 live renderer integration, native
-successful-window query qualification, actual mixed-DPI transfers both ways,
-physical Snap layouts/monitor-edge pixels, and physical monitor removal. Pure
-simulations and invalid-HWND calls do not establish any of those results.
+Measured focused Debug/Release runs: 1645 checks each on v145 / SDK 10.0.26100.0.
+These checks establish geometry policy and native fact acquisition, not actual
+corner outlines. Missing evidence: #4 stacking integration, #5 live renderer
+integration, user-screenshot corner comparison after the GPU mask update, actual
+mixed-DPI transfers both ways, physical Snap layouts/monitor-edge pixels, and
+physical monitor removal. Pure simulations and hidden-HWND fact observations
+do not establish any of those results.
 
 ## API evidence
 
@@ -108,3 +164,6 @@ simulations and invalid-HWND calls do not establish any of those results.
 - [Public DWM corner preference and hint limitations](https://learn.microsoft.com/windows/apps/desktop/modernize/ui/apply-rounded-corners)
 - [MonitorFromRect](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-monitorfromrect)
 - [GetMonitorInfo](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getmonitorinfow)
+- [Style queries and zero/error distinction](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getwindowlongptrw)
+- [Window-region query and ambiguous ERROR return](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getwindowrgnbox)
+- [DWM non-client rendering enabled](https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)

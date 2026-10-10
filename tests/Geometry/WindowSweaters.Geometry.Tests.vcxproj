@@ -44,7 +44,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>user32.lib;dwmapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;dwmapi.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ControlFlowGuard>Guard</ControlFlowGuard>
       <OptimizeReferences Condition="'$(Configuration)'=='Release'">true</OptimizeReferences>
       <EnableCOMDATFolding Condition="'$(Configuration)'=='Release'">true</EnableCOMDATFolding>

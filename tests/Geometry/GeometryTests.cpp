@@ -2,6 +2,8 @@
 #include "..\..\src\Geometry\Geometry.h"
 #include "..\..\src\Geometry\NativeGeometry.h"
 
+#include <dwmapi.h>
+
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -48,7 +50,7 @@ void Hidden(WindowQuery query, HiddenReason expected, GeometryLimits limits = {}
 
 WindowFacts Ordinary() {
     return {{100, 100, 740, 500}, {0, 0, 1920, 1080}, {0, 0, 1920, 1040},
-            96, 1, false, CornerPreference::Round};
+            96, 1, false, CornerPreference::Default, CornerEligibility::StandardFrame};
 }
 
 void DpiTransforms() {
@@ -76,6 +78,11 @@ void DpiTransforms() {
         Near(render.deviceScale, item.scale, "renderer receives actual scale");
         Near(render.widthDip, 10, "width remains DIP");
         Near(render.radiusDip, 8, "radius remains DIP");
+        Near(render.radiusDip * render.deviceScale, item.dpi == 96 ? 8.0
+             : item.dpi == 120 ? 10.0 : item.dpi == 144 ? 12.0 : 16.0,
+             "default round policy gives physical content-mask radius at each DPI");
+        Check(!render.squareCorners && render.cornerDecision == CornerDecision::DefaultRoundPolicy,
+              "ordinary default windows preserve rounded exterior corners");
         Check(render.clipRelativeToOuter == PhysicalRect{0, 0,
               static_cast<std::int32_t>(640 + item.padding * 2),
               static_cast<std::int32_t>(400 + item.padding * 2)}, "unclipped outer uses local pixels");
@@ -87,9 +94,11 @@ void DpiTransforms() {
 
 void MixedMonitorTransfers() {
     const WindowFacts left{{-1800, -300, -1160, 100}, {-1920, -600, 0, 480},
-                          {-1920, -560, 0, 480}, 120, 17, false, CornerPreference::Round};
+                          {-1920, -560, 0, 480}, 120, 17, false, CornerPreference::Round,
+                          CornerEligibility::StandardFrame};
     const WindowFacts right{{100, 100, 740, 500}, {0, 0, 2560, 1440},
-                           {0, 0, 2560, 1400}, 192, 29, false, CornerPreference::Round};
+                           {0, 0, 2560, 1400}, 192, 29, false, CornerPreference::Round,
+                           CornerEligibility::StandardFrame};
     const auto leftResult = BuildRenderInput(left);
     const auto rightResult = BuildRenderInput(right);
     const auto backResult = BuildRenderInput(left);
@@ -134,10 +143,10 @@ void FractionalWidth() {
 
     facts.dpi = 192;
     const auto two = BuildRenderInput(facts, {2.25, 0});
-    const auto& small = Result<RenderInput>(two, "narrow fractional width at 200 percent");
-    Check(small.physicalOuterBounds == PhysicalRect{95, 95, 745, 505}, "4.5px band has five-pixel envelope");
-    Near(small.frameOriginDip, 0.25, "200 percent gutter");
-    Check(small.squareCorners && small.radiusDip == 0, "zero requested radius is an actual square decision");
+    const auto& narrow = Result<RenderInput>(two, "narrow fractional width at 200 percent");
+    Check(narrow.physicalOuterBounds == PhysicalRect{95, 95, 745, 505}, "4.5px band has five-pixel envelope");
+    Near(narrow.frameOriginDip, 0.25, "200 percent gutter");
+    Check(narrow.squareCorners && narrow.radiusDip == 0, "zero requested radius is an actual square decision");
 }
 
 void EdgeClippingAndSnapFallback() {
@@ -161,7 +170,7 @@ void EdgeClippingAndSnapFallback() {
         Check(render.clipRelativeToOuter == item.clip, "each monitor/work-area edge clips locally");
         Check(render.squareCorners && render.radiusDip == 0
               && render.cornerDecision == CornerDecision::WorkAreaAligned,
-              "Snap fallback overrides even a public round hint");
+              "Snap fallback overrides the default round policy");
     }
     auto facts = Ordinary();
     facts.physicalTargetBounds = {1, 100, 641, 500};
@@ -183,7 +192,8 @@ void EdgeClippingAndSnapFallback() {
           == PhysicalRect{0, 0, 660, 10}, "taskbar pixels excluded");
 
     facts = {{-1920, -600, -1280, -200}, {-1920, -600, 0, 480},
-             {-1920, -600, 0, 440}, 120, 17, false, CornerPreference::Round};
+             {-1920, -600, 0, 440}, 120, 17, false, CornerPreference::Round,
+             CornerEligibility::StandardFrame};
     const auto negative = BuildRenderInput(facts);
     const auto& clipped = Result<RenderInput>(negative, "negative monitor edges clip");
     Check(clipped.physicalOuterBounds == PhysicalRect{-1933, -613, -1267, -187},
@@ -200,19 +210,34 @@ void EdgeClippingAndSnapFallback() {
 
 void CapabilityPolicyAndHiddenStates() {
     auto facts = Ordinary();
-    for (const auto preference : {CornerPreference::Unsupported, CornerPreference::Default,
-                                  CornerPreference::Square}) {
+    for (const auto preference : {CornerPreference::Unsupported, CornerPreference::Square}) {
         facts.cornerPreference = preference;
         const auto result = BuildRenderInput(facts);
         const auto& render = Result<RenderInput>(result, "conservative capability fallback produces geometry");
-        Check(render.squareCorners && render.radiusDip == 0, "unknown/default/no-round shapes stay square");
+        Check(render.squareCorners && render.radiusDip == 0, "unsupported/no-round shapes stay square");
         Check(render.cornerDecision == (preference == CornerPreference::Square
               ? CornerDecision::ExplicitSquare : CornerDecision::ConservativeFallback),
               "fallback is explicit and distinguishable");
     }
+    facts.cornerPreference = CornerPreference::Default;
+    const auto defaultResult = BuildRenderInput(facts);
+    const auto& defaultRound = Result<RenderInput>(defaultResult, "ordinary default window produces geometry");
+    Check(!defaultRound.squareCorners
+          && defaultRound.cornerDecision == CornerDecision::DefaultRoundPolicy,
+          "default differs from unavailable corner capability");
+    Near(defaultRound.radiusDip, 8, "ordinary Windows 11 default uses eight-DIP radius policy");
+    const auto cappedDefault = BuildRenderInput(facts, {10, 1000});
+    Near(Result<RenderInput>(cappedDefault, "large default radius request produces geometry").radiusDip,
+         8, "default policy caps radius independently of requested value");
+    const auto narrowDefault = BuildRenderInput(facts, {10, 3.5});
+    Near(Result<RenderInput>(narrowDefault, "fractional default radius request produces geometry").radiusDip,
+         3.5, "default policy preserves smaller fractional requested radius");
+    const auto squareDefault = BuildRenderInput(facts, {10, 0});
+    Check(Result<RenderInput>(squareDefault, "zero radius default produces geometry").squareCorners,
+          "zero requested radius remains square under default policy");
     facts.cornerPreference = CornerPreference::RoundSmall;
-    const auto small = BuildRenderInput(facts);
-    Near(Result<RenderInput>(small, "small round preference produces geometry").radiusDip, 4.0,
+    const auto smallRound = BuildRenderInput(facts);
+    Near(Result<RenderInput>(smallRound, "small round preference produces geometry").radiusDip, 4.0,
          "small round hint uses policy cap, not claimed measured radius");
     facts.cornerPreference = CornerPreference::Round;
     const auto round = BuildRenderInput(facts, {10, 1000});
@@ -255,7 +280,8 @@ void TinyAndBoundedGeometry() {
     Check(std::holds_alternative<RenderInput>(dimension), "exact outer maximum dimension accepted");
 
     facts = {{100, 100, 32849, 200}, {0, 0, 40000, 1080},
-             {0, 0, 40000, 1040}, 96, 1, false, CornerPreference::Round};
+             {0, 0, 40000, 1040}, 96, 1, false, CornerPreference::Round,
+             CornerEligibility::StandardFrame};
     Failure(facts, GeometryFailure::DimensionLimit);
     facts.physicalTargetBounds.right = 32848;
     const auto large = BuildRenderInput(facts);
@@ -322,9 +348,14 @@ void InvalidInputsAndQueryUncertainty() {
     Failure(facts, GeometryFailure::InvalidLimits, {}, {32768, 1, static_cast<ClipPolicy>(99)});
     facts.cornerPreference = static_cast<CornerPreference>(99);
     Failure(facts, GeometryFailure::InvalidCornerPreference);
+    facts = Ordinary();
+    facts.cornerEligibility = static_cast<CornerEligibility>(99);
+    Failure(facts, GeometryFailure::InvalidCornerEligibility);
 
     for (const auto status : {QueryStatus::MonitorUnavailable, QueryStatus::MonitorInfoFailed,
                              QueryStatus::DpiFailed, QueryStatus::CornerPreferenceFailed,
+                             QueryStatus::StyleFailed, QueryStatus::RegionFailed,
+                             QueryStatus::NonClientRenderingFailed,
                              QueryStatus::ChangedDuringQuery, QueryStatus::InvalidWindow}) {
         const QueryFailure failure{status, 1234};
         const auto result = BuildRenderInput(failure);
@@ -341,6 +372,159 @@ void InvalidInputsAndQueryUncertainty() {
     const auto invalidHandle = QueryWindowGeometry(reinterpret_cast<HWND>(static_cast<std::uintptr_t>(1)));
     Check(std::holds_alternative<QueryFailure>(invalidHandle), "native non-window HWND is explicit failure");
 }
+
+void CornerEligibilityAndRadiusRelationships() {
+    struct PreferenceCase {
+        CornerPreference preference;
+        double radius;
+        CornerDecision decision;
+    };
+    constexpr std::array preferences{
+        PreferenceCase{CornerPreference::Default, 8, CornerDecision::DefaultRoundPolicy},
+        PreferenceCase{CornerPreference::Square, 0, CornerDecision::ExplicitSquare},
+        PreferenceCase{CornerPreference::Round, 8, CornerDecision::RoundHint},
+        PreferenceCase{CornerPreference::RoundSmall, 4, CornerDecision::SmallRoundHint},
+        PreferenceCase{CornerPreference::Unsupported, 0, CornerDecision::ConservativeFallback}
+    };
+    struct DpiCase {
+        std::uint32_t dpi;
+        double scale;
+        double roundInner, roundOuter, smallInner, smallOuter;
+    };
+    constexpr std::array dpis{
+        DpiCase{96, 1, 8, 18, 4, 14}, DpiCase{120, 1.25, 10, 22.5, 5, 17.5},
+        DpiCase{144, 1.5, 12, 27, 6, 21}, DpiCase{192, 2, 16, 36, 8, 28}
+    };
+    for (const auto eligibility : {CornerEligibility::Unverified, CornerEligibility::StandardFrame,
+                                  CornerEligibility::HintOnly, CornerEligibility::UnsupportedShape}) {
+        for (const auto& preference : preferences) {
+            for (const auto& dpi : dpis) {
+                auto facts = Ordinary();
+                facts.cornerEligibility = eligibility;
+                facts.cornerPreference = preference.preference;
+                facts.dpi = dpi.dpi;
+                facts.physicalTargetBounds = {-1800, -300, -1160, 100};
+                facts.physicalDisplayBounds = {-1920, -600, 0, 480};
+                facts.physicalWorkArea = {-1920, -560, 0, 480};
+                const bool canRound = eligibility == CornerEligibility::StandardFrame
+                    || (eligibility == CornerEligibility::HintOnly
+                        && preference.preference != CornerPreference::Default);
+                const double radius = canRound ? preference.radius : 0;
+                const auto result = BuildRenderInput(facts);
+                const auto& render = Result<RenderInput>(result, "eligibility/DPI/preference matrix renders");
+                Near(render.radiusDip, radius, "default requires standard facts; hints require supported shape");
+                Check(render.squareCorners == (radius == 0), "square classification matches effective radius");
+                const auto expectedDecision = preference.preference == CornerPreference::Square
+                    ? CornerDecision::ExplicitSquare
+                    : canRound ? preference.decision : CornerDecision::ConservativeFallback;
+                Check(render.cornerDecision == expectedDecision, "policy decisions retain their diagnostic meaning");
+                if (radius > 0) {
+                    const bool smallRound = preference.preference == CornerPreference::RoundSmall;
+                    Near(render.radiusDip * render.deviceScale, smallRound ? dpi.smallInner : dpi.roundInner,
+                         "target radius converts DIP to physical pixels exactly once");
+                    Near((render.radiusDip + render.widthDip) * render.deviceScale,
+                         smallRound ? dpi.smallOuter : dpi.roundOuter,
+                         "rounded outer radius is target radius plus continuous band width");
+                    Near((render.radiusDip - 1.0) * render.deviceScale,
+                         smallRound ? 3.0 * dpi.scale : 7.0 * dpi.scale,
+                         "one-DIP inward tuck subtracts from target radius, not outer radius");
+                }
+                for (const PhysicalRect edge : {PhysicalRect{-1920, -300, -1280, 100},
+                                                PhysicalRect{-1800, -560, -1160, -160},
+                                                PhysicalRect{-640, -300, 0, 100},
+                                                PhysicalRect{-1800, 40, -1160, 480}}) {
+                    facts.physicalTargetBounds = edge;
+                    const auto aligned = BuildRenderInput(facts);
+                    const auto& square = Result<RenderInput>(aligned, "negative work-edge retains available border");
+                    Check(square.squareCorners && square.radiusDip == 0
+                          && square.cornerDecision == CornerDecision::WorkAreaAligned,
+                          "every work-edge/Snap fallback overrides all hints and eligibility");
+                }
+            }
+        }
+    }
+    WindowFacts unverified{{100, 100, 740, 500}, {0, 0, 1920, 1080}, {0, 0, 1920, 1040},
+                           96, 1, false, CornerPreference::Default};
+    const auto unknown = BuildRenderInput(unverified);
+    Check(Result<RenderInput>(unknown, "legacy facts without eligibility still render conservatively").squareCorners,
+          "omitted eligibility never invents default rounding");
+}
+
+void HiddenNativeFixtureContract() {
+    const auto previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    Check(previous != nullptr, "native fixture sets only its own thread PMv2 context");
+    constexpr auto name = L"WindowSweaters.Geometry.HiddenFixture";
+    const auto instance = GetModuleHandleW(nullptr);
+    WNDCLASSW cls{};
+    cls.lpfnWndProc = DefWindowProcW;
+    cls.hInstance = instance;
+    cls.lpszClassName = name;
+    Check(RegisterClassW(&cls) != 0, "own hidden native class registers");
+    struct FixtureCase {
+        DWORD style, extended;
+        bool disableNonClient;
+        CornerEligibility expected;
+        bool customRegion{};
+    };
+    constexpr std::array fixtures{
+        FixtureCase{WS_OVERLAPPEDWINDOW, 0, false, CornerEligibility::StandardFrame},
+        FixtureCase{WS_POPUP | WS_THICKFRAME, 0, false, CornerEligibility::HintOnly},
+        FixtureCase{WS_CAPTION, 0, false, CornerEligibility::HintOnly},
+        FixtureCase{WS_OVERLAPPEDWINDOW, 0, true, CornerEligibility::HintOnly},
+        FixtureCase{WS_OVERLAPPEDWINDOW, WS_EX_TOOLWINDOW, false, CornerEligibility::HintOnly},
+        FixtureCase{WS_OVERLAPPEDWINDOW, WS_EX_LAYERED, false, CornerEligibility::UnsupportedShape},
+        FixtureCase{WS_OVERLAPPEDWINDOW, WS_EX_NOREDIRECTIONBITMAP, false, CornerEligibility::UnsupportedShape},
+        FixtureCase{WS_OVERLAPPEDWINDOW, 0, false, CornerEligibility::UnsupportedShape, true}
+    };
+    for (const auto& fixture : fixtures) {
+        const auto window = CreateWindowExW(fixture.extended, name, L"Geometry contract", fixture.style,
+                                            100, 100, 640, 400, nullptr, nullptr, instance, nullptr);
+        Check(window != nullptr && !IsWindowVisible(window), "fixture HWND belongs to test and is never shown");
+        if (fixture.customRegion) {
+            const auto region = CreateRectRgn(0, 0, 100, 100);
+            Check(region != nullptr, "own fixture allocates a simple custom region");
+            if (!SetWindowRgn(window, region, FALSE)) {
+                DeleteObject(region);
+                Check(false, "own hidden fixture takes ownership of the custom region");
+            }
+        }
+        if (fixture.disableNonClient) {
+            const auto policy = DWMNCRP_DISABLED;
+            Check(SUCCEEDED(DwmSetWindowAttribute(window, DWMWA_NCRENDERING_POLICY, &policy, sizeof(policy))),
+                  "only own hidden fixture disables nonclient rendering");
+        }
+        for (const auto preference : {DWMWCP_DEFAULT, DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL}) {
+            Check(SUCCEEDED(DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
+                                                 &preference, sizeof(preference))),
+                  "only own hidden fixture sets documented corner preference");
+            const auto query = QueryWindowGeometry(window);
+            if (const auto failure = std::get_if<QueryFailure>(&query)) {
+                std::cerr << "Native fixture query status=" << static_cast<int>(failure->status)
+                          << " error=" << failure->nativeError << '\n';
+            }
+            Check(std::holds_alternative<WindowFacts>(query), "stable hidden native fixture returns queried facts");
+            const auto& facts = std::get<WindowFacts>(query);
+            Check(facts.cornerEligibility == fixture.expected, "eligibility follows documented styles/nonclient facts");
+            RECT raw{};
+            Check(SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &raw, sizeof(raw))),
+                  "own native extended bounds are observable without pixels");
+            Check(facts.physicalTargetBounds == PhysicalRect{raw.left, raw.top, raw.right, raw.bottom},
+                  "adapter preserves physical DWM bounds exactly");
+            Check(facts.dpi == GetDpiForWindow(window), "adapter preserves documented PMv2 native DPI");
+            const auto result = BuildRenderInput(query);
+            const auto& render = Result<RenderInput>(result, "own hidden fixture facts drive pure policy");
+            const bool rounded = fixture.expected != CornerEligibility::UnsupportedShape
+                && (preference == DWMWCP_ROUND || preference == DWMWCP_ROUNDSMALL
+                    || (preference == DWMWCP_DEFAULT && fixture.expected == CornerEligibility::StandardFrame));
+            Near(render.radiusDip, !rounded ? 0 : preference == DWMWCP_ROUNDSMALL ? 4 : 8,
+                 "native preference and eligibility produce policy radii, not measured pixels");
+            Check(!IsWindowVisible(window), "native query does not show or mutate target");
+        }
+        Check(DestroyWindow(window) != FALSE, "own hidden fixture is destroyed");
+    }
+    Check(UnregisterClassW(name, instance) != FALSE, "own fixture class is unregistered");
+    Check(SetThreadDpiAwarenessContext(previous) != nullptr, "fixture restores its thread awareness context");
+}
 } // namespace
 
 int main() {
@@ -353,6 +537,8 @@ int main() {
     CapabilityPolicyAndHiddenStates();
     TinyAndBoundedGeometry();
     InvalidInputsAndQueryUncertainty();
-    std::cout << "PASS: " << checks << " geometry checks (deterministic; native invalid-HWND checks only)\n";
+    CornerEligibilityAndRadiusRelationships();
+    HiddenNativeFixtureContract();
+    std::cout << "PASS: " << checks << " geometry checks (deterministic and own hidden native facts; no pixel claims)\n";
     return EXIT_SUCCESS;
 }

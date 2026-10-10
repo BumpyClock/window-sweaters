@@ -27,6 +27,11 @@ enum class CornerPreference : std::uint8_t {
     Unsupported, Default, Square, Round, RoundSmall
 };
 
+// Eligibility for a policy, not discovery of the actual window outline.
+enum class CornerEligibility : std::uint8_t {
+    Unverified, StandardFrame, HintOnly, UnsupportedShape
+};
+
 struct WindowFacts {
     PhysicalRect physicalTargetBounds;
     PhysicalRect physicalDisplayBounds;
@@ -35,12 +40,14 @@ struct WindowFacts {
     std::uintptr_t monitorIdentity{};
     bool maximized{};
     CornerPreference cornerPreference{CornerPreference::Unsupported};
+    CornerEligibility cornerEligibility{CornerEligibility::Unverified};
 };
 
 enum class QueryStatus : std::uint8_t {
     InvalidWindow, CallerNotPerMonitorV2, TargetNotPerMonitorAware,
     FrameBoundsFailed, DpiFailed, MonitorUnavailable, MonitorInfoFailed,
-    PlacementFailed, CornerPreferenceFailed, InvalidNativeData, ChangedDuringQuery
+    PlacementFailed, CornerPreferenceFailed, InvalidNativeData, ChangedDuringQuery,
+    StyleFailed, RegionFailed, NonClientRenderingFailed
 };
 
 struct QueryFailure {
@@ -61,7 +68,8 @@ struct GeometryLimits {
 };
 
 enum class CornerDecision : std::uint8_t {
-    ConservativeFallback, ExplicitSquare, WorkAreaAligned, RoundHint, SmallRoundHint
+    ConservativeFallback, ExplicitSquare, WorkAreaAligned, RoundHint, SmallRoundHint,
+    DefaultRoundPolicy
 };
 
 enum class HiddenReason : std::uint8_t {
@@ -71,16 +79,18 @@ enum class HiddenReason : std::uint8_t {
 enum class GeometryFailure : std::uint8_t {
     InvalidTargetBounds, InvalidDisplayBounds, InvalidWorkArea, InvalidDpi,
     InvalidStyle, InvalidLimits, InvalidCornerPreference, CoordinateOverflow,
-    DimensionLimit, AllocationLimit
+    DimensionLimit, AllocationLimit, InvalidCornerEligibility
 };
 
 struct RenderInput {
     const PhysicalRect physicalTargetBounds;
     const PhysicalRect physicalOuterBounds;
     const PhysicalRect clipRelativeToOuter;
-    // Subtract this rectangle from the compositor clip, including upstream tuck.
+    // Subtract the content shape using radiusDip * deviceScale, not a square
+    // rectangle for rounded targets; retain the exterior corner/tuck below content.
     const PhysicalRect targetRelativeToOuter;
     const double widthDip;
+    // Target/content radius; rounded outer radius is radiusDip + widthDip.
     const double radiusDip;
     const double deviceScale;
     // Fractional leading gutter: render the continuous ring at this DIP offset.

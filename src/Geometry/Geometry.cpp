@@ -55,15 +55,29 @@ GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
         || !limits.maxPerimeterBytes
         || (limits.clipPolicy != ClipPolicy::WorkArea && limits.clipPolicy != ClipPolicy::Display))
         return GeometryFailure::InvalidLimits;
+    switch (facts.cornerEligibility) {
+    case CornerEligibility::Unverified:
+    case CornerEligibility::StandardFrame:
+    case CornerEligibility::HintOnly:
+    case CornerEligibility::UnsupportedShape:
+        break;
+    default:
+        return GeometryFailure::InvalidCornerEligibility;
+    }
 
     CornerDecision cornerDecision{};
     bool square{};
     double radius = style.radiusDip;
     switch (facts.cornerPreference) {
     case CornerPreference::Unsupported:
-    case CornerPreference::Default:
         square = true;
         cornerDecision = CornerDecision::ConservativeFallback;
+        break;
+    case CornerPreference::Default:
+        square = facts.cornerEligibility != CornerEligibility::StandardFrame;
+        radius = std::min(radius, 8.0);
+        cornerDecision = square ? CornerDecision::ConservativeFallback
+                                : CornerDecision::DefaultRoundPolicy;
         break;
     case CornerPreference::Square:
         square = true;
@@ -79,6 +93,12 @@ GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
         break;
     default:
         return GeometryFailure::InvalidCornerPreference;
+    }
+    if (facts.cornerPreference != CornerPreference::Square
+        && (facts.cornerEligibility == CornerEligibility::Unverified
+            || facts.cornerEligibility == CornerEligibility::UnsupportedShape)) {
+        square = true;
+        cornerDecision = CornerDecision::ConservativeFallback;
     }
     if (facts.maximized) return HiddenReason::Maximized;
     if (Contains(target, display)) return HiddenReason::Fullscreen;

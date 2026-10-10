@@ -8,6 +8,66 @@ namespace {
 PhysicalRect Physical(const RECT& rect) noexcept {
     return {rect.left, rect.top, rect.right, rect.bottom};
 }
+
+struct NativeCornerFacts {
+    std::uint32_t frameStyle{};
+    std::uint32_t extendedStyle{};
+    int regionType{};
+    PhysicalRect regionBounds{};
+    bool nonClientRendering{};
+    bool operator==(const NativeCornerFacts&) const = default;
+};
+
+using CornerQuery = std::variant<NativeCornerFacts, QueryFailure>;
+
+CornerQuery QueryCornerFacts(HWND window) noexcept {
+    NativeCornerFacts facts;
+    SetLastError(ERROR_SUCCESS);
+    const auto style = GetWindowLongPtrW(window, GWL_STYLE);
+    if (!style && GetLastError() != ERROR_SUCCESS)
+        return QueryFailure{QueryStatus::StyleFailed, GetLastError()};
+    SetLastError(ERROR_SUCCESS);
+    const auto extended = GetWindowLongPtrW(window, GWL_EXSTYLE);
+    if (!extended && GetLastError() != ERROR_SUCCESS)
+        return QueryFailure{QueryStatus::StyleFailed, GetLastError()};
+    facts.frameStyle = static_cast<std::uint32_t>(style)
+        & (WS_CAPTION | WS_THICKFRAME | WS_CHILD | WS_MINIMIZE | WS_MAXIMIZE);
+    facts.extendedStyle = static_cast<std::uint32_t>(extended)
+        & (WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW);
+
+    RECT region{};
+    SetLastError(ERROR_SUCCESS);
+    facts.regionType = GetWindowRgnBox(window, &region);
+    if (facts.regionType == ERROR) {
+        const auto error = GetLastError();
+        if (error != ERROR_SUCCESS) return QueryFailure{QueryStatus::RegionFailed, error};
+        // ERROR without an explicit error is also the documented no-region result.
+        // This is a policy observation, not proof of a rectangular pixel outline.
+    } else if (facts.regionType == NULLREGION || facts.regionType == SIMPLEREGION
+               || facts.regionType == COMPLEXREGION) {
+        facts.regionBounds = Physical(region);
+    } else {
+        return QueryFailure{QueryStatus::InvalidNativeData};
+    }
+    BOOL enabled{};
+    const auto hr = DwmGetWindowAttribute(window, DWMWA_NCRENDERING_ENABLED,
+                                         &enabled, sizeof(enabled));
+    if (FAILED(hr)) return QueryFailure{QueryStatus::NonClientRenderingFailed, hr};
+    facts.nonClientRendering = enabled != FALSE;
+    return facts;
+}
+
+CornerEligibility Eligibility(const NativeCornerFacts& facts) noexcept {
+    if (facts.regionType != ERROR
+        || (facts.extendedStyle & (WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP))
+        || (facts.frameStyle & (WS_CHILD | WS_MINIMIZE)))
+        return CornerEligibility::UnsupportedShape;
+    const auto required = WS_CAPTION | WS_THICKFRAME;
+    if ((facts.frameStyle & required) == required && facts.nonClientRendering
+        && !(facts.extendedStyle & WS_EX_TOOLWINDOW))
+        return CornerEligibility::StandardFrame;
+    return CornerEligibility::HintOnly;
+}
 } // namespace
 
 WindowQuery QueryWindowGeometry(HWND window) noexcept {
@@ -24,6 +84,8 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     DWORD process{};
     const DWORD thread = GetWindowThreadProcessId(window, &process);
     if (!thread || !process) return QueryFailure{QueryStatus::InvalidWindow};
+    const auto cornerFacts = QueryCornerFacts(window);
+    if (const auto failure = std::get_if<QueryFailure>(&cornerFacts)) return *failure;
 
     RECT bounds{};
     HRESULT hr = DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &bounds, sizeof(bounds));
@@ -87,6 +149,8 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     DWORD finalProcess{};
     const DWORD finalThread = GetWindowThreadProcessId(window, &finalProcess);
     if (!finalThread || !finalProcess) return QueryFailure{QueryStatus::InvalidWindow};
+    const auto finalCornerFacts = QueryCornerFacts(window);
+    if (const auto failure = std::get_if<QueryFailure>(&finalCornerFacts)) return *failure;
     if (thread != finalThread || process != finalProcess || Physical(finalBounds) != target
         || dpi != finalDpi || monitor != MonitorFromRect(&finalBounds, MONITOR_DEFAULTTONULL)
         || Physical(info.rcMonitor) != Physical(finalInfo.rcMonitor)
@@ -94,11 +158,13 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
         || placement.showCmd != finalPlacement.showCmd
         || preferenceResult != finalPreferenceResult
         || (SUCCEEDED(preferenceResult) && nativePreference != finalPreference)
+        || std::get<NativeCornerFacts>(cornerFacts) != std::get<NativeCornerFacts>(finalCornerFacts)
         || !AreDpiAwarenessContextsEqual(awareness, finalAwareness))
         return QueryFailure{QueryStatus::ChangedDuringQuery};
 
     WindowFacts facts{target, Physical(info.rcMonitor), Physical(info.rcWork), dpi,
-        reinterpret_cast<std::uintptr_t>(monitor), placement.showCmd == SW_SHOWMAXIMIZED, preference};
+        reinterpret_cast<std::uintptr_t>(monitor), placement.showCmd == SW_SHOWMAXIMIZED, preference,
+        Eligibility(std::get<NativeCornerFacts>(cornerFacts))};
     // Validate native coordinates before they leave the adapter.
     const auto checked = BuildRenderInput(facts);
     if (std::holds_alternative<GeometryFailure>(checked)) {
