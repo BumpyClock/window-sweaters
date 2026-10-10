@@ -44,13 +44,14 @@ foreach ($path in @("out\x64\$Configuration\WindowSweaters.Configuration.Tests.e
     "out\x64\$Configuration\WindowSweaters.Knitting.Tests.exe",
     "out\RenderQueueTests\x64\$Configuration\RenderQueueTests.exe",
     "out\GraphicsRecoveryTests\x64\$Configuration\GraphicsRecoveryTests.exe",
-    "out\x64\$Configuration\VisibilityTests.exe")) {
+    "out\x64\$Configuration\VisibilityTests.exe",
+    "out\x64\$Configuration\HostProbeTests.exe")) {
     $exe = Join-Path $root $path
     if (-not (Test-Path -LiteralPath $exe)) { throw "Contract artifact not found: $exe" }
     & $exe
     if ($LASTEXITCODE -ne 0) { throw "Contract '$path' failed: $LASTEXITCODE" }
 }
-Write-Output 'PASS: host CLI/publication, tracking, configuration/session, configuration ownership, knitting and render queue contracts; no production host or visible fixture launched.'
+Write-Output 'PASS: host CLI/publication, tracking, configuration/session, configuration ownership, knitting, render queue and fixture probe parser contracts; no production host or visible fixture launched.'
 if ($Desktop) {
     $fixture = Join-Path $root "out\x64\$Configuration\Fixture.exe"
     if (-not (Test-Path -LiteralPath $fixture)) { throw "Fixture artifact not found: $fixture" }

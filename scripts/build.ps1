@@ -33,7 +33,8 @@ if ($IncludeContractTests) {
         'tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj',
         'tests\Rendering\RenderQueueTests.vcxproj',
         'tests\Rendering\GraphicsRecoveryTests.vcxproj',
-        'tests\Visibility\VisibilityTests.vcxproj')) {
+        'tests\Visibility\VisibilityTests.vcxproj',
+        'tests\Fixture\HostProbeTests.vcxproj')) {
         & $MSBuild (Join-Path $root $path) /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
         if ($LASTEXITCODE -ne 0) { throw "Contract project '$path' build failed: $LASTEXITCODE" }
     }

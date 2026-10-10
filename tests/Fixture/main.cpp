@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "..\..\src\Geometry\Geometry.h"
+#include "HostProbe.h"
 
 namespace
 {
@@ -62,37 +63,6 @@ enum class LifecyclePhase
     Resetting,
     Passed,
     Failed
-};
-
-struct HostSnapshot
-{
-    DWORD hostProcessId = 0;
-    HWND hostWindow = nullptr;
-    HWND overlayWindow = nullptr;
-    HWND targetWindow = nullptr;
-    DWORD targetProcessId = 0;
-    uint64_t targetProcessStart = 0;
-    uint64_t targetGeneration = 0;
-    RECT targetBounds{};
-    RECT overlayBounds{};
-    bool overlayVisible = false;
-    bool stopped = false;
-    uint64_t trackedEntries = 0;
-    uint64_t creates = 0;
-    uint64_t removes = 0;
-    uint64_t geometryUpdates = 0;
-    uint64_t draws = 0;
-    uint64_t pureMoves = 0;
-    uint64_t hides = 0;
-    uint64_t shows = 0;
-    uint64_t reorders = 0;
-    uint64_t staleActions = 0;
-    uint64_t placementFailures = 0;
-    uint64_t trackerCallbacks = 0;
-    uint64_t trackerCoalesced = 0;
-    uint64_t trackerUncertainQueries = 0;
-    uint64_t trackerError = 0;
-    uint64_t borderPaddingPixels = 0;
 };
 
 struct LifecycleCheck
@@ -621,118 +591,6 @@ bool ReadSmallFile(const std::wstring& path, std::string& contents)
     return read;
 }
 
-bool ReadJsonNumber(const std::string& json, std::string_view key, uint64_t& value)
-{
-    const std::string name = "\"" + std::string(key) + "\"";
-    size_t position = json.find(name);
-    if (position == std::string::npos)
-    {
-        return false;
-    }
-
-    position = json.find(':', position + name.size());
-    if (position == std::string::npos)
-    {
-        return false;
-    }
-    ++position;
-    while (position < json.size() && (json[position] == ' ' || json[position] == '\t'))
-    {
-        ++position;
-    }
-
-    const char* begin = json.c_str() + position;
-    char* end = nullptr;
-    const unsigned long long parsed = std::strtoull(begin, &end, 10);
-    if (end == begin)
-    {
-        return false;
-    }
-    value = static_cast<uint64_t>(parsed);
-    return true;
-}
-
-bool ReadJsonBoolean(const std::string& json, std::string_view key, bool& value)
-{
-    const std::string name = "\"" + std::string(key) + "\"";
-    const size_t namePosition = json.find(name);
-    if (namePosition == std::string::npos)
-    {
-        return false;
-    }
-    const size_t separator = json.find(':', namePosition + name.size());
-    if (separator == std::string::npos)
-    {
-        return false;
-    }
-
-    const size_t truePosition = json.find("true", separator + 1);
-    const size_t falsePosition = json.find("false", separator + 1);
-    if (truePosition == separator + 1 || falsePosition == separator + 1)
-    {
-        return false;
-    }
-    if (truePosition != std::string::npos &&
-        (falsePosition == std::string::npos || truePosition < falsePosition))
-    {
-        value = true;
-        return true;
-    }
-    if (falsePosition != std::string::npos)
-    {
-        value = false;
-        return true;
-    }
-    return false;
-}
-
-bool ReadJsonRect(const std::string& json, std::string_view key, RECT& rectangle)
-{
-    const std::string name = "\"" + std::string(key) + "\"";
-    size_t position = json.find(name);
-    if (position == std::string::npos)
-    {
-        return false;
-    }
-    position = json.find('[', position + name.size());
-    if (position == std::string::npos)
-    {
-        return false;
-    }
-    ++position;
-
-    LONG* coordinates[] = { &rectangle.left, &rectangle.top, &rectangle.right, &rectangle.bottom };
-    for (size_t index = 0; index < std::size(coordinates); ++index)
-    {
-        while (position < json.size() && (json[position] == ' ' || json[position] == '\t'))
-        {
-            ++position;
-        }
-        const char* begin = json.c_str() + position;
-        char* end = nullptr;
-        const long parsed = std::strtol(begin, &end, 10);
-        if (end == begin || parsed < LONG_MIN || parsed > LONG_MAX)
-        {
-            return false;
-        }
-        *coordinates[index] = static_cast<LONG>(parsed);
-        position = static_cast<size_t>(end - json.c_str());
-        while (position < json.size() && (json[position] == ' ' || json[position] == '\t'))
-        {
-            ++position;
-        }
-        if (index + 1 < std::size(coordinates))
-        {
-            if (position >= json.size() || json[position] != ',')
-            {
-                return false;
-            }
-            ++position;
-        }
-    }
-    return position < json.size() && json[position] == ']';
-}
-
 struct OwnedHostWindowSearch
 {
     DWORD processId = 0;
@@ -839,7 +697,7 @@ bool RequestOwnedHostCommand(Fixture& fixture, UINT command, const char* eventNa
     return posted != FALSE;
 }
 
-bool ReadHostSnapshot(Fixture& fixture, HostSnapshot& snapshot)
+bool ReadHostSnapshot(Fixture& fixture, HostSnapshot& result)
 {
     std::string json;
     if (!ReadSmallFile(fixture.hostProbePath, json))
@@ -847,51 +705,12 @@ bool ReadHostSnapshot(Fixture& fixture, HostSnapshot& snapshot)
         return false;
     }
 
-    uint64_t hostProcessId = 0;
-    uint64_t hostWindow = 0;
-    uint64_t overlayWindow = 0;
-    uint64_t targetWindow = 0;
-    uint64_t targetProcessId = 0;
-    bool overlayVisible = false;
-    bool stopped = false;
-    if (!ReadJsonNumber(json, "host_pid", hostProcessId) ||
-        !ReadJsonNumber(json, "host_hwnd", hostWindow) ||
-        !ReadJsonNumber(json, "overlay_hwnd", overlayWindow) ||
-        !ReadJsonNumber(json, "target_hwnd", targetWindow) ||
-        !ReadJsonNumber(json, "target_pid", targetProcessId) ||
-        !ReadJsonNumber(json, "target_process_start", snapshot.targetProcessStart) ||
-        !ReadJsonNumber(json, "target_generation", snapshot.targetGeneration) ||
-        !ReadJsonNumber(json, "tracked_entries", snapshot.trackedEntries) ||
-        !ReadJsonNumber(json, "creates", snapshot.creates) ||
-        !ReadJsonNumber(json, "removes", snapshot.removes) ||
-        !ReadJsonNumber(json, "geometry_updates", snapshot.geometryUpdates) ||
-        !ReadJsonNumber(json, "draws", snapshot.draws) ||
-        !ReadJsonNumber(json, "pure_moves", snapshot.pureMoves) ||
-        !ReadJsonNumber(json, "hides", snapshot.hides) ||
-        !ReadJsonNumber(json, "shows", snapshot.shows) ||
-        !ReadJsonNumber(json, "reorders", snapshot.reorders) ||
-        !ReadJsonNumber(json, "stale_actions", snapshot.staleActions) ||
-        !ReadJsonNumber(json, "placement_failures", snapshot.placementFailures) ||
-        !ReadJsonNumber(json, "tracker_callbacks", snapshot.trackerCallbacks) ||
-        !ReadJsonNumber(json, "tracker_coalesced", snapshot.trackerCoalesced) ||
-        !ReadJsonNumber(json, "tracker_uncertain_queries", snapshot.trackerUncertainQueries) ||
-        !ReadJsonNumber(json, "tracker_error", snapshot.trackerError) ||
-        !ReadJsonNumber(json, "border_width_pixels", snapshot.borderPaddingPixels) ||
-        !ReadJsonRect(json, "target_bounds", snapshot.targetBounds) ||
-        !ReadJsonRect(json, "overlay_bounds", snapshot.overlayBounds) ||
-        !ReadJsonBoolean(json, "overlay_visible", overlayVisible) ||
-        !ReadJsonBoolean(json, "stopped", stopped))
+    const auto parsed = ParseHostSnapshot(json);
+    if (!parsed)
     {
         return false;
     }
-
-    snapshot.hostProcessId = static_cast<DWORD>(hostProcessId);
-    snapshot.hostWindow = reinterpret_cast<HWND>(static_cast<uintptr_t>(hostWindow));
-    snapshot.overlayWindow = reinterpret_cast<HWND>(static_cast<uintptr_t>(overlayWindow));
-    snapshot.targetWindow = reinterpret_cast<HWND>(static_cast<uintptr_t>(targetWindow));
-    snapshot.targetProcessId = static_cast<DWORD>(targetProcessId);
-    snapshot.overlayVisible = overlayVisible;
-    snapshot.stopped = stopped;
+    const HostSnapshot& snapshot = *parsed;
 
     DWORD actualHostPid = 0;
     DWORD actualOverlayPid = 0;
@@ -930,6 +749,7 @@ bool ReadHostSnapshot(Fixture& fixture, HostSnapshot& snapshot)
     {
         return false;
     }
+    result = snapshot;
     return true;
 }
 
