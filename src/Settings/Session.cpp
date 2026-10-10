@@ -19,6 +19,7 @@ Options ParseOptions() {
         for (int i=1;i<count;++i) {
             std::wstring argument(args[i]);
             if (argument==L"--test-mode") options.test_mode=true;
+            else if (argument==L"--startup-probe") options.startup_probe=true;
             else if (argument==L"--storage-dir" && i+1<count) options.storage_directory=args[++i];
             else if (argument==L"--endpoint-suffix" && i+1<count) options.endpoint_suffix=args[++i];
             else throw std::invalid_argument("Unsupported settings launch option");
@@ -49,7 +50,7 @@ bool StartHost(Options const& options) {
     Handle thread(process.hThread),handle(process.hProcess); return true;
 }
 struct Session::Impl {
-    struct Desired { Message request; Configuration displayed; };
+    struct Desired { Message request; Configuration displayed; std::uint64_t edit_generation; };
     struct OwnCommit {
         Identity server;
         std::uint64_t lease;
@@ -76,6 +77,7 @@ struct Session::Impl {
     std::optional<Desired> desired;
     std::chrono::steady_clock::time_point due{};
     std::uint64_t request_id=0;
+    std::uint64_t last_edit_generation=0;
     bool stop=false,ever_connected=false,launch_attempted=false;
     std::thread worker;
     ConnectionState view;
@@ -84,13 +86,15 @@ struct Session::Impl {
     std::vector<OwnCommit> own_commits;
     std::uint64_t own_clock=0;
     void Publish() noexcept {
+        ++view.publication_sequence;
         try { publish(view); } catch (...) { OutputDebugStringW(L"WindowSweaters: settings status publication failed.\n"); }
     }
     void DiscardRequests() {
         in_flight.reset();
         own_commits.clear();
         view.pending=false;
-        std::lock_guard lock(mutex); desired.reset();
+        std::lock_guard lock(mutex);
+        desired.reset(); view.settled_edit_generation=last_edit_generation;
     }
     void Run() noexcept {
         for (;;) {
@@ -108,6 +112,7 @@ struct Session::Impl {
                     if (snapshot.status==Status::client_expired || snapshot.status==Status::wrong_instance) {
                         DiscardRequests(); last_snapshot={};
                         view.connected=false; view.status=snapshot.status;
+                        view.configuration_authoritative=false;
                         view.configuration=snapshot.configuration; view.server_instance=snapshot.server; view.client_lease=0;
                         view.detail=L"Connection expired. Pending changes were discarded.";
                         Publish(); continue;
@@ -115,8 +120,12 @@ struct Session::Impl {
                     if (!EmptyIdentity(last_snapshot.server) && snapshot.server!=last_snapshot.server) DiscardRequests();
                     last_snapshot=snapshot; view.connected=true; ever_connected=true;
                     view.configuration=snapshot.configuration;
+                    view.configuration_authoritative=snapshot.status==Status::saved;
                     view.server_instance=snapshot.server; view.client_lease=snapshot.client_lease;
-                    if (view.status==Status::disconnected || snapshot.status!=Status::saved) view.status=snapshot.status;
+                    if (view.status==Status::disconnected || view.status==Status::wrong_instance ||
+                        view.status==Status::client_expired || snapshot.status!=Status::saved) {
+                        view.status=snapshot.status; view.error=snapshot.error;
+                    }
                     view.detail=L"Connected";
                 }
                 if (!in_flight) {
@@ -140,10 +149,13 @@ struct Session::Impl {
                 if (in_flight) {
                     view.pending=true; view.detail=L"Saving…"; Publish();
                     auto result=transport.exchange(in_flight->request);
+                    auto acknowledged=in_flight->request.operation==Operation::reset
+                        ? Configuration{} : in_flight->request.configuration;
+                    acknowledged.revision=in_flight->request.configuration.revision+1;
                     if (result.status==Status::saved && result.server==in_flight->request.server &&
                         result.client_lease==in_flight->request.client_lease &&
                         in_flight->request.configuration.revision!=UINT64_MAX &&
-                        result.configuration.revision==in_flight->request.configuration.revision+1) {
+                        result.configuration==acknowledged) {
                         for (auto& commit:own_commits) {
                             if (commit.server==result.server && commit.lease==result.client_lease &&
                                 commit.after==in_flight->displayed) commit.after=result.configuration;
@@ -157,16 +169,20 @@ struct Session::Impl {
                             *inactive=transition;
                         } else own_commits.push_back(transition);
                     }
-                    view.pending=false; view.status=result.status;
+                    view.pending=false; view.status=result.status; view.error=result.error;
+                    view.settled_edit_generation=std::max(view.settled_edit_generation,in_flight->edit_generation);
                     if (result.server!=last_snapshot.server || result.configuration.revision>=view.configuration.revision) {
                         view.configuration=result.configuration; last_snapshot=result;
                         view.server_instance=result.server; view.client_lease=result.client_lease;
+                        view.configuration_authoritative=result.status==Status::saved || result.status==Status::conflict ||
+                            (result.status==Status::storage_error && view.configuration_authoritative);
                     }
                     in_flight.reset();
                     if (result.status==Status::conflict || result.status==Status::wrong_instance ||
                         result.status==Status::client_expired) DiscardRequests();
                     if (result.status==Status::wrong_instance || result.status==Status::client_expired) {
                         last_snapshot={}; view.connected=false; view.client_lease=0;
+                        view.configuration_authoritative=false;
                     }
                     view.detail=result.status==Status::saved?L"Saved":L"Change was not saved";
                 }
@@ -180,6 +196,7 @@ struct Session::Impl {
                 if (stop) return;
             } catch (...) {
                 view.connected=false; view.pending=false; view.status=Status::disconnected;
+                view.configuration_authoritative=false;
                 view.detail=ever_connected?L"Host disconnected. Restart it explicitly; settings will reconnect.":
                     L"Host unavailable or identity verification failed.";
                 Publish();
@@ -201,29 +218,52 @@ Session::Session(Options options,std::function<void(ConnectionState)> publish,Se
     impl_->worker=std::thread([state=impl_.get()]{state->Run();});
 }
 Session::~Session() { Stop(); }
-void Session::Change(ConnectionState const& displayed,bool paused,float width) {
-    Message request; request.configuration=displayed.configuration;
-    request.configuration.paused=paused; request.configuration.border_width_dip=width;
+std::uint64_t Session::Change(ConnectionState const& displayed,bool paused,float width) {
+    auto appearance=displayed.configuration;
+    appearance.paused=paused; appearance.border_width_dip=width;
+    return Change(displayed,appearance);
+}
+std::uint64_t Session::Change(ConnectionState const& displayed,Configuration const& appearance) {
+    Message request; request.configuration=appearance;
+    request.configuration.revision=displayed.configuration.revision;
     if (!Valid(request.configuration) || !displayed.connected || displayed.client_lease==0 ||
-        EmptyIdentity(displayed.server_instance)) return;
+        EmptyIdentity(displayed.server_instance)) return 0;
     request.operation=Operation::mutate; request.client=impl_->client;
     request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
     std::lock_guard lock(impl_->mutex);
-    impl_->desired=Impl::Desired{request,displayed.configuration};
+    auto generation=++impl_->last_edit_generation;
+    impl_->desired=Impl::Desired{request,displayed.configuration,generation};
     impl_->due=std::chrono::steady_clock::now()+std::chrono::milliseconds(150);
     impl_->wake.notify_one();
+    return generation;
 }
-void Session::Reset(ConnectionState const& displayed) {
-    if (!displayed.connected || displayed.client_lease==0 || EmptyIdentity(displayed.server_instance)) return;
+std::uint64_t Session::Reset(ConnectionState const& displayed) {
+    if (!displayed.connected || displayed.client_lease==0 || EmptyIdentity(displayed.server_instance)) return 0;
     Message request; request.operation=Operation::reset; request.client=impl_->client;
     request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
     request.configuration=displayed.configuration;
     std::lock_guard lock(impl_->mutex);
-    impl_->desired=Impl::Desired{request,displayed.configuration};
+    auto generation=++impl_->last_edit_generation;
+    impl_->desired=Impl::Desired{request,displayed.configuration,generation};
     impl_->due=std::chrono::steady_clock::now(); impl_->wake.notify_one();
+    return generation;
 }
 void Session::Stop() noexcept {
     { std::lock_guard lock(impl_->mutex); impl_->stop=true; impl_->wake.notify_one(); }
     if (impl_->worker.joinable()) impl_->worker.join();
+}
+DraftState::Update DraftState::Apply(ConnectionState const& state) {
+    if (state.publication_sequence<=current_.publication_sequence) return {};
+    current_=state;
+    if (state.connected && state.configuration_authoritative) last_confirmed_=state.configuration;
+    if (Pending() || state.pending) return {true,false};
+    displayed_=state;
+    controls_=!state.connected && last_confirmed_?*last_confirmed_:state.configuration;
+    return {true,true};
+}
+void DraftState::Begin(std::uint64_t generation,Configuration const& appearance) {
+    if (!generation || generation<=edit_generation_) return;
+    if (!Valid(appearance)) throw std::invalid_argument("Invalid settings draft");
+    edit_generation_=generation; controls_=appearance;
 }
 }

@@ -6,7 +6,8 @@
 
 namespace window_sweaters::configuration {
 namespace {
-constexpr std::size_t disk_size = 32;
+constexpr std::size_t legacy_disk_size = 32;
+constexpr std::size_t disk_size = 120;
 std::uint32_t Crc(std::span<std::byte const> bytes) noexcept {
     std::uint32_t crc=0xffffffff;
     for (auto byte : bytes) {
@@ -18,7 +19,7 @@ std::uint32_t Crc(std::span<std::byte const> bytes) noexcept {
 void Put(std::array<std::byte,disk_size>& bytes, std::size_t offset, std::uint64_t value, std::size_t count) {
     for (std::size_t i=0;i<count;++i) bytes[offset+i]=std::byte((value>>(8*i))&255);
 }
-std::uint64_t Get(std::array<std::byte,disk_size> const& bytes, std::size_t offset, std::size_t count) {
+std::uint64_t Get(std::span<std::byte const> bytes, std::size_t offset, std::size_t count) {
     std::uint64_t value=0;
     for (std::size_t i=0;i<count;++i) value |= std::uint64_t(std::to_integer<unsigned>(bytes[offset+i]))<<(8*i);
     return value;
@@ -61,15 +62,46 @@ LoadedConfiguration Storage::Load() const noexcept {
         if (read>=8 && Get(bytes,0,4)==0x31435357 && Get(bytes,4,4)>contracts::configuration_schema) {
             result.state=StorageState::newer_schema; return result;
         }
-        if (size.QuadPart!=disk_size || read!=disk_size || Get(bytes,0,4)!=0x31435357 ||
-            Get(bytes,4,4)!=contracts::configuration_schema || Get(bytes,16,4)>1 ||
-            Get(bytes,24,4)!=0 || Get(bytes,28,4)!=Crc(std::span(bytes).first(28))) {
+        auto schema=Get(bytes,4,4);
+        bool legacy=schema==1;
+        auto expected_size=legacy?legacy_disk_size:disk_size;
+        if (size.QuadPart!=static_cast<LONGLONG>(expected_size) || read!=expected_size ||
+            Get(bytes,0,4)!=0x31435357 ||
+            (!legacy && schema!=contracts::configuration_schema) || Get(bytes,16,4)>1 ||
+            (legacy && Get(bytes,24,4)!=0) ||
+            (!legacy && Get(bytes,112,4)!=0) ||
+            Get(bytes,expected_size-4,4)!=Crc(std::span(bytes).first(expected_size-4))) {
             result.state=StorageState::corrupt; return result;
         }
-        result.configuration.schema=static_cast<std::uint32_t>(Get(bytes,4,4));
+        // Migration is in memory only. The original file survives until a validated
+        // mutation completes the same atomic replacement as every other save.
+        result.configuration.schema=contracts::configuration_schema;
         result.configuration.revision=Get(bytes,8,8);
         result.configuration.paused=Get(bytes,16,4)==1;
         result.configuration.border_width_dip=std::bit_cast<float>(static_cast<std::uint32_t>(Get(bytes,20,4)));
+        if (!legacy) {
+            result.configuration.design_selection=static_cast<contracts::DesignSelection>(Get(bytes,24,4));
+            result.configuration.stitch_style=static_cast<contracts::StitchStyle>(Get(bytes,28,4));
+            result.configuration.material_style=static_cast<contracts::MaterialStyle>(Get(bytes,32,4));
+            result.configuration.stitch_rows=std::bit_cast<float>(static_cast<std::uint32_t>(Get(bytes,36,4)));
+            result.configuration.yarn_argb=static_cast<std::uint32_t>(Get(bytes,40,4));
+            auto length=Get(bytes,44,4);
+            if (length>contracts::maximum_design_id_bytes) {
+                result.configuration={}; result.state=StorageState::corrupt; return result;
+            }
+            for (std::size_t i=0;i<64;++i) {
+                auto character=std::to_integer<unsigned char>(bytes[48+i]);
+                if (i<length) {
+                    if (!(character>='a' && character<='z') && !(character>='0' && character<='9') &&
+                        character!='-') {
+                        result.configuration={}; result.state=StorageState::corrupt; return result;
+                    }
+                    result.configuration.design_id+=static_cast<char>(character);
+                } else if (character!=0) {
+                    result.configuration={}; result.state=StorageState::corrupt; return result;
+                }
+            }
+        }
         if (!contracts::Valid(result.configuration)) {
             result.configuration={}; result.state=StorageState::corrupt;
         }
@@ -100,7 +132,14 @@ DWORD Storage::Save(contracts::Configuration const& value, bool explicit_reset) 
             std::array<std::byte,disk_size> bytes{};
             Put(bytes,0,0x31435357,4); Put(bytes,4,value.schema,4); Put(bytes,8,value.revision,8);
             Put(bytes,16,value.paused?1:0,4); Put(bytes,20,std::bit_cast<std::uint32_t>(value.border_width_dip),4);
-            Put(bytes,28,Crc(std::span(bytes).first(28)),4);
+            Put(bytes,24,static_cast<std::uint32_t>(value.design_selection),4);
+            Put(bytes,28,static_cast<std::uint32_t>(value.stitch_style),4);
+            Put(bytes,32,static_cast<std::uint32_t>(value.material_style),4);
+            Put(bytes,36,std::bit_cast<std::uint32_t>(value.stitch_rows),4);
+            Put(bytes,40,value.yarn_argb,4); Put(bytes,44,value.design_id.size(),4);
+            for (std::size_t i=0;i<value.design_id.size();++i)
+                bytes[48+i]=std::byte(static_cast<unsigned char>(value.design_id[i]));
+            Put(bytes,116,Crc(std::span(bytes).first(116)),4);
             if (!WriteFile(handle.get(),bytes.data(),disk_size,&written,nullptr) ||
                 written!=disk_size || !FlushFileBuffers(handle.get())) {
                 auto failure=GetLastError();

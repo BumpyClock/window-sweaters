@@ -13,6 +13,7 @@ using namespace window_sweaters;
 using namespace window_sweaters::contracts;
 using namespace window_sweaters::configuration;
 int RunSessionTests(std::filesystem::path const& directory);
+int RunAppearanceTests(std::filesystem::path const& directory);
 namespace {
 int checks=0;
 void Require(bool value,char const* label) {
@@ -76,10 +77,13 @@ void StorageCases(std::filesystem::path const& directory) {
     Storage storage(directory/L"storage");
     auto missing=storage.Load();
     Require(missing.state==StorageState::ready && missing.configuration.border_width_dip==16 &&
-            missing.configuration.revision==0 && !missing.configuration.paused,"Missing storage uses shared defaults");
+            missing.configuration.revision==0 && !missing.configuration.paused &&
+            missing.configuration.material_style==MaterialStyle::raised,"Missing storage uses shared raised-stockinette defaults");
     Configuration value; value.revision=42; value.border_width_dip=2; value.paused=true;
+    value.material_style=MaterialStyle::plain;
     Require(storage.Save(value)==0,"Atomic first save");
-    Require(storage.Load().configuration==value,"Binary semantic settings survive reload");
+    Require(storage.Load().configuration==value && storage.Load().configuration.material_style==MaterialStyle::plain,
+            "Binary semantic settings survive reload without replacing explicit plain material with the raised default");
     value.revision=43; value.border_width_dip=64;
     Require(storage.Save(value)==0 && storage.Load().configuration==value,"Atomic replacement and boundary width");
     auto original=Bytes(storage.File());
@@ -95,7 +99,7 @@ void StorageCases(std::filesystem::path const& directory) {
         if (entry.path().filename().wstring().find(L".preserved.")!=std::wstring::npos &&
             Bytes(entry.path())==corrupt) preserved=true;
     Require(preserved,"Explicit reset retains exact corrupt bytes");
-    original[4]=2;
+    original[4]=static_cast<char>(configuration_schema+1);
     {
         std::ofstream file(storage.File(),std::ios::binary|std::ios::trunc);
         file.write(original.data(),static_cast<std::streamsize>(original.size()));
@@ -301,8 +305,14 @@ int wmain(int argc,wchar_t** argv) {
     auto directory=std::filesystem::current_path()/L"tests"/L"Configuration"/
         (L".run-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64()));
     try {
-        StorageCases(directory); IpcCases(directory); RecoveryIpc(directory); ClientLeaseCases(directory);
-        checks+=RunSessionTests(directory);
+        if (argc==2 && std::wstring_view(argv[1])==L"--session-only")
+            checks+=RunSessionTests(directory);
+        else if (argc==2 && std::wstring_view(argv[1])==L"--appearance-only")
+            checks+=RunAppearanceTests(directory);
+        else {
+            StorageCases(directory); IpcCases(directory); RecoveryIpc(directory); ClientLeaseCases(directory);
+            checks+=RunSessionTests(directory); checks+=RunAppearanceTests(directory);
+        }
         std::filesystem::remove_all(directory);
         std::cout<<"PASS "<<checks<<" configuration/storage/real-pipe assertions\n"; return 0;
     } catch (std::exception const& error) {

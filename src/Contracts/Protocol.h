@@ -10,8 +10,8 @@
 #include <objbase.h>
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint16_t protocol_version = 2;
-inline constexpr std::size_t frame_size = 88;
+inline constexpr std::uint16_t protocol_version = 3;
+inline constexpr std::size_t frame_size = 176;
 inline constexpr DWORD io_timeout_ms = 3000;
 inline constexpr std::size_t maximum_pending_mutations = 32;
 inline constexpr std::size_t maximum_client_leases = 128;
@@ -28,6 +28,7 @@ struct Message {
     Identity client{};
     Identity server{};
     std::uint64_t client_lease = 0;
+    std::uint32_t error = 0;
     Configuration configuration{};
     bool operator==(Message const&) const = default;
 };
@@ -38,6 +39,8 @@ inline Identity NewIdentity() {
 }
 inline bool EmptyIdentity(Identity const& value) noexcept { return value == Identity{}; }
 inline std::array<std::byte, frame_size> Encode(Message const& value) {
+    if (value.configuration.design_id.size() > maximum_design_id_bytes)
+        throw std::invalid_argument("Design ID exceeds protocol bound");
     std::array<std::byte, frame_size> bytes{};
     auto put = [&](std::size_t at, std::uint64_t v, std::size_t count) {
         for (std::size_t i = 0; i < count; ++i) bytes[at + i] = std::byte((v >> (8 * i)) & 255);
@@ -51,10 +54,19 @@ inline std::array<std::byte, frame_size> Encode(Message const& value) {
     put(56, value.configuration.revision, 8); put(64, value.configuration.schema, 4);
     put(68, value.configuration.paused ? 1 : 0, 4);
     put(72, std::bit_cast<std::uint32_t>(value.configuration.border_width_dip), 4);
+    put(76, value.error, 4);
     put(80, value.client_lease, 8);
+    put(88, static_cast<std::uint32_t>(value.configuration.design_selection), 4);
+    put(92, static_cast<std::uint32_t>(value.configuration.stitch_style), 4);
+    put(96, static_cast<std::uint32_t>(value.configuration.material_style), 4);
+    put(100, std::bit_cast<std::uint32_t>(value.configuration.stitch_rows), 4);
+    put(104, value.configuration.yarn_argb, 4);
+    put(108, value.configuration.design_id.size(), 4);
+    for (std::size_t i=0; i<value.configuration.design_id.size(); ++i)
+        bytes[112+i]=std::byte(static_cast<unsigned char>(value.configuration.design_id[i]));
     return bytes;
 }
-inline bool Decode(std::span<std::byte const> bytes, Message& value) noexcept {
+inline bool Decode(std::span<std::byte const> bytes, Message& value) {
     if (bytes.size() != frame_size) return false;
     auto get = [&](std::size_t at, std::size_t count) {
         std::uint64_t v = 0;
@@ -62,7 +74,7 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) noexcept {
         return v;
     };
     if (get(0,4) != 0x31535757 || get(4,2) != protocol_version ||
-        get(8,4) != frame_size || get(76,4) != 0 || get(68,4) > 1) return false;
+        get(8,4) != frame_size || get(68,4) > 1) return false;
     auto operation = get(6,2), status = get(12,4);
     if (operation < 1 || operation > 4 || status > static_cast<unsigned>(Status::client_expired)) return false;
     value.operation = static_cast<Operation>(operation); value.status = static_cast<Status>(status);
@@ -76,6 +88,24 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) noexcept {
     value.configuration.paused = get(68,4) == 1;
     value.configuration.border_width_dip = std::bit_cast<float>(static_cast<std::uint32_t>(get(72,4)));
     value.client_lease = get(80,8);
+    value.error=static_cast<std::uint32_t>(get(76,4));
+    if (value.operation!=Operation::response && value.error!=0) return false;
+    value.configuration.design_selection=static_cast<DesignSelection>(get(88,4));
+    value.configuration.stitch_style=static_cast<StitchStyle>(get(92,4));
+    value.configuration.material_style=static_cast<MaterialStyle>(get(96,4));
+    value.configuration.stitch_rows=std::bit_cast<float>(static_cast<std::uint32_t>(get(100,4)));
+    value.configuration.yarn_argb=static_cast<std::uint32_t>(get(104,4));
+    auto length=get(108,4);
+    if (length>maximum_design_id_bytes) return false;
+    value.configuration.design_id.clear();
+    for (std::size_t i=0;i<64;++i) {
+        auto character=std::to_integer<unsigned char>(bytes[112+i]);
+        if (i<length) {
+            if (!(character>='a' && character<='z') && !(character>='0' && character<='9') &&
+                character!='-') return false;
+            value.configuration.design_id+=static_cast<char>(character);
+        } else if (character!=0) return false;
+    }
     return Valid(value.configuration);
 }
 }

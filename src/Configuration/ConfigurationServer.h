@@ -13,6 +13,7 @@ struct ServerOptions {
 struct MutationResult {
     contracts::Status status = contracts::Status::disconnected;
     contracts::Configuration configuration{};
+    DWORD error=ERROR_SUCCESS;
 };
 // Caller must hold cross-session OS write ownership for the canonical storage directory
 // and user for the entire lifetime. A session-only singleton is not sufficient.
@@ -26,6 +27,7 @@ public:
     void Stop() noexcept;
     contracts::Configuration Snapshot() const;
     std::future<MutationResult> SubmitLocal(bool paused, float width, std::uint64_t expected_revision);
+    std::future<MutationResult> SubmitLocal(contracts::Configuration const& expected);
     std::wstring Endpoint() const;
 private:
     struct Impl;

@@ -17,12 +17,12 @@ struct ConfigurationServer::Impl {
     explicit Impl(ServerOptions value) : options(std::move(value)), storage(options.storage_directory),
         endpoint(EndpointName(options.endpoint_suffix)), server(NewIdentity()), local_client(NewIdentity()) {
         auto loaded=storage.Load();
-        committed=loaded.configuration; storage_state=loaded.state;
+        committed=loaded.configuration; storage_state=loaded.state; storage_error=loaded.error;
         deduplicated.reserve(257);
         leases.reserve(maximum_client_leases);
         if (options.expected_settings_path.empty()) options.expected_settings_path=SiblingExecutable(L"WindowSweaters.Settings.exe");
     }
-    struct Job { Message request; std::promise<MutationResult> result; };
+    struct Job { Message request; std::promise<MutationResult> result; bool pause_width_only=false; };
     struct CommittedRequest { Message request; MutationResult result; };
     struct ClientLease {
         Identity client;
@@ -42,6 +42,7 @@ struct ConfigurationServer::Impl {
     std::uint64_t last_lease = 0, lease_clock = 0, local_highest_committed = 0;
     Configuration committed{};
     StorageState storage_state=StorageState::ready;
+    DWORD storage_error=ERROR_SUCCESS;
     Handle stop;
     std::thread worker, listener;
     bool running=false;
@@ -52,7 +53,7 @@ struct ConfigurationServer::Impl {
         std::lock_guard lock(mutex);
         auto status=storage_state==StorageState::ready?Status::saved:
             storage_state==StorageState::io_error?Status::storage_error:Status::recovery_required;
-        return {status,committed};
+        return {status,committed,storage_error};
     }
     ClientLease* FindLease(Message const& request) {
         auto lease = std::find_if(leases.begin(),leases.end(),[&](auto const& entry) {
@@ -65,6 +66,7 @@ struct ConfigurationServer::Impl {
         Message response=request;
         response.operation=Operation::response; response.server=server;
         response.status=snapshot.status; response.configuration=snapshot.configuration;
+        response.error=snapshot.error;
         std::lock_guard lock(mutex);
         if (request.client_lease != 0) {
             if (request.server != server) {
@@ -93,8 +95,8 @@ struct ConfigurationServer::Impl {
         }
         return response;
     }
-    std::future<MutationResult> Enqueue(Message const& request) {
-        auto job=std::make_unique<Job>(); job->request=request;
+    std::future<MutationResult> Enqueue(Message const& request,bool pause_width_only=false) {
+        auto job=std::make_unique<Job>(); job->request=request; job->pause_width_only=pause_width_only;
         auto future=job->result.get_future();
         std::lock_guard lock(mutex);
         if (!running || stopping) job->result.set_value({Status::shutting_down,committed});
@@ -102,7 +104,7 @@ struct ConfigurationServer::Impl {
         else { pending.push_back(std::move(job)); wake.notify_one(); }
         return future;
     }
-    MutationResult Apply(Message const& request) {
+    MutationResult Apply(Message const& request,bool pause_width_only) {
         auto current=SnapshotResult();
         if (!Valid(request.configuration) || request.request_id==0 || EmptyIdentity(request.client) ||
             request.status!=Status::saved ||
@@ -129,13 +131,18 @@ struct ConfigurationServer::Impl {
         if (current.configuration.revision==std::numeric_limits<std::uint64_t>::max())
             return {Status::invalid,current.configuration};
         Configuration next=request.operation==Operation::reset?Configuration{}:request.configuration;
+        if (pause_width_only) {
+            next=current.configuration;
+            next.paused=request.configuration.paused;
+            next.border_width_dip=request.configuration.border_width_dip;
+        }
         next.revision=current.configuration.revision+1;
         lease_lock.unlock();
         auto error=storage.Save(next,request.operation==Operation::reset);
-        if (error!=ERROR_SUCCESS) return {Status::storage_error,current.configuration};
+        if (error!=ERROR_SUCCESS) return {Status::storage_error,current.configuration,error};
         {
             std::lock_guard lock(mutex);
-            committed=next; storage_state=StorageState::ready;
+            committed=next; storage_state=StorageState::ready; storage_error=ERROR_SUCCESS;
             if (local) local_highest_committed=request.request_id;
             else if (auto active=FindLease(request)) active->highest_committed=request.request_id;
         }
@@ -156,7 +163,7 @@ struct ConfigurationServer::Impl {
                 }
                 job=std::move(pending.front()); pending.pop_front();
             }
-            try { job->result.set_value(Apply(job->request)); }
+            try { job->result.set_value(Apply(job->request,job->pause_width_only)); }
             catch (...) { job->result.set_value({Status::storage_error,SnapshotResult().configuration}); }
         }
     }
@@ -194,6 +201,7 @@ struct ConfigurationServer::Impl {
                             response.operation=Operation::response; response.status=result.status;
                             response.request_id=request.request_id; response.client=request.client; response.server=server;
                             response.client_lease=request.client_lease; response.configuration=result.configuration;
+                            response.error=result.error;
                         }
                         bytes=Encode(response);
                         if (Transfer(pipe.get(),bytes.data(),static_cast<DWORD>(bytes.size()),true,stop.get())) {
@@ -244,6 +252,12 @@ std::future<MutationResult> ConfigurationServer::SubmitLocal(bool paused,float w
     request.operation=Operation::mutate; request.server=impl_->server; request.client=impl_->local_client;
     request.request_id=++impl_->local_request; request.configuration.revision=expected_revision;
     request.configuration.paused=paused; request.configuration.border_width_dip=width;
+    return impl_->Enqueue(request,true);
+}
+std::future<MutationResult> ConfigurationServer::SubmitLocal(Configuration const& expected) {
+    Message request;
+    request.operation=Operation::mutate; request.server=impl_->server; request.client=impl_->local_client;
+    request.request_id=++impl_->local_request; request.configuration=expected;
     return impl_->Enqueue(request);
 }
 }

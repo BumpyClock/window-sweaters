@@ -30,7 +30,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile><PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="Storage.cpp"/><ClCompile Include="Pipe.cpp"/><ClCompile Include="ConfigurationServer.cpp"/></ItemGroup>
+  <ItemGroup><ClCompile Include="Storage.cpp"/><ClCompile Include="Pipe.cpp"/><ClCompile Include="ConfigurationServer.cpp"/><ClCompile Include="..\Designs\Catalogue.c"><CompileAs>CompileAsC</CompileAs><LanguageStandard_C>stdc17</LanguageStandard_C></ClCompile></ItemGroup>
   <ItemGroup><ClInclude Include="Storage.h"/><ClInclude Include="Pipe.h"/><ClInclude Include="ConfigurationServer.h"/><ClInclude Include="..\Contracts\Configuration.h"/><ClInclude Include="..\Contracts\Protocol.h"/></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

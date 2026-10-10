@@ -11,7 +11,7 @@ using namespace window_sweaters::contracts;
 using namespace window_sweaters::configuration;
 using namespace window_sweaters::settings;
 namespace {
-int checks=0;
+std::atomic<int> checks=0;
 void Check(bool value,char const* message) { ++checks; if (!value) throw std::runtime_error(message); }
 std::filesystem::path Self() {
     wchar_t path[32768]{}; GetModuleFileNameW(nullptr,path,32768); return path;
@@ -45,7 +45,15 @@ struct Observations {
             for (auto i=states.rbegin();i!=states.rend();++i) if (predicate(*i)) return true;
             return false;
         };
-        Check(wake.wait_for(lock,std::chrono::seconds(25),find),"Session publishes expected observable state");
+        auto found=wake.wait_for(lock,std::chrono::seconds(25),find);
+        if (!found && !states.empty()) {
+            auto const& last=states.back();
+            throw std::runtime_error("Session state timeout: status "+std::to_string(static_cast<unsigned>(last.status))+
+                ", revision "+std::to_string(last.configuration.revision)+", width "+
+                std::to_string(last.configuration.border_width_dip)+", pending "+std::to_string(last.pending)+
+                ", error "+std::to_string(last.error)+", design "+last.configuration.design_id);
+        }
+        Check(found,"Session publishes expected observable state");
         for (auto i=states.rbegin();i!=states.rend();++i) if (predicate(*i)) return *i;
         throw std::runtime_error("Expected session state unavailable");
     }
@@ -217,15 +225,31 @@ void LongOwnChainRetainsDisplayedRoot(std::filesystem::path const& directory,boo
     Configuration foreign{};
     constexpr unsigned saves=70;
     auto width=[](unsigned index){return 2.0f+0.5f*static_cast<float>(index);};
+    auto appearance=[&](Configuration value,unsigned index) {
+        value.border_width_dip=width(index);
+        value.design_selection=index%2?DesignSelection::original:DesignSelection::plain;
+        value.design_id=index%2?"spotify":"";
+        value.stitch_rows=1.5f+.5f*static_cast<float>(index%22);
+        value.stitch_style=static_cast<StitchStyle>(index%3);
+        value.material_style=static_cast<MaterialStyle>(index%2);
+        value.yarn_argb=0xff000000u+index*0x10101u;
+        return value;
+    };
     SessionTransport io;
     io.exchange=[&](Message const& request) {
         auto result=Exchange(server.Endpoint(),Self(),request);
+        for (unsigned attempt=0;request.operation==Operation::mutate && result.status==Status::storage_error &&
+             (result.error==ERROR_SHARING_VIOLATION || result.error==ERROR_ACCESS_DENIED) && attempt<5;++attempt) {
+            Check(result.configuration.revision==request.configuration.revision,
+                  "Transient long-chain filesystem denial retains committed revision before exact idempotent retry");
+            Sleep(25); result=Exchange(server.Endpoint(),Self(),request);
+        }
         if (request.operation==Operation::mutate && result.status==Status::saved) {
             auto count=++saved_count;
             if (count<saves || foreign_commit) {
                 ConnectionState original;
                 { std::lock_guard lock(display_mutex); original=displayed; }
-                active.load()->Change(original,false,width(count+1));
+                active.load()->Change(original,appearance(original.configuration,count+1));
             }
             if (foreign_commit && count==saves) {
                 auto tray=server.SubmitLocal(true,width(count),count).get();
@@ -240,7 +264,7 @@ void LongOwnChainRetainsDisplayedRoot(std::filesystem::path const& directory,boo
     active=&session;
     auto initial=observed.Connected();
     { std::lock_guard lock(display_mutex); displayed=initial; }
-    session.Change(initial,false,width(1));
+    session.Change(initial,appearance(initial.configuration,1));
     if (foreign_commit) {
         auto conflict=observed.Wait([](auto const& state){return state.status==Status::conflict;});
         Check(saved_count==saves && conflict.configuration==foreign && foreign.revision==saves+1 &&
@@ -250,11 +274,210 @@ void LongOwnChainRetainsDisplayedRoot(std::filesystem::path const& directory,boo
         auto final=observed.Wait([&](auto const& state) {
             return state.status==Status::saved&&!state.pending&&state.configuration.revision==saves;
         });
-        Check(saved_count==saves && final.configuration.border_width_dip==37 &&
-              server.Snapshot().revision==70 && server.Snapshot().border_width_dip==37,
-              "Original displayed root survives >64 contiguous coalesced own saves without losing latest slider value");
+        auto expected=appearance(initial.configuration,saves); expected.revision=70;
+        Check(saved_count==saves && final.configuration==expected && server.Snapshot()==expected,
+              "Original displayed semantic root survives >64 contiguous own appearance saves with exact latest color/gauge/style/design/width");
     }
     session.Stop(); server.Stop();
+}
+void AllAppearanceInputsCoalesce(std::filesystem::path const& directory) {
+    auto options=TestOptions(directory,L"session-appearance-coalescing");
+    ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
+    Observations observed; Gate gate; std::atomic<unsigned> mutations=0;
+    SessionTransport io;
+    io.exchange=[&](Message const& request) {
+        if (request.operation==Operation::mutate && ++mutations==1) gate.Block();
+        return Exchange(server.Endpoint(),Self(),request);
+    };
+    io.start_host=[]{return false;};
+    Session session(options,[&](auto state){observed.Add(std::move(state));},io);
+    auto displayed=observed.Connected();
+    auto first=displayed.configuration;
+    first.design_selection=DesignSelection::original; first.design_id="spotify";
+    first.yarn_argb=0xffaa1122; first.border_width_dip=20;
+    session.Change(displayed,first); gate.Wait();
+    auto final=first;
+    for (unsigned i=0;i<70;++i) {
+        final.design_id=i%2?"notes":"finder"; final.border_width_dip=2.f+.5f*static_cast<float>(i);
+        final.yarn_argb=0xff000000u+i*0x10101u; final.stitch_rows=1.5f+.5f*static_cast<float>(i%22);
+        final.stitch_style=static_cast<StitchStyle>(i%3); final.material_style=static_cast<MaterialStyle>(i%2);
+        session.Change(displayed,final);
+    }
+    gate.Release();
+    auto saved=observed.Wait([](auto const& state) {
+        return state.status==Status::saved && !state.pending && state.configuration.revision==2;
+    });
+    final.revision=2;
+    Check(mutations==2 && saved.configuration==final && server.Snapshot()==final,
+          "70 slider/color/style/design input snapshots coalesce as complete appearance, not partial field mutations");
+    session.Stop(); server.Stop();
+}
+void SemanticDisplayedStateIsNotInvented(std::filesystem::path const& directory) {
+    auto options=TestOptions(directory,L"session-semantic-root");
+    ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
+    Observations observed; Gate gate; std::atomic<bool> first=false;
+    SessionTransport io;
+    io.exchange=[&](Message const& request){return Exchange(server.Endpoint(),Self(),request);};
+    io.start_host=[]{return false;};
+    Session session(options,[&](ConnectionState state) {
+        observed.Add(state);
+        if (state.status==Status::saved && !state.pending && state.configuration.revision==1 &&
+            !first.exchange(true)) gate.Block();
+    },io);
+    auto displayed=observed.Connected();
+    auto appearance=displayed.configuration;
+    appearance.design_selection=DesignSelection::original; appearance.design_id="spotify";
+    appearance.yarn_argb=0xff112233; session.Change(displayed,appearance);
+    gate.Wait();
+    auto invented=displayed; invented.configuration.yarn_argb=0xff112233;
+    invented.configuration.stitch_rows=8;
+    appearance.yarn_argb=0xff445566;
+    session.Change(invented,appearance);
+    gate.Release();
+    auto conflict=observed.Wait([](auto const& state){return state.status==Status::conflict;});
+    Check(conflict.configuration.revision==1 && conflict.configuration.yarn_argb==0xff112233 &&
+          server.Snapshot()==conflict.configuration,
+          "Same revision with different displayed semantic fields cannot borrow a proven own chain");
+    session.Stop(); server.Stop();
+}
+void QueuedPublicationPreservesNewDraft(std::filesystem::path const& directory) {
+    auto options=TestOptions(directory,L"session-dispatcher-draft");
+    ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
+    Observations queued; Gate gate;
+    std::atomic<unsigned> snapshots=0,mutations=0;
+    SessionTransport io;
+    io.exchange=[&](Message const& request) {
+        if (request.operation==Operation::snapshot && ++snapshots==3) gate.Block();
+        if (request.operation==Operation::mutate) ++mutations;
+        return Exchange(server.Endpoint(),Self(),request);
+    };
+    io.start_host=[]{return false;};
+    Session session(options,[&](auto state){queued.Add(std::move(state));},io);
+    DraftState ui;
+    auto initial=queued.Connected();
+    Check(ui.Apply(initial).controls_changed && initial.configuration_authoritative,
+          "Production dispatcher reducer accepts an authoritative initial plain snapshot");
+    auto old_plain=queued.Wait([&](auto const& state) {
+        return state.publication_sequence>initial.publication_sequence && !state.pending;
+    });
+    gate.Wait();
+    auto spotify=ui.Controls();
+    spotify.design_selection=DesignSelection::original; spotify.design_id="spotify";
+    spotify.yarn_argb=0xff497641; spotify.stitch_style=StitchStyle::garter;
+    spotify.material_style=MaterialStyle::plain; spotify.stitch_rows=4.5f;
+    auto first=session.Change(ui.Displayed(),spotify); ui.Begin(first,spotify);
+    auto deferred=ui.Apply(old_plain);
+    Check(deferred.accepted && !deferred.controls_changed && ui.Controls()==spotify && ui.Pending() &&
+          ui.Displayed().configuration==initial.configuration,
+          "Queued older pending=false plain publication cannot overwrite newer Spotify draft or rebase its displayed origin");
+    auto width_input=ui.Controls(); width_input.border_width_dip=24;
+    auto latest=session.Change(ui.Displayed(),width_input); ui.Begin(latest,width_input);
+    Check(latest>first && ui.LastConfirmed() && ui.LastConfirmed()->design_selection==DesignSelection::plain,
+          "New draft generation retains separate confirmed snapshot while coalescing full input state");
+    gate.Release();
+    auto saved=queued.Wait([&](auto const& state) {
+        return state.status==Status::saved && !state.pending && state.settled_edit_generation==latest;
+    });
+    auto expected=width_input; expected.revision=1;
+    Check(ui.Apply(saved).controls_changed && ui.Controls()==expected && ui.LastConfirmed()==expected &&
+          server.Snapshot()==expected && mutations==1,
+          "Spotify plus width24 preserves color/style/gauge through actual coalesced Session IPC and production dispatcher reduction");
+    Check(!ui.Apply(old_plain).accepted && ui.Controls()==expected && ui.LastConfirmed()==expected,
+          "Out-of-order queued publication cannot regress connection, controls or confirmed configuration after acknowledgment");
+    session.Stop(); server.Stop();
+}
+void EarlierAcknowledgmentPreservesLaterDraft(std::filesystem::path const& directory) {
+    auto options=TestOptions(directory,L"session-dispatcher-ack");
+    ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
+    Observations queued; Gate gate; std::atomic<bool> first=false;
+    SessionTransport io;
+    io.exchange=[&](Message const& request){return Exchange(server.Endpoint(),Self(),request);};
+    io.start_host=[]{return false;};
+    Session session(options,[&](ConnectionState state) {
+        queued.Add(state);
+        if (state.status==Status::saved && !state.pending && state.configuration.revision==1 &&
+            !first.exchange(true)) gate.Block();
+    },io);
+    DraftState ui; auto initial=queued.Connected(); ui.Apply(initial);
+    auto spotify=ui.Controls(); spotify.design_selection=DesignSelection::original;
+    spotify.design_id="spotify"; spotify.yarn_argb=0xff497641;
+    auto generation=session.Change(ui.Displayed(),spotify); ui.Begin(generation,spotify);
+    gate.Wait();
+    auto old_ack=queued.Wait([&](auto const& state){return state.settled_edit_generation==generation;});
+    auto width=ui.Controls(); width.border_width_dip=24; width.yarn_argb=0xff228833;
+    auto latest=session.Change(ui.Displayed(),width); ui.Begin(latest,width);
+    auto update=ui.Apply(old_ack);
+    Check(update.accepted && !update.controls_changed && ui.Controls()==width &&
+          ui.LastConfirmed()==old_ack.configuration && ui.Pending(),
+          "Earlier successful queued acknowledgment confirms saved state but never rolls back a newer draft generation");
+    gate.Release();
+    auto final=queued.Wait([&](auto const& state) {
+        return state.status==Status::saved && !state.pending && state.settled_edit_generation==latest;
+    });
+    width.revision=2;
+    Check(ui.Apply(final).controls_changed && ui.Controls()==width && server.Snapshot()==width,
+          "Latest draft acknowledgment ends pending state using exact proven own chain");
+    session.Stop(); server.Stop();
+}
+void RenewedSnapshotSurvivesDisconnect(std::filesystem::path const& directory,bool restart) {
+    auto options=TestOptions(directory,restart?L"session-confirmed-restart":L"session-confirmed-lease");
+    auto server=std::make_unique<ConfigurationServer>(ServerOptions{options.storage_directory,options.endpoint_suffix,Self()});
+    server->Start();
+    auto spotify=Configuration{}; spotify.design_selection=DesignSelection::original;
+    spotify.design_id="spotify"; spotify.yarn_argb=0xff497641;
+    Check(server->SubmitLocal(spotify).get().status==Status::saved,"Initial Spotify host appearance is durable");
+    auto endpoint=server->Endpoint();
+    Observations queued; Gate gate; std::atomic<unsigned> snapshots=0,launches=0;
+    SessionTransport io;
+    io.exchange=[&](Message const& request) {
+        if (request.operation==Operation::snapshot && ++snapshots==2) gate.Block();
+        return Exchange(endpoint,Self(),request);
+    };
+    io.start_host=[&]{++launches;return false;};
+    Session session(options,[&](auto state){queued.Add(std::move(state));},io);
+    DraftState ui; auto initial=queued.Connected(); ui.Apply(initial);
+    gate.Wait();
+    if (restart) {
+        server->Stop(); server.reset();
+        server=std::make_unique<ConfigurationServer>(ServerOptions{options.storage_directory,options.endpoint_suffix,Self()});
+        server->Start();
+    } else {
+        for (std::size_t i=0;i<maximum_client_leases;++i) {
+            Message request; request.client=NewIdentity(); request.request_id=1;
+            Exchange(endpoint,Self(),request);
+        }
+    }
+    auto finder=server->Snapshot(); finder.design_id="finder"; finder.yarn_argb=0xff258de0;
+    finder.border_width_dip=32; finder.stitch_rows=8;
+    auto changed=server->SubmitLocal(finder).get();
+    Check(changed.status==Status::saved && changed.configuration.revision==2,
+          "Replacement or renewed host has a different complete appearance and revision");
+    gate.Release();
+    auto expired=queued.Wait([&](auto const& state) {
+        return state.status==(restart?Status::wrong_instance:Status::client_expired);
+    });
+    ui.Apply(expired);
+    auto renewed=queued.Wait([&](auto const& state) {
+        return state.connected && state.client_lease!=0 &&
+            (restart?state.server_instance!=initial.server_instance:state.client_lease!=initial.client_lease);
+    });
+    Check(renewed.status==Status::saved && renewed.configuration_authoritative &&
+          renewed.configuration==changed.configuration && ui.Apply(renewed).controls_changed &&
+          ui.LastConfirmed()==changed.configuration,
+          "Fresh admitted snapshot clears transient expiry status and independently confirms the latest appearance");
+    auto diagnostic=renewed; ++diagnostic.publication_sequence; diagnostic.status=Status::storage_error;
+    DraftState diagnostic_ui; diagnostic_ui.Apply(initial); diagnostic_ui.Apply(diagnostic);
+    Check(diagnostic_ui.LastConfirmed()==changed.configuration,
+          "Authoritative snapshot confirmation does not depend on an unrelated retained mutation-error status");
+    server->Stop();
+    auto disconnected=queued.Wait([&](auto const& state) {
+        return !state.connected && state.status==Status::disconnected &&
+            state.publication_sequence>renewed.publication_sequence;
+    });
+    Check(ui.Apply(disconnected).controls_changed && ui.Controls()==changed.configuration &&
+          ui.LastConfirmed()==changed.configuration && launches==0,
+          "Disconnect after renewed admission retains the latest confirmed Finder appearance, not obsolete Spotify, without auto-launching host");
+    session.Stop();
 }
 }
 int RunSessionTests(std::filesystem::path const& directory) {
@@ -267,5 +490,11 @@ int RunSessionTests(std::filesystem::path const& directory) {
     HostRestartDiscardsOldWork(directory);
     LongOwnChainRetainsDisplayedRoot(directory,false);
     LongOwnChainRetainsDisplayedRoot(directory,true);
+    AllAppearanceInputsCoalesce(directory);
+    SemanticDisplayedStateIsNotInvented(directory);
+    QueuedPublicationPreservesNewDraft(directory);
+    EarlierAcknowledgmentPreservesLaterDraft(directory);
+    RenewedSnapshotSurvivesDisconnect(directory,false);
+    RenewedSnapshotSurvivesDisconnect(directory,true);
     return checks;
 }

@@ -23,15 +23,15 @@
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary><RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
-    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>user32.lib;advapi32.lib;shell32.lib;ole32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>user32.lib;advapi32.lib;shell32.lib;ole32.lib;windowsapp.lib;d2d1.lib;windowscodecs.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
     <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile><PreprocessorDefinitions>NDEBUG;WINRT_NO_SOURCE_LOCATION;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <Link><AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="SettingsApp.cpp"/><ClCompile Include="Session.cpp"/><ClInclude Include="Session.h"/><None Include="packages.config"/><Manifest Include="app.manifest"/></ItemGroup>
-  <ItemGroup><ProjectReference Include="..\Configuration\WindowSweaters.Configuration.vcxproj"><Project>{2D727CBB-89D4-47D2-A630-0212AF370E26}</Project></ProjectReference></ItemGroup>
+  <ItemGroup><ClCompile Include="SettingsApp.cpp"/><ClCompile Include="Session.cpp"/><ClInclude Include="Session.h"/><None Include="packages.config"/><None Include="priconfig.xml"/><Manifest Include="app.manifest"/></ItemGroup>
+  <ItemGroup><ProjectReference Include="..\Configuration\WindowSweaters.Configuration.vcxproj"><Project>{2D727CBB-89D4-47D2-A630-0212AF370E26}</Project></ProjectReference><ProjectReference Include="WindowSweaters.Settings.Core.vcxproj"><Project>{78D7C86B-22BD-4E54-8C2A-62D180D83711}</Project></ProjectReference></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
   <Import Project="$(AppSDKDir)build\native\Microsoft.WindowsAppSDK.targets"/>
   <Import Project="$(BaseDir)build\native\Microsoft.WindowsAppSDK.Base.targets"/>
@@ -44,5 +44,24 @@
   <Target Name="RequirePinnedNativeDependencies" BeforeTargets="PrepareForBuild">
     <Error Condition="!Exists('$(CppWinRTPackageDir)bin\cppwinrt.exe')" Text="Restore pinned native packages: nuget restore src\Settings\packages.config -PackagesDirectory src\Settings\.packages"/>
     <Error Condition="!Exists('%(NativePackage.Root)%(NativePackage.Identity).nuspec')" Text="Missing exact native package %(NativePackage.Identity) %(NativePackage.Version). Restore src\Settings\packages.config."/>
+  </Target>
+  <PropertyGroup>
+    <SettingsMakePriExe Condition="'$(SettingsMakePriExe)'==''">$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\makepri.exe</SettingsMakePriExe>
+    <SettingsPriStage>$(IntDir)ApplicationPriInputs\</SettingsPriStage>
+  </PropertyGroup>
+  <Target Name="GenerateSettingsApplicationPri" AfterTargets="Build"
+          Inputs="$(OutDir)Microsoft.UI.pri;$(OutDir)Microsoft.UI.Xaml.Controls.pri;$(OutDir)Microsoft.WindowsAppRuntime.pri;$(MSBuildThisFileDirectory)priconfig.xml"
+          Outputs="$(OutDir)resources.pri">
+    <Error Condition="!Exists('$(SettingsMakePriExe)')" Text="Windows SDK MakePRI is required to index native WinUI application resources: $(SettingsMakePriExe)"/>
+    <ItemGroup>
+      <SettingsFrameworkPri Include="$(OutDir)Microsoft.UI.pri;$(OutDir)Microsoft.UI.Xaml.Controls.pri;$(OutDir)Microsoft.WindowsAppRuntime.pri"/>
+    </ItemGroup>
+    <Error Condition="!Exists('%(SettingsFrameworkPri.Identity)')" Text="Missing self-contained native resource payload: %(SettingsFrameworkPri.Identity)"/>
+    <MakeDir Directories="$(SettingsPriStage)"/>
+    <Copy SourceFiles="@(SettingsFrameworkPri)" DestinationFolder="$(SettingsPriStage)" SkipUnchangedFiles="true"/>
+    <!-- Only compiled PRI inputs are scanned. Including loose framework assets
+         here would index duplicate NoiseAsset/map paths from the same package. -->
+    <Exec Command="&quot;$(SettingsMakePriExe)&quot; new /pr &quot;$(SettingsPriStage).&quot; /cf &quot;$(MSBuildThisFileDirectory)priconfig.xml&quot; /in &quot;$(TargetName)&quot; /of &quot;$(OutDir)resources.pri&quot; /o"/>
+    <ItemGroup><FileWrites Include="$(OutDir)resources.pri;@(SettingsFrameworkPri->'$(SettingsPriStage)%(Filename)%(Extension)')"/></ItemGroup>
   </Target>
 </Project>

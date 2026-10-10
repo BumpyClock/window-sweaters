@@ -2,12 +2,14 @@
 #include "..\Configuration\ConfigurationServer.h"
 #include <functional>
 #include <memory>
+#include <optional>
 
 namespace window_sweaters::settings {
 struct Options {
     bool test_mode=false;
     std::filesystem::path storage_directory;
     std::wstring endpoint_suffix;
+    bool startup_probe=false;
 };
 struct ConnectionState {
     bool connected=false;
@@ -16,11 +18,31 @@ struct ConnectionState {
     contracts::Configuration configuration{};
     contracts::Identity server_instance{};
     std::uint64_t client_lease=0;
+    std::uint32_t error=0;
+    std::uint64_t publication_sequence=0;
+    std::uint64_t settled_edit_generation=0;
+    bool configuration_authoritative=false;
     std::wstring detail=L"Connecting to the host…";
 };
 struct SessionTransport {
     std::function<contracts::Message(contracts::Message const&)> exchange;
     std::function<bool()> start_host;
+};
+class DraftState {
+public:
+    struct Update { bool accepted=false; bool controls_changed=false; };
+    Update Apply(ConnectionState const& state);
+    void Begin(std::uint64_t edit_generation,contracts::Configuration const& appearance);
+    bool Pending() const noexcept { return edit_generation_>current_.settled_edit_generation; }
+    ConnectionState const& Current() const noexcept { return current_; }
+    ConnectionState const& Displayed() const noexcept { return displayed_; }
+    contracts::Configuration const& Controls() const noexcept { return controls_; }
+    std::optional<contracts::Configuration> const& LastConfirmed() const noexcept { return last_confirmed_; }
+private:
+    ConnectionState current_,displayed_;
+    contracts::Configuration controls_;
+    std::optional<contracts::Configuration> last_confirmed_;
+    std::uint64_t edit_generation_=0;
 };
 class Session {
 public:
@@ -28,8 +50,9 @@ public:
     ~Session();
     Session(Session const&)=delete;
     Session& operator=(Session const&)=delete;
-    void Change(ConnectionState const& displayed,bool paused,float width);
-    void Reset(ConnectionState const& displayed);
+    std::uint64_t Change(ConnectionState const& displayed,bool paused,float width);
+    std::uint64_t Change(ConnectionState const& displayed,contracts::Configuration const& appearance);
+    std::uint64_t Reset(ConnectionState const& displayed);
     void Stop() noexcept;
 private:
     struct Impl;
