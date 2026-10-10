@@ -220,7 +220,8 @@ void ProductionPreview() {
     PreviewViews views;
     settings::Preview worker([&](auto value){views.Add(std::move(value));});
     knitting::TileCache cache;
-    rendering::KnitFrameSpec frame; frame.widthDip=400; frame.heightDip=140;
+    // The 16 DIP band's 8 DIP drop-shadow margin comes out of the 400x140 content.
+    rendering::KnitFrameSpec frame; frame.widthDip=384; frame.heightDip=124;
     for (std::size_t i=0;i<designs::ws_design_theme_count();++i) {
         auto theme=designs::ws_design_theme_at(i);
         auto value=Original(theme->id); value.border_width_dip=16; value.stitch_rows=6; value.yarn_argb=theme->base_argb;

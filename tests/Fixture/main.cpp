@@ -13,6 +13,8 @@
 #include <string_view>
 #include <vector>
 
+#include "..\..\src\Geometry\Geometry.h"
+
 namespace
 {
 constexpr wchar_t kTargetClass[] = L"WindowSweaters.TestFixture";
@@ -1102,10 +1104,17 @@ bool ValidateLifecycleIdentity(Fixture& fixture, const HostSnapshot& snapshot)
         !snapshot.stopped;
 }
 
+// The overlay extends past the band padding by the drop-shadow margin.
+LONG OverlayInsetPixels(std::uint64_t paddingPixels)
+{
+    const auto padding = static_cast<std::uint32_t>(paddingPixels);
+    return static_cast<LONG>(padding + window_sweaters::geometry::ShadowMarginPixels(padding));
+}
+
 bool ValidateReceiverContainment(Fixture& fixture, const RECT& targetBounds)
 {
     RECT receiverBounds{};
-    const LONG padding = static_cast<LONG>(fixture.lifecycle.baseline.borderPaddingPixels);
+    const LONG padding = OverlayInsetPixels(fixture.lifecycle.baseline.borderPaddingPixels);
     return ReadOwnedWindowRect(fixture, fixture.receiver, receiverBounds, false) &&
         targetBounds.left - padding >= receiverBounds.left &&
         targetBounds.top - padding >= receiverBounds.top &&
@@ -1179,7 +1188,7 @@ void StartLifecycleCheck(Fixture& fixture)
     }
 
     RECT original{};
-    const LONG padding = static_cast<LONG>(baseline.borderPaddingPixels);
+    const LONG padding = OverlayInsetPixels(baseline.borderPaddingPixels);
     if (!ReadOwnedWindowRect(fixture, fixture.target, original, true) ||
         !SameRect(baseline.overlayBounds, RECT{
             baseline.targetBounds.left - padding,

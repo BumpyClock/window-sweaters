@@ -35,6 +35,31 @@ processes and declares opt-in startup disabled by default. Until the reserved
 Store app's identity is supplied, build output uses a clearly marked development
 identity. No package has been submitted or published.
 
+Native perimeters add ring lighting that upstream lacks. Each band is lit as a
+padded tube under one upper-left screen-space light (`ws_knit_shade_ring`), so
+crowns brighten, flanks fall off, and the inner flank darkens where yarn tucks
+under the target. Lighting scales channels uniformly, so stitch colour stays
+authored. Stitch relief uses the same light: tiles carry unlit albedo plus a
+periodic stitch height map, the renderer samples that height through the same
+orientation, clip and brush transforms as colour, and
+`ws_knit_shade_ring_relief` tilts the tube normal by the height gradient per
+screen pixel. Legs therefore face the upper left on all four sides and corners,
+where upstream bakes its light in tile space and rotates it with each edge.
+Source plates bake a weak tile-space light, so luminance cannot be compared
+pixel for pixel. Source-plate parity compares chromaticity (uniform channel
+scaling cancels): yarn-colour MAE, chroma edge energy, plus mean brightness
+(production within 0.9-1.15x of the ring-lit plate; measured 1.01-1.07x) and
+luminance spread (0.85-1.8x; measured 1.07-1.41x, deliberately plumper relief).
+Light direction is covered by a screen-space test on all four sides.
+
+The same light casts a soft black drop shadow (`ws_knit_ring_drop_shadow`, peak
+0.3 alpha) down and to the right onto the desktop outside the band, so the ring
+reads as a raised tube. Upstream has no such shadow. The overlay reserves a
+transparent margin of `ceil(padding / 2)` physical pixels on each side for it
+(`ShadowMarginPixels`). Windows still covers the inner tuck, so there is no
+contact shadow on window content. A shadow that would show only in that margin,
+with the band off the clip, stays hidden.
+
 These policies do not promise exact foreign-compositor animation synchronization,
 forced tiling gaps, or simultaneous operation in multiple logon sessions.
 

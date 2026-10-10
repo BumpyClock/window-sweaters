@@ -68,9 +68,11 @@ struct RasterImage {
 struct Tile {
     TileSpec spec;
     ws_knit_layout layout{};
-    RasterImage image;
+    // image is unlit albedo (occlusion only); height is a same-size periodic
+    // greyscale stitch height (blue channel) for screen-space lighting.
+    RasterImage image, height;
     std::size_t ByteSize() const noexcept {
-        return image.ByteSize() + (spec.chart ? spec.chart->ByteSize() : 0);
+        return image.ByteSize() + height.ByteSize() + (spec.chart ? spec.chart->ByteSize() : 0);
     }
 };
 

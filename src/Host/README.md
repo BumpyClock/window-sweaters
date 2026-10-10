@@ -201,7 +201,11 @@ queued position.
 
 `Overlay::Upload(shared_ptr<const KnitPerimeter>, physicalOuterBounds,
 clipRelativeToOuter, contentExclusion, radiusPixels, tuckPixels)` uploads premultiplied BGRA into four narrow
-DirectComposition surfaces. Four child visuals retain the perimeter pieces.
+DirectComposition surfaces. `physicalOuterBounds` is the target plus band padding
+plus a `ShadowMarginPixels(padding)` drop-shadow margin per side, which equals the
+perimeter's `contentInsetPixels`. The overlay is therefore half a band larger
+than the band on each side. It stays click-through, and the margin is
+transparent apart from the soft shadow. Four child visuals retain the perimeter pieces.
 There is no full-window backing surface. The root clips to the current monitor
 region; the bitmap upload subtracts the matching rounded client-interior geometry.
 Its inner rectangle is inset by the source's one-DIP tuck and its radius is the

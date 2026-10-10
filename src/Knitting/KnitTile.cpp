@@ -90,7 +90,7 @@ struct PathWriter {
 namespace detail {
 RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
                           const std::vector<YarnCell>& chartCells,
-                          RasterImage* diagnosticHeight) {
+                          RasterImage* diagnosticHeight, RasterImage* stitchHeight) {
     if (!ws_knit_validate_gauge(&spec.gauge) || l.columns <= 0 || l.rows <= 0
         || l.columns > 4096 || l.rows > 4096 || l.raster_scale <= 0 || l.raster_scale > 8
         || l.width_dip <= 0 || l.height_dip <= 0 || l.width_dip > 4096 / l.raster_scale
@@ -183,9 +183,18 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
     for (std::size_t i = 0; i < hf.size(); ++i) hf[i] = (heights.pixels[i] & 255) / 255.f;
     ws_knit_blur(hf.data(), static_cast<int>(width), static_cast<int>(height), scratch.data());
     ws_knit_blur(hf.data(), static_cast<int>(width), static_cast<int>(height), scratch.data());
-    ws_knit_shade(&material, raised, l.raster_scale, hf.data(), flat.pixels.data(),
-                  static_cast<int>(width), static_cast<int>(height), flat.pixels.data());
+    // With stitchHeight the tile stays unlit: the renderer lights it in screen space.
+    (stitchHeight ? ws_knit_albedo : ws_knit_shade)(&material, raised, l.raster_scale, hf.data(),
+        flat.pixels.data(), static_cast<int>(width), static_cast<int>(height), flat.pixels.data());
     flipRows(flat);
+    if (stitchHeight) {
+        *stitchHeight = {width, height, width * 4, std::vector<std::uint32_t>(hf.size())};
+        for (std::size_t i = 0; i < hf.size(); ++i) {
+            auto v = static_cast<std::uint32_t>(std::lround(std::clamp(hf[i], 0.f, 1.f) * 255.f));
+            stitchHeight->pixels[i] = 0xff000000u | v << 16 | v << 8 | v;
+        }
+        flipRows(*stitchHeight);
+    }
     return flat;
 }
 }
@@ -234,7 +243,7 @@ ws_knit_layout ChartLayout(const TileSpec& spec, const ws_knit_gauge& material) 
 
 // Port of knit.c:234-298. Computation follows the source's logical y; WIC
 // stores that row directly, rather than its CoreGraphics bottom-up address.
-RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l) {
+RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l, RasterImage& stitchHeight) {
     const auto& ch = *spec.chart;
     const auto& g = spec.gauge;
     bool defined = (ch.appearance.flags & designs::ChartDefinedYarn) != 0;
@@ -243,6 +252,7 @@ RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l) {
     std::uint32_t height = static_cast<std::uint32_t>(l.height_dip * l.raster_scale);
     RasterImage image{width, height, width * 4, {}};
     image.pixels.resize(static_cast<std::size_t>(width) * height);
+    stitchHeight = image;
     float stitchScale = defined ? 2.f : 1.f;
     float relief = std::min(defined ? .30f : .25f,
         std::max(0.f, g.relief * (defined ? .32f : .20f)));
@@ -289,6 +299,8 @@ RasterImage FabricTile(const TileSpec& spec, const ws_knit_layout& l) {
             auto green = static_cast<std::uint32_t>(std::min(255.f, ((yarn >> 8) & 255u) * shade));
             auto b = static_cast<std::uint32_t>(std::min(255.f, (yarn & 255u) * shade));
             image.pixels[static_cast<std::size_t>(y) * width + x] = 0xff000000u | r << 16 | green << 8 | b;
+            auto hv = static_cast<std::uint32_t>(std::lround(std::min(1.f, ridge) * 255.f));
+            stitchHeight.pixels[static_cast<std::size_t>(y) * width + x] = 0xff000000u | hv << 16 | hv << 8 | hv;
         }
     }
     return image;
@@ -304,7 +316,7 @@ std::shared_ptr<const Tile> MakeTile(const TileSpec& spec) {
     if (spec.material == Material::Raised)
         tile->layout.yarn_width = std::max(tile->layout.stitch_width * material.yarn, 0.8f);
     if (spec.chart && spec.material == Material::Plain) {
-        tile->image = FabricTile(spec, tile->layout);
+        tile->image = FabricTile(spec, tile->layout, tile->height);
         return tile;
     }
     if (!spec.chart && spec.material == Material::Plain && spec.stitch == Stitch::Rib)
@@ -326,7 +338,7 @@ std::shared_ptr<const Tile> MakeTile(const TileSpec& spec) {
                 cells.push_back({i, j, (argb >> 24) < 128 ? spec.baseArgb : argb | 0xff000000u});
             }
     }
-    tile->image = detail::RasterizeTile(spec, tile->layout, cells);
+    tile->image = detail::RasterizeTile(spec, tile->layout, cells, nullptr, &tile->height);
     return tile;
 }
 }

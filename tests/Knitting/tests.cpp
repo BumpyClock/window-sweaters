@@ -165,11 +165,11 @@ void CacheAndInvalidInputs() {
     auto opaque = spec; opaque.baseArgb &= 0x00ffffffu;
     Require(probe.Get(opaque) == tile, "ARGB input alpha cannot make yarn translucent");
     auto originalPixels = tile->image.pixels;
-    TileCache bounded(tile->image.ByteSize());
+    TileCache bounded(tile->ByteSize());
     auto inUse = bounded.Get(spec);
     auto another = spec; another.baseArgb = 0xffd1495bu;
     bounded.Get(another);
-    Require(bounded.ResidentBytes() <= tile->image.ByteSize(), "Cache image bytes stay bounded");
+    Require(bounded.ResidentBytes() <= tile->ByteSize(), "Cache tile bytes (albedo + stitch height) stay bounded");
     Require(inUse->image.pixels == originalPixels, "Tile survives eviction while in use");
     bounded.Clear();
     Require(bounded.ResidentBytes() == 0 && inUse->image.pixels == originalPixels, "Tile survives explicit cache clear");
@@ -209,6 +209,85 @@ void CacheAndInvalidInputs() {
     Invalid([&] { probe.Get(changed); }, "Excess tile allocation rejected");
 }
 
+// Production pixels without the transparent drop-shadow desktop margin, so band
+// geometry keeps its content + 2*band coordinates. Shadow alpha stays included.
+RasterImage BandImage(const KnitPerimeter& perimeter) {
+    auto image = KnitRaster::Compose(perimeter);
+    const auto m = perimeter.shadowMarginPixels;
+    Require(image.width > 2*m && image.height > 2*m, "Shadow margin fits the composed perimeter");
+    RasterImage band{image.width - 2*m, image.height - 2*m, (image.width - 2*m) * 4, {}};
+    band.pixels.reserve(static_cast<std::size_t>(band.width) * band.height);
+    for (std::uint32_t y = m; y < image.height - m; ++y)
+        for (std::uint32_t x = m; x < image.width - m; ++x)
+            band.pixels.push_back(image.pixels[static_cast<std::size_t>(y) * image.width + x]);
+    return band;
+}
+
+RasterImage BandFrame(const KnitFrameSpec& frame, TileSpec tile, TileCache& cache) {
+    return BandImage(KnitRaster::RenderPerimeter(frame, std::move(tile), cache));
+}
+
+bool InsideRounded(float x, float y, float left, float top, float width, float height, float radius);
+
+// `desktop` is the default 620x140 DIP frame (10 DIP band and radius) composed at
+// an integral band inset, so its outer contour starts exactly `m` pixels in.
+void DropShadowContracts(const RasterImage& desktop, std::uint32_t m, float scale) {
+    const float w = static_cast<float>(desktop.width - 2*m), h = static_cast<float>(desktop.height - 2*m);
+    std::uint32_t peak = 0;
+    bool black = true, border = true;
+    for (std::uint32_t y = 0; y < desktop.height; ++y)
+        for (std::uint32_t x = 0; x < desktop.width; ++x) {
+            auto p = Pixel(desktop, x, y);
+            if (!x || !y || x == desktop.width-1 || y == desktop.height-1) border = border && Alpha(p) == 0;
+            float px = x + .5f - static_cast<float>(m), py = y + .5f - static_cast<float>(m);
+            if (InsideRounded(px, py, -1.f, -1.f, w + 2.f, h + 2.f, 20.f*scale + 1.f)) continue;
+            peak = std::max(peak, Alpha(p));
+            black = black && (p & 0x00ffffffu) == 0;
+        }
+    std::cout << "drop shadow peak alpha outside the band: " << peak << "/255\n";
+    Require(border, "Drop-shadow tail fits the margin; the overlay edge stays transparent");
+    Require(peak > 40 && peak <= 78, "Soft shadow peaks near 0.3 alpha; overlapping pieces never double it");
+    Require(black, "Drop shadow is premultiplied black on the desktop");
+    auto a = [&](std::uint32_t x, std::uint32_t y) { return Alpha(Pixel(desktop, x, y)); };
+    const auto cx = desktop.width / 2, cy = desktop.height / 2;
+    const auto bottom = a(cx, desktop.height - m + 2), top = a(cx, m - 3);
+    const auto right = a(desktop.width - m + 2, cy), left = a(m - 3, cy);
+    std::cout << "drop shadow 2.5px outside top/right/bottom/left: " << top << "/" << right
+              << "/" << bottom << "/" << left << "\n";
+    Require(bottom > top && right > left && bottom > 0 && right > 0,
+        "Shadow falls down/right, away from the upper-left ring light");
+
+    // Direct contract: sides partition pixels by nearest outer edge, nothing
+    // reaches the hole, and opaque yarn is unchanged.
+    const ws_knit_ring ring{120.f, 80.f, 15.f, 11.f, 4.f};
+    constexpr int bw = 132, bh = 92;
+    std::array<std::vector<std::uint32_t>, 4> sides;
+    for (int side = 0; side < 4; ++side) {
+        sides[side].assign(static_cast<std::size_t>(bw) * bh, 0u);
+        Require(ws_knit_ring_drop_shadow(&ring, side, 10.f, -6.f, -6.f, 1.f, sides[side].data(), bw, bh) == 1,
+            "Drop shadow accepts each side");
+    }
+    bool partition = true, hole = true, any = false;
+    for (int y = 0; y < bh; ++y)
+        for (int x = 0; x < bw; ++x) {
+            auto i = static_cast<std::size_t>(y) * bw + x;
+            int owners = 0;
+            for (const auto& side : sides) owners += side[i] ? 1 : 0;
+            partition = partition && owners <= 1;
+            any = any || owners > 0;
+            if (InsideRounded(x - 6.f + .5f, y - 6.f + .5f, 5.f, 5.f, 110.f, 70.f, 10.f)) hole = hole && owners == 0;
+        }
+    Require(partition && any, "Mitre partition: each shadow pixel has exactly one owning side");
+    Require(hole, "Drop shadow never enters the inner band or window hole");
+    std::vector<std::uint32_t> opaque(static_cast<std::size_t>(bw) * bh, 0xff112233u);
+    Require(ws_knit_ring_drop_shadow(&ring, 2, 10.f, -6.f, -6.f, 1.f, opaque.data(), bw, bh) == 1
+        && std::all_of(opaque.begin(), opaque.end(), [](auto p) { return p == 0xff112233u; }),
+        "Shadow composites under opaque yarn without changing it");
+    Require(ws_knit_ring_drop_shadow(&ring, 4, 10.f, 0.f, 0.f, 1.f, opaque.data(), bw, bh) == 0
+        && ws_knit_ring_drop_shadow(&ring, 0, 0.f, 0.f, 0.f, 1.f, opaque.data(), bw, bh) == 0,
+        "Drop shadow rejects invalid side and band");
+}
+
 bool InsideRounded(float x, float y, float left, float top, float width, float height, float radius) {
     if (x < left || y < top || x >= left + width || y >= top + height) return false;
     radius = std::clamp(radius, 0.f, std::min(width, height) * .5f);
@@ -224,13 +303,17 @@ bool InsideRounded(float x, float y, float left, float top, float width, float h
 void ReferenceGeometry(const RasterImage& image, const std::filesystem::path& root) {
     auto reference = LoadPng(root / L"references" / L"app-05.png");
     Require(reference.width == 1440 && reference.height == 1060, "Pinned renderer plate dimensions");
-    std::size_t compared = 0, mismatch = 0;
+    std::size_t compared = 0, mismatch = 0, nativeOnly = 0;
     for (std::uint32_t y = 0; y < image.height; ++y)
         for (std::uint32_t x = 0; x < image.width; ++x) {
             float dipX = (x + .5f) / 2.f, dipY = (y + .5f) / 2.f;
             // Remove the white content (including its antialias boundary).
             // Crop contains no CoreText captions.
             if (InsideRounded(dipX, dipY, 9.5f, 9.5f, 621.f, 141.f, 10.5f)) continue;
+            // The deliberately frayed outer rim is excluded; the rest of the silhouette is pinned.
+            const float fray = ws_knit_fray_depth(10.f);
+            if (InsideRounded(dipX, dipY, 0.f, 0.f, 640.f, 160.f, 20.f)
+                && !InsideRounded(dipX, dipY, fray, fray, 640.f - 2*fray, 160.f - 2*fray, 20.f - fray)) continue;
             auto baseline = Pixel(reference, x + 76, y + 204);
             int backgroundDistance = std::abs(static_cast<int>((baseline >> 16) & 255) - 249)
                 + std::abs(static_cast<int>((baseline >> 8) & 255) - 247)
@@ -239,10 +322,11 @@ void ReferenceGeometry(const RasterImage& image, const std::filesystem::path& ro
             bool nativeYarn = Alpha(Pixel(image, x, y)) > 128;
             ++compared;
             if (upstreamYarn != nativeYarn) ++mismatch;
+            if (nativeYarn && !upstreamYarn) ++nativeOnly;
         }
     double fraction = static_cast<double>(mismatch) / static_cast<double>(compared);
     std::cout << "reference exterior geometry: " << mismatch << "/" << compared
-              << " disagreements (" << fraction * 100. << "%), tolerance 1%\n";
+              << " disagreements (" << fraction * 100. << "%, " << nativeOnly << " native-only), tolerance 1%\n";
     Require(fraction <= .01, "Pinned rounded exterior geometry within 1% raster tolerance");
 }
 
@@ -391,7 +475,11 @@ void RenderBehavior(const std::filesystem::path& root) {
     KnitFrameSpec frame;
     frame.deviceScale = 2;
     auto perimeter = KnitRaster::RenderPerimeter(frame, tile, cache);
-    auto image = KnitRaster::Compose(perimeter);
+    auto desktop = KnitRaster::Compose(perimeter);
+    Require(desktop.width == 1300 && desktop.height == 340 && perimeter.shadowMarginPixels == 10
+        && perimeter.contentInsetPixels == 30, "Overlay adds a half-band (10px at 2x) drop-shadow margin per side");
+    DropShadowContracts(desktop, perimeter.shadowMarginPixels, 2.f);
+    auto image = BandImage(perimeter);
     Require(image.width == 1280 && image.height == 320, "620x140 DIP content plus 10 DIP band at 2x");
     std::size_t perimeterBytes = 0;
     for (const auto& piece : perimeter.pieces) perimeterBytes += piece.image.ByteSize();
@@ -403,64 +491,79 @@ void RenderBehavior(const std::filesystem::path& root) {
     Require(Alpha(Pixel(image, 100, 20)) == 255, "Tuck below content edge opaque");
     Require(Alpha(Pixel(image, 100, 24)) == 0, "Tuck stops at clamped inner edge");
     Premultiplied(image);
-    Require(KnitRaster::RenderFrame(frame, tile, cache).pixels == image.pixels, "Fixture uses exact production output");
+    Require(KnitRaster::RenderFrame(frame, tile, cache).pixels == desktop.pixels, "Fixture uses exact production output");
     Require(cache.GenerationCount() == 1, "Repeated rendering/reposition needs no yarn generation");
     auto repeat = static_cast<std::uint32_t>(perimeter.tile->layout.width_dip * 2);
     bool periodic = true;
-    std::array<std::uint32_t, 3> orientationErrors{};
-    std::array<std::uint32_t, 3> orientationMaxChannel{};
+    bool rotatedCoverage = true;
     for (std::uint32_t y = 4; y < 18; ++y)
         for (std::uint32_t x = 80; x < 160; ++x) {
             if (Pixel(image, x, y) != Pixel(image, x + repeat, y)) periodic = false;
-            const std::array<std::uint32_t, 3> rotated = {
-                Pixel(image, image.width-1-y, x),
-                Pixel(image, image.width-1-x, image.height-1-y),
-                Pixel(image, y, image.height-1-x)};
-            for (std::size_t side = 0; side < 3; ++side) {
-                auto reference = Pixel(image, x, y);
-                if (reference != rotated[side]) ++orientationErrors[side];
-                for (int shift = 0; shift < 32; shift += 8) {
-                    auto delta = static_cast<std::uint32_t>(std::abs(static_cast<int>((reference >> shift) & 255)
-                        - static_cast<int>((rotated[side] >> shift) & 255)));
-                    orientationMaxChannel[side] = std::max(orientationMaxChannel[side], delta);
-                }
-            }
+            auto alpha = Alpha(Pixel(image, x, y));
+            if (alpha != Alpha(Pixel(image, image.width-1-y, x))
+                || alpha != Alpha(Pixel(image, image.width-1-x, image.height-1-y))
+                || alpha != Alpha(Pixel(image, y, image.height-1-x))) rotatedCoverage = false;
         }
     Require(periodic, "Periodic bitmap brush preserves native repeat");
-    std::cout << "rotation mismatches/max channel deltas: ";
-    for (std::size_t side = 0; side < 3; ++side)
-        std::cout << orientationErrors[side] << "/" << orientationMaxChannel[side] << " ";
-    std::cout << "\n";
-    Require(std::all_of(orientationMaxChannel.begin(), orientationMaxChannel.end(),
-        [](auto delta) { return delta <= 1; }), "Separately rotated edge sampling differs by at most 1/255 channel");
+    Require(rotatedCoverage, "Separately rotated edges share coverage; only screen-space light differs");
+    // Mean luminance across one 2x row band, averaged over whole stitch repeats.
+    auto rowLight = [&](std::uint32_t y) {
+        double sum = 0;
+        for (std::uint32_t x = 80; x < 80 + 4 * repeat; ++x) {
+            auto p = Pixel(image, x, y);
+            sum += .2126 * ((p >> 16) & 255) + .7152 * ((p >> 8) & 255) + .0722 * (p & 255);
+        }
+        return sum / (4 * repeat);
+    };
+    double crown = (rowLight(9) + rowLight(10) + rowLight(11)) / 3;
+    double outerTop = rowLight(1), innerTop = rowLight(20), outerBottom = rowLight(image.height - 2);
+    std::cout << "tube luminance outer/crown/inner/bottom-outer: " << outerTop << "/" << crown
+              << "/" << innerTop << "/" << outerBottom << "\n";
+    Require(crown > 1.05 * outerTop && crown > 1.15 * innerTop,
+        "Band crown is brighter than both flanks, reading as a padded tube");
+    Require(outerTop > 1.1 * outerBottom, "Upper-left key light brightens top outer flank over bottom outer flank");
     auto nearest = tile; nearest.sampling = Sampling::Nearest; nearest.rasterScale = 2;
-    auto nearestImage = KnitRaster::RenderFrame(frame, nearest, cache);
+    auto nearestImage = BandFrame(frame, nearest, cache);
+    // Ring light scales all channels of a pixel equally, so rotated edges keep
+    // the same normalized yarn colour even where screen-space light differs.
+    auto sameYarn = [](std::uint32_t a, std::uint32_t b) {
+        float pa = static_cast<float>(std::max({(a >> 16) & 255, (a >> 8) & 255, a & 255}));
+        float pb = static_cast<float>(std::max({(b >> 16) & 255, (b >> 8) & 255, b & 255}));
+        if (pa < 48.f || pb < 48.f) return true;
+        for (int shift = 0; shift < 24; shift += 8)
+            if (std::abs(((a >> shift) & 255) / pa - ((b >> shift) & 255) / pb) > 4.f / 48.f) return false;
+        return true;
+    };
     bool exactNearest = true;
     for (std::uint32_t y = 4; y < 18; ++y)
-        for (std::uint32_t x = 80; x < 160; ++x)
-            if (Pixel(nearestImage, x, y) != Pixel(nearestImage, nearestImage.width-1-y, x)
-                || Pixel(nearestImage, x, y) != Pixel(nearestImage, nearestImage.width-1-x, nearestImage.height-1-y)
-                || Pixel(nearestImage, x, y) != Pixel(nearestImage, y, nearestImage.height-1-x)) exactNearest = false;
-    Require(exactNearest, "Nearest sampling proves exact four-edge orientation");
-    // Analytic ring interior excludes a 1-physical-pixel AA boundary tolerance.
+        for (std::uint32_t x = 80; x < 160; ++x) {
+            auto p = Pixel(nearestImage, x, y);
+            if (!sameYarn(p, Pixel(nearestImage, nearestImage.width-1-y, x))
+                || !sameYarn(p, Pixel(nearestImage, nearestImage.width-1-x, nearestImage.height-1-y))
+                || !sameYarn(p, Pixel(nearestImage, y, nearestImage.height-1-x))) exactNearest = false;
+        }
+    Require(exactNearest, "Nearest sampling proves four-edge orientation under ring light");
+    // Analytic ring interior excludes a 1-physical-pixel AA boundary tolerance
+    // plus the frayed outer silhouette.
     bool cornerHoles = false;
+    const float fray = ws_knit_fray_depth(10.f);
     for (std::uint32_t y = 0; y < image.height; ++y)
         for (std::uint32_t x = 0; x < image.width; ++x) {
             float dx = (x + .5f) / 2, dy = (y + .5f) / 2;
-            bool outerInterior = InsideRounded(dx, dy, .5f, .5f, 639.f, 159.f, 19.5f);
+            bool outerInterior = InsideRounded(dx, dy, .5f + fray, .5f + fray, 639.f - 2*fray, 159.f - 2*fray, 19.5f - fray);
             bool innerExpanded = InsideRounded(dx, dy, 10.5f, 10.5f, 619.f, 139.f, 9.5f);
             if (outerInterior && !innerExpanded && Alpha(Pixel(image, x, y)) != 255) cornerHoles = true;
         }
     Require(!cornerHoles, "Mitres and rounded inner arcs have no uncovered yarn holes");
     auto dimmed = frame; dimmed.dim = .5f;
-    auto dark = KnitRaster::RenderFrame(dimmed, tile, cache);
+    auto dark = BandFrame(dimmed, tile, cache);
     bool alphaEqual = true;
     for (std::size_t i = 0; i < image.pixels.size(); ++i)
         if (Alpha(image.pixels[i]) != Alpha(dark.pixels[i])) alphaEqual = false;
     Require(alphaEqual, "Black dim overlay darkens without fading");
     Require((Pixel(dark, 100, 10) & 255) < (Pixel(image, 100, 10) & 255), "Dimming darkens yarn");
     auto fractional = frame; fractional.deviceScale = 1.25f;
-    auto fractionalImage = KnitRaster::RenderFrame(fractional, tile, cache);
+    auto fractionalImage = BandFrame(fractional, tile, cache);
     Require(fractionalImage.width == 801 && fractionalImage.height == 201,
         "Fractional DPI uses ceil physical band padding without shifting the target");
     Premultiplied(fractionalImage);
@@ -468,30 +571,31 @@ void RenderBehavior(const std::filesystem::path& root) {
     physical.deviceScale = 1.5f;
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
     auto physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
-    Require(physicalPerimeter.width == 1030 && physicalPerimeter.height == 271
-        && physicalPerimeter.contentInsetPixels == 15,
+    // Band padding plus ShadowMarginPixels(padding) = ceil(padding / 2) per side.
+    Require(physicalPerimeter.width == 1046 && physicalPerimeter.height == 287
+        && physicalPerimeter.contentInsetPixels == 23 && physicalPerimeter.shadowMarginPixels == 8,
         "Native physical target extents do not undergo lossy DIP ceil roundtrips");
     physical.deviceScale = 1.25f;
     physical.contentWidthPixels = 775; physical.contentHeightPixels = 175;
     physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
-    Require(physicalPerimeter.width == 801 && physicalPerimeter.height == 201
-        && physicalPerimeter.contentInsetPixels == 13,
-        "Integer outer placement matches physical padding and fractional gutter");
+    Require(physicalPerimeter.width == 815 && physicalPerimeter.height == 215
+        && physicalPerimeter.contentInsetPixels == 20 && physicalPerimeter.shadowMarginPixels == 7,
+        "Integer outer placement matches physical padding, shadow margin and fractional gutter");
     physical.deviceScale = 1.f;
     physical.bandDip = static_cast<float>(10.00000001);
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
     physical.physicalPaddingPixels = 11;
     physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
-    Require(physicalPerimeter.width == 1022 && physicalPerimeter.height == 263
-        && physicalPerimeter.contentInsetPixels == 11,
+    Require(physicalPerimeter.width == 1034 && physicalPerimeter.height == 275
+        && physicalPerimeter.contentInsetPixels == 17 && physicalPerimeter.shadowMarginPixels == 6,
         "Authoritative double-precision geometry padding survives a float integer crossing");
-    auto precisionImage = KnitRaster::Compose(physicalPerimeter);
-    Require(Alpha(Pixel(precisionImage, 100, 0)) == 0 && Alpha(Pixel(precisionImage, 100, 1)) == 255
+    auto precisionImage = BandImage(physicalPerimeter);
+    Require(Alpha(Pixel(precisionImage, 100, 0)) < 128 && Alpha(Pixel(precisionImage, 100, 1)) == 255
         && physicalPerimeter.tile->spec.bandDip == 10.f,
-        "Extra physical padding is transparent gutter, not stretched yarn or target shift");
+        "Extra physical padding is shadowed desktop gutter, not stretched yarn or target shift");
     auto resize = frame; resize.widthDip = 800;
     auto beforeResize = cache.GenerationCount();
-    auto resized = KnitRaster::RenderFrame(resize, tile, cache);
+    auto resized = BandFrame(resize, tile, cache);
     Require(Pixel(resized, 100, 10) == Pixel(image, 100, 10), "Corner anchoring stable under resize");
     Require(cache.GenerationCount() == beforeResize, "Window size is not part of the immutable yarn tile key");
     for (float size : {.25f, 1.f, 2.f, 3.f, 6.f, 10.f}) {
@@ -499,14 +603,14 @@ void RenderBehavior(const std::filesystem::path& root) {
         auto tinyImage = KnitRaster::RenderFrame(tiny, tile, cache);
         Require(!tinyImage.pixels.empty(), "Tiny geometry safely renders");
         Require(std::any_of(tinyImage.pixels.begin(), tinyImage.pixels.end(),
-            [](auto p) { return Alpha(p) > 0; }), "Tiny geometry retains a visible sweater");
+            [](auto p) { return Alpha(p) > 128; }), "Tiny geometry retains a visible sweater, not only shadow");
     }
     for (float scale : {1.f, 1.25f, 2.25f})
         for (float radius : {0.f, 10.f, 1000.f}) {
             auto corners = frame;
             corners.widthDip = 105.25f; corners.heightDip = 31.75f;
             corners.deviceScale = scale; corners.radiusDip = radius; corners.tuckDip = 14.f;
-            auto cornersImage = KnitRaster::RenderFrame(corners, tile, cache);
+            auto cornersImage = BandFrame(corners, tile, cache);
             float actualRadius = std::min(radius, 15.875f);
             float actualTuck = 13.875f;
             bool covered = true;
@@ -515,10 +619,10 @@ void RenderBehavior(const std::filesystem::path& root) {
                     float dx = (x + .5f) / scale, dy = (y + .5f) / scale;
                     float gutter = std::ceil(10.f * scale) / scale - 10.f;
                     dx -= gutter; dy -= gutter;
-                    float tolerance = 1.f / scale;
-                    bool outerInside = InsideRounded(dx, dy, tolerance, tolerance,
-                        125.25f - 2*tolerance, 51.75f - 2*tolerance,
-                        actualRadius + 10.f - tolerance);
+                    float tolerance = 1.f / scale, outerTolerance = tolerance + ws_knit_fray_depth(10.f);
+                    bool outerInside = InsideRounded(dx, dy, outerTolerance, outerTolerance,
+                        125.25f - 2*outerTolerance, 51.75f - 2*outerTolerance,
+                        actualRadius + 10.f - outerTolerance);
                     bool holeExpanded = InsideRounded(dx, dy, 10.f + actualTuck - tolerance,
                         10.f + actualTuck - tolerance, 105.25f - 2*actualTuck + 2*tolerance,
                         31.75f - 2*actualTuck + 2*tolerance,
@@ -549,12 +653,13 @@ void RenderBehavior(const std::filesystem::path& root) {
     auto minimum = frame; minimum.deviceScale = MinimumDeviceScale;
     minimum.contentWidthPixels = 100; minimum.contentHeightPixels = 31;
     auto minimumPerimeter = KnitRaster::RenderPerimeter(minimum, tile, cache);
-    Require(minimumPerimeter.width == 104 && minimumPerimeter.height == 35
-        && minimumPerimeter.contentInsetPixels == 2,
+    Require(minimumPerimeter.width == 106 && minimumPerimeter.height == 37
+        && minimumPerimeter.contentInsetPixels == 3,
         "Supported minimum scale safely derives physical perimeter bounds");
     auto output = root / L"outputs";
     std::filesystem::create_directories(output);
     SavePng(image, (output / L"stockinette-620x140-2x.png").c_str());
+    SavePng(desktop, (output / L"stockinette-620x140-2x-shadow.png").c_str());
     auto roundTrip = LoadPng(output / L"stockinette-620x140-2x.png");
     std::uint32_t pngMaxChannel = 0;
     bool pngAlphaEqual = true;
@@ -577,7 +682,7 @@ void RenderBehavior(const std::filesystem::path& root) {
     SavePng(perimeter.tile->image, (output / L"plain-periodic-tile.png").c_str());
     tile.baseArgb = 0xff497641u;
     auto magnified = frame; magnified.deviceScale = 8;
-    auto detailImage = KnitRaster::RenderFrame(magnified, tile, cache);
+    auto detailImage = BandFrame(magnified, tile, cache);
     RasterImage detail{640, 80, 2560, {}};
     detail.pixels.resize(static_cast<std::size_t>(detail.width) * detail.height);
     for (std::uint32_t y = 0; y < detail.height; ++y)
@@ -728,7 +833,7 @@ void ChartContracts() {
     Require(held->spec.chart && held->spec.chart->contentRevision == 3
         && held->image.pixels == heldPixels && bounded.ResidentBytes() == 0,
         "Eviction and producer release preserve immutable chart/tile ownership");
-    TileCache chartBudget(owned->image.ByteSize());
+    TileCache chartBudget(owned->image.ByteSize() + owned->height.ByteSize());
     chartBudget.Get(recolored);
     Require(chartBudget.ResidentBytes() == 0, "Byte cache bounds include owned chart data, not only raster");
     for (float scale : {MinimumDeviceScale, 1.f, 1.25f, 1.5f, 2.f, MaximumDeviceScale}) {
@@ -843,9 +948,10 @@ void CatalogueFixtures(const std::filesystem::path& root) {
         auto spec = ThemeSpec(theme->id);
         for (float scale : {1.f, 2.f}) {
             KnitFrameSpec frame; frame.deviceScale = scale;
-            auto image = KnitRaster::RenderFrame(frame, spec, cache);
+            auto perimeter = KnitRaster::RenderPerimeter(frame, spec, cache);
             auto name = std::string(theme->id) + (scale == 1.f ? "-1x.png" : "-2x.png");
-            SavePng(image, (output / name).c_str());
+            SavePng(KnitRaster::Compose(perimeter), (output / name).c_str());
+            auto image = BandImage(perimeter);
             Require(image.width == static_cast<std::uint32_t>(640*scale)
                 && image.height == static_cast<std::uint32_t>(160*scale)
                 && Alpha(Pixel(image, image.width/2, image.height/2)) == 0
@@ -857,14 +963,15 @@ void CatalogueFixtures(const std::filesystem::path& root) {
             for (float radius : {0.f, 10.f, 28.f, 200.f}) {
                 KnitFrameSpec f; f.widthDip = 180; f.heightDip = 110;
                 f.deviceScale = scale; f.radiusDip = radius;
-                auto image = KnitRaster::RenderFrame(f, spec, cache);
+                auto image = BandFrame(f, spec, cache);
                 float r = std::min(radius, 55.f), tolerance = 1.f / scale;
+                float outerTolerance = tolerance + ws_knit_fray_depth(10.f);
                 bool valid = true;
                 for (std::uint32_t y = 0; y < image.height; ++y)
                     for (std::uint32_t x = 0; x < image.width; ++x) {
                         float dx = (x+.5f)/scale, dy = (y+.5f)/scale;
-                        bool outer = InsideRounded(dx, dy, tolerance, tolerance,
-                            200-2*tolerance, 130-2*tolerance, r+10-tolerance);
+                        bool outer = InsideRounded(dx, dy, outerTolerance, outerTolerance,
+                            200-2*outerTolerance, 130-2*outerTolerance, r+10-outerTolerance);
                         bool hole = InsideRounded(dx, dy, 11-tolerance, 11-tolerance,
                             178+2*tolerance, 108+2*tolerance, std::max(0.f, r-1)+tolerance);
                         if (outer && !hole && Alpha(Pixel(image, x, y)) != 255) valid = false;
@@ -875,12 +982,12 @@ void CatalogueFixtures(const std::filesystem::path& root) {
 
     auto whatsapp = ThemeSpec("whatsapp");
     KnitFrameSpec frame; frame.deviceScale = 2;
-    auto actual = KnitRaster::RenderFrame(frame, whatsapp, cache);
+    auto actual = BandFrame(frame, whatsapp, cache);
     auto patch = TileSpec{}; patch.material = Material::Raised; patch.baseArgb = whatsapp.baseArgb;
     ChartAppearance capLook{ChartSculptedYarn}; capLook.outsideAnchored = true;
     patch.chart = std::make_shared<const Chart>("solid-cap-fixture", 0, 8, 8,
         std::vector<std::uint32_t>(64), capLook);
-    auto patchOnly = KnitRaster::RenderFrame(frame, patch, cache);
+    auto patchOnly = BandFrame(frame, patch, cache);
     Require(Pixel(actual, 30, 8) == Pixel(patchOnly, 30, 8)
         && Pixel(actual, 100, 8) != Pixel(patchOnly, 100, 8),
         "WhatsApp curved tangent caps use solid raised base yarn while straight edge retains stripes");
@@ -890,7 +997,7 @@ void CatalogueFixtures(const std::filesystem::path& root) {
         "A short WhatsApp edge with no tangent interval is wholly solid, without partial motif");
     for (auto id : {"notes", "calendar"}) {
         auto spec = ThemeSpec(id);
-        auto image = KnitRaster::RenderFrame(frame, spec, cache);
+        auto image = BandFrame(frame, spec, cache);
         auto isCuff = [&](auto p) {
             float r = static_cast<float>((p >> 16) & 255);
             float green = static_cast<float>((p >> 8) & 255);
@@ -921,7 +1028,7 @@ void CatalogueFixtures(const std::filesystem::path& root) {
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
     physical.physicalPaddingPixels = 16;
     auto authority = KnitRaster::RenderPerimeter(physical, ThemeSpec("notes"), cache);
-    Require(authority.width == 1032 && authority.height == 273 && authority.contentInsetPixels == 16,
+    Require(authority.width == 1048 && authority.height == 289 && authority.contentInsetPixels == 24,
         "Chart/cuff rendering preserves authoritative physical content and one-pixel padding override");
     for (auto stitch : {Stitch::Rib, Stitch::Garter}) {
         TileSpec spec; spec.stitch = stitch;
@@ -945,7 +1052,7 @@ void SpecialFinishContracts() {
             for (auto size : {std::array<float,2>{180,110}, {187,137}, {299,173}}) {
                 KnitFrameSpec f; f.widthDip = size[0]; f.heightDip = size[1];
                 f.deviceScale = scale; f.anchor = anchor;
-                auto image = KnitRaster::RenderFrame(f, patch, cache);
+                auto image = BandFrame(f, patch, cache);
                 bool exact = true; std::uint32_t minimum = 255, maximum = 0;
                 for (int side = 0; side < 4; ++side) {
                     int length = static_cast<int>((side%2 ? size[1] : size[0])+20);
@@ -968,14 +1075,14 @@ void SpecialFinishContracts() {
     for (float scale : {1.f, 2.f})
         for (float radius : {0.f,10.f,28.f}) {
             KnitFrameSpec f; f.widthDip = 180; f.heightDip = 110; f.radiusDip = radius; f.deviceScale = scale;
-            auto image = KnitRaster::RenderFrame(f, cuff, cache);
+            auto image = BandFrame(f, cuff, cache);
             bool continuous = true, noIslands = true;
             float width = 10.f/3, tolerance = .75f/scale;
             for (std::uint32_t y = 0; y < image.height; ++y)
                 for (std::uint32_t x = 0; x < image.width; ++x) {
                     float dx=(x+.5f)/scale,dy=(y+.5f)/scale;
-                    bool outer = InsideRounded(dx,dy,tolerance,tolerance,200-2*tolerance,130-2*tolerance,
-                        radius+10-tolerance);
+                    float rim = tolerance + ws_knit_fray_depth(10.f);
+                    bool outer = InsideRounded(dx,dy,rim,rim,200-2*rim,130-2*rim,radius+10-rim);
                     bool insetExpanded = InsideRounded(dx,dy,width-tolerance,width-tolerance,
                         200-2*width+2*tolerance,130-2*width+2*tolerance,radius+10-width+tolerance);
                     bool insetContracted = InsideRounded(dx,dy,width+tolerance,width+tolerance,
@@ -989,10 +1096,13 @@ void SpecialFinishContracts() {
     for (float band : {2.f, 10.f, 14.f, 26.f})
         for (float scale : {1.f, 2.f}) {
             KnitFrameSpec f; f.bandDip=band; f.deviceScale=scale; f.widthDip=180; f.heightDip=110;
-            auto image=KnitRaster::RenderFrame(f, ThemeSpec("messages"), cache);
+            auto perimeter=KnitRaster::RenderPerimeter(f, ThemeSpec("messages"), cache);
+            auto image=BandImage(perimeter);
+            auto bandPixels=static_cast<std::uint32_t>(band*scale);
             Require(image.width==static_cast<std::uint32_t>((180+2*band)*scale)
-                && image.height==static_cast<std::uint32_t>((110+2*band)*scale),
-                "Narrow/wide fabric maintains exact physical band and content dimensions");
+                && image.height==static_cast<std::uint32_t>((110+2*band)*scale)
+                && perimeter.shadowMarginPixels==(bandPixels+1)/2,
+                "Narrow/wide fabric maintains exact physical band, content and half-band shadow margin");
         }
 }
 
@@ -1006,23 +1116,50 @@ RasterImage Crop(const RasterImage& image, std::uint32_t x, std::uint32_t y,
     return crop;
 }
 
-std::array<double, 3> TextureMetrics(const RasterImage& source, const RasterImage& candidate) {
+// Source plates bake their light in tile space with weak relief; production
+// lights stitches in screen space, so luminance patterns differ by design. This
+// compares what stays authored: chromaticity (yarn colours and motif edges, both
+// independent of the uniform channel scaling lighting applies), plus mean
+// brightness and luminance spread so production is neither darker nor harsher
+// than the plates. Returns {chroma MAE (0-255), chroma edge-energy ratio,
+// mean luminance ratio, luminance stddev ratio}. Opaque candidate pixels only.
+std::array<double, 4> TextureMetrics(const RasterImage& source, const RasterImage& candidate) {
     auto gray = [](std::uint32_t p) {
         return .2126*((p >> 16) & 255) + .7152*((p >> 8) & 255) + .0722*(p & 255);
     };
-    double absolute = 0, square = 0, sourceEnergy = 0, candidateEnergy = 0;
-    for (std::uint32_t y = 0; y < source.height; ++y)
-        for (std::uint32_t x = 0; x < source.width; ++x) {
-            double a = gray(Pixel(source, x, y)), b = gray(Pixel(candidate, x, y));
-            absolute += std::abs(a-b); square += (a-b)*(a-b);
-            if (x && y) {
-                sourceEnergy += std::abs(a-gray(Pixel(source, x-1, y))) + std::abs(a-gray(Pixel(source, x, y-1)));
-                candidateEnergy += std::abs(b-gray(Pixel(candidate, x-1, y)))
-                    + std::abs(b-gray(Pixel(candidate, x, y-1)));
+    auto chroma = [](std::uint32_t p, int channel) {
+        double sum = ((p >> 16) & 255) + ((p >> 8) & 255) + (p & 255) + 1.;
+        return 255. * ((p >> (channel * 8)) & 255) / sum;
+    };
+    double absolute = 0, sourceEnergy = 0, candidateEnergy = 0, n = 0;
+    double sa = 0, sb = 0, saa = 0, sbb = 0;
+    for (std::uint32_t y = 1; y < source.height; ++y)
+        for (std::uint32_t x = 1; x < source.width; ++x) {
+            auto a = Pixel(source, x, y), b = Pixel(candidate, x, y);
+            if (Alpha(b) != 255 || Alpha(Pixel(candidate, x-1, y)) != 255 || Alpha(Pixel(candidate, x, y-1)) != 255) continue;
+            ++n;
+            double la = gray(a), lb = gray(b);
+            sa += la; sb += lb; saa += la*la; sbb += lb*lb;
+            for (int c = 0; c < 3; ++c) {
+                absolute += std::abs(chroma(a, c) - chroma(b, c));
+                sourceEnergy += std::abs(chroma(a, c) - chroma(Pixel(source, x-1, y), c))
+                    + std::abs(chroma(a, c) - chroma(Pixel(source, x, y-1), c));
+                candidateEnergy += std::abs(chroma(b, c) - chroma(Pixel(candidate, x-1, y), c))
+                    + std::abs(chroma(b, c) - chroma(Pixel(candidate, x, y-1), c));
             }
         }
-    auto count = static_cast<double>(source.pixels.size());
-    return {absolute/count, std::sqrt(square/count), candidateEnergy/sourceEnergy};
+    Require(n > 0, "Texture metric has opaque candidate pixels");
+    double sourceSpread = std::sqrt(saa/n - sa*sa/n/n), candidateSpread = std::sqrt(sbb/n - sb*sb/n/n);
+    return {absolute/(3*n), candidateEnergy/sourceEnergy, sb/sa, candidateSpread/sourceSpread};
+}
+
+// Upstream plates predate ring lighting. Lighting them with the default
+// 620x140 frame's ring keeps parity about stitches and colour, not light.
+RasterImage RingLit(RasterImage image, float originX, float originY, float scale) {
+    const ws_knit_ring ring{640.f, 160.f, 20.f, 11.f, 9.f};
+    Require(ws_knit_shade_ring(&ring, originX, originY, scale, image.pixels.data(),
+        static_cast<int>(image.width), static_cast<int>(image.height)) == 1, "Ring light applies to reference plate");
+    return image;
 }
 
 void SourceCatalogueParity(const std::filesystem::path& root) {
@@ -1041,22 +1178,27 @@ void SourceCatalogueParity(const std::filesystem::path& root) {
         auto spec = ThemeSpec(example.id);
         auto plate = LoadPng(root / L"references" / example.plate);
         KnitFrameSpec frame; frame.deviceScale = 8;
-        auto enlarged = KnitRaster::RenderFrame(frame, spec, cache);
+        auto enlarged = BandFrame(frame, spec, cache);
         auto detail = Crop(enlarged, 496, 0, 1280, 80);
-        auto baseline = Crop(plate, 76, 602, 1280, 80);
+        auto baseline = RingLit(Crop(plate, 76, 602, 1280, 80), 62.f, 0.f, 8.f);
         SavePng(detail, (output / (std::string(example.id) + "-production-detail.png")).c_str());
         SavePng(baseline, (output / (std::string(example.id) + "-source-detail.png")).c_str());
         auto metric = TextureMetrics(baseline, detail);
-        std::cout << "source " << example.id << " detail: MAE=" << metric[0] << ", RMSE="
-            << metric[1] << ", edgeEnergyRatio=" << metric[2] << "\n";
+        std::cout << "source " << example.id << " detail: chromaMAE=" << metric[0]
+            << ", chromaEdgeRatio=" << metric[1] << ", meanLumaRatio=" << metric[2]
+            << ", lumaSpreadRatio=" << metric[3] << "\n";
         // Detail and geometry are independent. The source's CoreText labels and
         // opaque application body never contribute to these texture metrics.
-        Require(metric[0] < 6. && metric[1] < 8.,
-            "Actual source plate versus production detail within measured AA/interpolation tolerance");
-        Require(metric[2] > .80 && metric[2] < 1.20,
-            "Source-matched material retains yarn edge energy, not flattened placeholder fabric");
+        Require(metric[0] < 4.,
+            "Actual source plate versus production detail keeps authored yarn colours within AA tolerance");
+        Require(metric[1] > .60 && metric[1] < 1.8,
+            "Source-matched material retains motif and stitch colour edges, not flattened placeholder fabric");
+        Require(metric[2] > .90 && metric[2] < 1.15,
+            "Screen-space stitch light keeps yarn as bright as the authored plate");
+        Require(metric[3] > .85 && metric[3] < 1.8,
+            "Stitch relief is at least as strong as the authored plate without harsh contrast");
         frame.deviceScale = 4;
-        auto corners = KnitRaster::RenderFrame(frame, spec, cache);
+        auto corners = BandFrame(frame, spec, cache);
         const std::array<std::uint32_t, 4> cx = {0, 2400, 2400, 0}, cy = {0, 0, 480, 480};
         for (std::size_t corner = 0; corner < 4; ++corner) {
             auto native = Crop(corners, cx[corner], cy[corner], 160, 160);
@@ -1070,6 +1212,9 @@ void SourceCatalogueParity(const std::filesystem::path& root) {
                 for (std::uint32_t x = 0; x < 160; ++x) {
                     float dx = (cx[corner]+x+.5f)/4, dy = (cy[corner]+y+.5f)/4;
                     if (InsideRounded(dx, dy, 9.75f, 9.75f, 620.5f, 140.5f, 10.25f)) continue;
+                    const float fray = ws_knit_fray_depth(10.f);
+                    if (InsideRounded(dx, dy, 0.f, 0.f, 640.f, 160.f, 20.f)
+                        && !InsideRounded(dx, dy, fray, fray, 640.f - 2*fray, 160.f - 2*fray, 20.f - fray)) continue;
                     auto a = Pixel(source, x, y), b = Pixel(native, x, y);
                     int backgroundDistance = std::abs(static_cast<int>((a>>16)&255)-249)
                         + std::abs(static_cast<int>((a>>8)&255)-247) + std::abs(static_cast<int>(a&255)-243);
@@ -1080,20 +1225,80 @@ void SourceCatalogueParity(const std::filesystem::path& root) {
                     bool outerInterior = InsideRounded(dx,dy,.25f,.25f,639.5f,159.5f,19.75f);
                     bool contentExpanded = InsideRounded(dx,dy,9.5f,9.5f,621.f,141.f,10.5f);
                     if (sourceYarn && Alpha(b) == 255 && outerInterior && !contentExpanded) {
+                        // Chromaticity: lighting scales channels uniformly, so it cancels.
+                        double sumA = ((a>>16)&255) + ((a>>8)&255) + (a&255) + 1., sumB = ((b>>16)&255) + ((b>>8)&255) + (b&255) + 1.;
                         for (int shift = 0; shift < 24; shift += 8)
-                            colorError += std::abs(static_cast<int>((a>>shift)&255)-static_cast<int>((b>>shift)&255));
+                            colorError += std::abs(255.*((a>>shift)&255)/sumA - 255.*((b>>shift)&255)/sumB);
                         colorCount += 3;
                     }
                 }
             double disagreement = static_cast<double>(disagreements)/static_cast<double>(count);
             double mae = colorError/static_cast<double>(colorCount);
             std::cout << "source " << example.id << " corner " << corner << ": geometry="
-                << disagreement*100 << "%, opaque RGB MAE=" << mae << "\n";
+                << disagreement*100 << "%, opaque chroma MAE=" << mae << "\n";
             Require(disagreement < .01, "All four enlarged source corners preserve exterior geometry");
             Require(mae < 4., "Special cap/cuff/fitted source corner yarn keeps authored colors and material");
         }
 
     }
+}
+
+// Stitch light is one screen-space light. Rebuild each side's screen-space stitch
+// height from the tile through that side's orientation, then require luminance to
+// fall where the height rises toward the light (negative correlation) on all four
+// sides. Tile-space baked light would flip the sign on the bottom and left sides.
+void StitchLightConsistency() {
+    TileCache cache;
+    TileSpec tile; tile.material = Material::Raised; tile.baseArgb = 0xff7aa86au;
+    KnitFrameSpec f; f.widthDip = 220; f.heightDip = 140; f.deviceScale = 4;
+    auto perimeter = KnitRaster::RenderPerimeter(f, tile, cache);
+    const auto& t = *perimeter.tile;
+    float dev = f.deviceScale, band = f.bandDip, ow = f.widthDip + 2*band, oh = f.heightDip + 2*band;
+    float gutter = static_cast<float>(perimeter.contentInsetPixels) / dev - band;
+    float py = band*.5f - t.layout.height_dip*.5f, rs = static_cast<float>(t.layout.raster_scale);
+    const float lx = -.26f, ly = -.42f, ln = std::hypot(lx, ly);
+    auto tileFrame = [&](int side, float fx, float fy) {
+        switch (side) {
+            case 0: return std::array<float, 2>{fx, fy};
+            case 1: return std::array<float, 2>{fy, ow - fx};
+            case 2: return std::array<float, 2>{ow - fx, oh - fy};
+            default: return std::array<float, 2>{oh - fy, fx};
+        }
+    };
+    auto height = [&](int side, float fx, float fy) {
+        auto q = tileFrame(side, fx, fy);
+        auto wrap = [](float v, std::uint32_t n) {
+            auto i = static_cast<long long>(std::floor(v)) % static_cast<long long>(n);
+            return static_cast<std::uint32_t>(i < 0 ? i + n : i);
+        };
+        return (Pixel(t.height, wrap(q[0]*rs, t.height.width), wrap((q[1]-py)*rs, t.height.height)) & 255) / 255.;
+    };
+    std::array<double, 4> correlation{};
+    for (int side = 0; side < 4; ++side) {
+        const auto& piece = perimeter.pieces[side];
+        double n = 0, sl = 0, sg = 0, sll = 0, sgg = 0, slg = 0;
+        for (std::uint32_t y = 0; y < piece.image.height; ++y)
+            for (std::uint32_t x = 0; x < piece.image.width; ++x) {
+                auto p = Pixel(piece.image, x, y);
+                float fx = (x + .5f + piece.x) / dev - gutter, fy = (y + .5f + piece.y) / dev - gutter;
+                auto q = tileFrame(side, fx, fy);
+                float length = side % 2 ? oh : ow;
+                if (Alpha(p) != 255 || q[1] < band*.3f || q[1] > band*.7f
+                    || q[0] < 40.f || q[0] > length - 40.f) continue;
+                float e = .75f / dev;
+                double g = height(side, fx + lx/ln*e, fy + ly/ln*e) - height(side, fx - lx/ln*e, fy - ly/ln*e);
+                double l = .2126*((p >> 16) & 255) + .7152*((p >> 8) & 255) + .0722*(p & 255);
+                ++n; sl += l; sg += g; sll += l*l; sgg += g*g; slg += l*g;
+            }
+        Require(n > 500, "Stitch light sample covers each side");
+        correlation[side] = (slg - sl*sg/n) / std::sqrt((sll - sl*sl/n) * (sgg - sg*sg/n));
+    }
+    std::cout << "stitch light/slope correlation top/right/bottom/left: " << correlation[0] << "/"
+        << correlation[1] << "/" << correlation[2] << "/" << correlation[3] << "\n";
+    for (auto c : correlation)
+        Require(c < -.15, "Stitch legs facing the upper-left light are brighter on every side");
+    Require(std::abs(correlation[0] - correlation[2]) < .2 && std::abs(correlation[1] - correlation[3]) < .2,
+        "Opposite sides agree on stitch light strength");
 }
 
 void RendererMetrics() {
@@ -1130,12 +1335,19 @@ int wmain(int argc, wchar_t** argv) {
     int exitCode = 0;
     try {
         std::filesystem::path root = argc > 1 ? argv[1] : L"tests\\Knitting";
+        if (argc > 2 && std::wstring(argv[2]) == L"--stitch-light") {
+            StitchLightConsistency();
+            std::cout << "PASS " << checks << " stitch light checks\n";
+            CoUninitialize();
+            return 0;
+        }
         PortableMath();
         CacheAndInvalidInputs();
         RenderBehavior(root);
         ChartContracts();
         CatalogueFixtures(root);
         SpecialFinishContracts();
+        StitchLightConsistency();
         SourceCatalogueParity(root);
         RendererMetrics();
         std::cout << "PASS " << checks << " native knitting checks\n";

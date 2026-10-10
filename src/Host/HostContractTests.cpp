@@ -177,8 +177,9 @@ void RenderPublicationTokens() {
     const auto translated = geometry::BuildRenderInput(moved, {16, 8});
     const auto& b = std::get<geometry::RenderInput>(translated);
     Check(MatchesRenderInput(request, token, 7, 1, b), "Move and monitor clipping reuse prepared pixels");
-    Check(b.physicalOuterBounds.left == -40 && b.physicalOuterBounds.top == -50 &&
-        b.physicalOuterBounds.Width() == 441 && b.physicalOuterBounds.Height() == 341,
+    // 20px band padding plus a 10px drop-shadow margin per side.
+    Check(b.physicalOuterBounds.left == -50 && b.physicalOuterBounds.top == -60 &&
+        b.physicalOuterBounds.Width() == 461 && b.physicalOuterBounds.Height() == 361,
         "GPU placement uses current B, not queued A, with authoritative physical padding");
     Check(request.frame.contentWidthPixels == 401 && request.frame.contentHeightPixels == 301 &&
         request.frame.physicalPaddingPixels == 20 && request.frame.deviceScale == 1.25f,
@@ -255,13 +256,14 @@ void NativePerimeterPublication() {
     }
     Check(ready.size() == 1, "Worker delivers exactly one real prepared perimeter");
     const auto pixels = std::get<std::shared_ptr<const rendering::KnitPerimeter>>(ready[0].outcome);
-    Check(pixels->width == 441 && pixels->height == 341 && pixels->contentInsetPixels == 20,
+    Check(pixels->width == 461 && pixels->height == 361 && pixels->contentInsetPixels == 30 &&
+        pixels->shadowMarginPixels == 10,
         "Actual raster dimensions agree with authoritative native geometry");
     auto moved = RenderFacts(); moved.physicalTargetBounds = {-20, -30, 381, 271};
     const auto translated = geometry::BuildRenderInput(moved, {16, 8});
     const auto& current = std::get<geometry::RenderInput>(translated);
     Check(MatchesRenderInput(*ready[0].request, token, 7, 1, current), "Actual moved result passes publication gate");
-    const RECT bounds{-40, -50, 401, 291};
+    const RECT bounds{-50, -60, 411, 301};
     const auto& clip = current.clipRelativeToOuter;
     const auto& content = current.targetRelativeToOuter;
     Check(SUCCEEDED(overlay.Upload(pixels, bounds, {clip.left, clip.top, clip.right, clip.bottom},
@@ -272,13 +274,13 @@ void NativePerimeterPublication() {
         "Prepared upload remains hidden at today's physical position");
     Check(SUCCEEDED(graphics.Composition()->WaitForCommitCompletion()), "Actual DComp upload commits");
     const auto before = queue->Status();
-    const RECT next{50, 60, 491, 401};
-    Check(SUCCEEDED(overlay.UpdatePlacement(next, {0, 0, 441, 341})), "Move already-prepared GPU perimeter without render submission");
+    const RECT next{50, 60, 511, 421};
+    Check(SUCCEEDED(overlay.UpdatePlacement(next, {0, 0, 461, 361})), "Move already-prepared GPU perimeter without render submission");
     const auto after = queue->Status();
     Check(EqualRect(&overlay.Bounds(), &next) && before.tileGenerations == after.tileGenerations &&
         before.renderRequests == after.renderRequests && before.renderPreparations == after.renderPreparations,
         "Native move preserves worker request, preparation and tile-generation counts");
-    Check(overlay.UpdatePlacement({0, 0, 442, 341}, {0, 0, 441, 341}) == E_INVALIDARG,
+    Check(overlay.UpdatePlacement({0, 0, 462, 361}, {0, 0, 461, 361}) == E_INVALIDARG,
         "Native placement rejects mismatched physical dimensions");
     for (const auto scale : {1.f, 1.25f, 1.5f, 2.f}) {
         for (const auto radiusDip : {0.f, 4.f, 8.f}) {

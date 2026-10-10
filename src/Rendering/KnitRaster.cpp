@@ -2,6 +2,7 @@
 // Frame geometry adapted from upstream src/knit.c:505-731 at
 // a49dff52483dafdbe27f972bd271cd28d37cef1c. No CoreGraphics compatibility layer.
 #include "KnitRaster.h"
+#include "..\Geometry\Geometry.h"
 #include "..\Knitting\WicSurface.h"
 #include <algorithm>
 #include <cmath>
@@ -88,9 +89,9 @@ ComPtr<ID2D1Geometry> CuffRing(ID2D1Factory* factory, const KnitFrameSpec& f) {
 }
 
 ComPtr<ID2D1BitmapBrush> TileBrush(ID2D1RenderTarget* target, const knitting::Tile& tile,
-                                  float px, float py, float repeatWidth) {
+                                  float px, float py, float repeatWidth, bool stitchHeight = false) {
     ComPtr<ID2D1Bitmap> bitmap;
-    const auto& image = tile.image;
+    const auto& image = stitchHeight ? tile.height : tile.image;
     auto properties = D2D1::BitmapProperties(
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
         96.f * tile.layout.raster_scale, 96.f * tile.layout.raster_scale);
@@ -197,6 +198,59 @@ KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, i
     surface.target->PopLayer();
     Check(surface.target->EndDraw(), "Render knit perimeter side");
     piece.image = surface.Read();
+    // Stitch height takes the same clips, orientation and brush transforms as the
+    // colour, so its pixel grid is screen space and the lighting needs no rotation.
+    WicSurface relief(pw, ph, f.deviceScale, surface.factory.Get());
+    {
+        auto& rt = *relief.target.Get();
+        auto heightBrush = TileBrush(&rt, tile, px, py, repeatWidth, true);
+        ComPtr<ID2D1BitmapBrush> heightPatch, heightCuff;
+        if (patch) heightPatch = TileBrush(&rt, *patch, 0, py, static_cast<float>(patch->layout.width_dip), true);
+        if (cuff) heightCuff = TileBrush(&rt, *cuff, 0, 0, static_cast<float>(cuff->layout.width_dip), true);
+        ComPtr<ID2D1SolidColorBrush> floor;
+        Check(rt.CreateSolidColorBrush(D2D1::ColorF(.3f, .3f, .3f, 1.f), &floor), "Create stitch height backing");
+        rt.BeginDraw();
+        rt.Clear(D2D1::ColorF(0.f, 0.f, 0.f, 0.f));
+        rt.SetTransform(placement);
+        rt.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), ring.Get()), nullptr);
+        rt.SetTransform(orientations[side] * placement);
+        rt.PushLayer(mask, nullptr);
+        rt.FillRectangle(rectangle, floor.Get());
+        if (patch) {
+            rt.FillRectangle(D2D1::RectF(0, 0, cap, depth), heightPatch.Get());
+            rt.FillRectangle(D2D1::RectF(length-cap, 0, length, depth), heightPatch.Get());
+            if (available > 0.f) rt.FillRectangle(D2D1::RectF(cap, 0, length-cap, depth), heightBrush.Get());
+        } else rt.FillRectangle(rectangle, heightBrush.Get());
+        if (cuff) {
+            rt.SetTransform(placement);
+            rt.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), cuffRing.Get()), nullptr);
+            rt.SetTransform(orientations[side] * placement);
+            rt.FillRectangle(rectangle, heightCuff.Get());
+            rt.PopLayer();
+        }
+        rt.PopLayer();
+        rt.PopLayer();
+        Check(rt.EndDraw(), "Render knit stitch height");
+    }
+    auto stitchHeights = relief.Read();
+    auto material = tile.spec.material == knitting::Material::Raised
+        ? ws_knit_raised_material(tile.spec.gauge) : tile.spec.gauge;
+    bool hole = f.widthDip > 2.f * f.tuckDip && f.heightDip > 2.f * f.tuckDip;
+    const ws_knit_ring tube{ow, oh, f.radiusDip + f.bandDip, hole ? f.bandDip + f.tuckDip : 0.f,
+        std::max(0.f, f.radiusDip - f.tuckDip)};
+    const float ox = static_cast<float>(piece.x) / f.deviceScale - gutterDip;
+    const float oy = static_cast<float>(piece.y) / f.deviceScale - gutterDip;
+    const int iw = static_cast<int>(pw), ih = static_cast<int>(ph);
+    if (!ws_knit_shade_ring_relief(&tube, ox, oy, f.deviceScale, piece.image.pixels.data(), iw, ih,
+            stitchHeights.pixels.data(), material.relief))
+        throw std::invalid_argument("Invalid knit ring shading");
+    if (!ws_knit_fray_ring(&tube, side, ws_knit_fray_depth(f.bandDip),
+            repeatWidth / static_cast<float>(tile.layout.columns), px, ox, oy, f.deviceScale,
+            piece.image.pixels.data(), iw, ih))
+        throw std::invalid_argument("Invalid knit ring fray");
+    if (!ws_knit_ring_drop_shadow(&tube, side, f.bandDip, ox, oy, f.deviceScale,
+            piece.image.pixels.data(), iw, ih))
+        throw std::invalid_argument("Invalid knit drop shadow");
     return piece;
 }
 }
@@ -209,17 +263,19 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     auto inset = f.physicalPaddingPixels ? f.physicalPaddingPixels : naturalInset;
     if (inset + 1u < naturalInset || inset > naturalInset + 1u)
         throw std::invalid_argument("Authoritative physical padding differs by more than one pixel");
+    // Desktop margin for the drop shadow, matching the native geometry envelope.
+    const auto margin = geometry::ShadowMarginPixels(inset);
     double contentWidth = f.contentWidthPixels ? f.contentWidthPixels
         : std::ceil(static_cast<double>(f.widthDip) * f.deviceScale);
     double contentHeight = f.contentHeightPixels ? f.contentHeightPixels
         : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
-    double width = contentWidth + 2. * inset, height = contentHeight + 2. * inset;
+    double width = contentWidth + 2. * (inset + margin), height = contentHeight + 2. * (inset + margin);
     if (width > 32768 || height > 32768) throw std::invalid_argument("Frame dimensions exceed limits");
     float irad = std::max(0.f, f.radiusDip - f.tuckDip);
     float depth = f.bandDip + f.tuckDip + irad * (1.f - 0.7071067811865475244f) + 1.f;
     depth = std::min(depth, std::min(ow, oh) * 0.5f);
     // Bound the complete allocation before generating a tile or any surface.
-    double narrow = std::ceil(depth * f.deviceScale) + 2.;
+    double narrow = std::ceil(depth * f.deviceScale) + 2. + margin;
     if (2. * narrow * (width + height) > 16. * 1024. * 1024.)
         throw std::invalid_argument("Perimeter byte limit exceeded");
     tileSpec.bandDip = f.bandDip;
@@ -227,7 +283,8 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     KnitPerimeter perimeter;
     perimeter.width = static_cast<std::uint32_t>(width);
     perimeter.height = static_cast<std::uint32_t>(height);
-    perimeter.contentInsetPixels = inset;
+    perimeter.contentInsetPixels = inset + margin;
+    perimeter.shadowMarginPixels = margin;
     perimeter.bandDip = f.bandDip;
     perimeter.deviceScale = f.deviceScale;
     perimeter.tile = cache.Get(tileSpec);
@@ -246,7 +303,7 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
             cuff = cache.Get(solid);
         }
     }
-    float gutterDip = static_cast<float>(inset) / f.deviceScale - f.bandDip;
+    float gutterDip = static_cast<float>(inset + margin) / f.deviceScale - f.bandDip;
     for (int side = 0; side < 4; ++side)
         perimeter.pieces[side] = RenderSide(f, *perimeter.tile, side, perimeter.width,
             perimeter.height, depth, gutterDip, patch.get(), cuff.get());

@@ -61,12 +61,14 @@ void DpiTransforms() {
         PhysicalRect outer;
     };
     constexpr std::array cases{
-        Case{96, 1.0, 10, {90, 90, 750, 510}},
-        Case{120, 1.25, 13, {87, 87, 753, 513}},
-        Case{144, 1.5, 15, {85, 85, 755, 515}},
-        Case{192, 2.0, 20, {80, 80, 760, 520}}
+        Case{96, 1.0, 10, {85, 85, 755, 515}},
+        Case{120, 1.25, 13, {80, 80, 760, 520}},
+        Case{144, 1.5, 15, {77, 77, 763, 523}},
+        Case{192, 2.0, 20, {70, 70, 770, 530}}
     };
     for (const auto& item : cases) {
+        // Band padding plus the half-band drop-shadow margin.
+        const auto inset = item.padding + ShadowMarginPixels(item.padding);
         auto facts = Ordinary();
         facts.dpi = item.dpi;
         const auto result = BuildRenderInput(facts);
@@ -84,11 +86,12 @@ void DpiTransforms() {
         Check(!render.squareCorners && render.cornerDecision == CornerDecision::DefaultRoundPolicy,
               "ordinary default windows preserve rounded exterior corners");
         Check(render.clipRelativeToOuter == PhysicalRect{0, 0,
-              static_cast<std::int32_t>(640 + item.padding * 2),
-              static_cast<std::int32_t>(400 + item.padding * 2)}, "unclipped outer uses local pixels");
-        Check(render.targetRelativeToOuter.left == static_cast<std::int32_t>(item.padding),
-              "content exclusion follows integer padding");
-        Near(render.frameOriginDip, item.dpi == 120 ? 0.4 : 0.0, "fractional gutter does not shift target");
+              static_cast<std::int32_t>(640 + inset * 2),
+              static_cast<std::int32_t>(400 + inset * 2)}, "unclipped outer uses local pixels");
+        Check(render.targetRelativeToOuter.left == static_cast<std::int32_t>(inset),
+              "content exclusion follows integer padding and shadow margin");
+        Near(render.frameOriginDip, (inset - 10 * item.scale) / item.scale,
+             "fractional gutter and shadow margin do not shift target");
     }
 }
 
@@ -105,10 +108,10 @@ void MixedMonitorTransfers() {
     const auto& a = Result<RenderInput>(leftResult, "negative-origin monitor produces geometry");
     const auto& b = Result<RenderInput>(rightResult, "transfer to high DPI produces geometry");
     const auto& c = Result<RenderInput>(backResult, "transfer back produces geometry");
-    Check(a.physicalOuterBounds == PhysicalRect{-1813, -313, -1147, 113},
+    Check(a.physicalOuterBounds == PhysicalRect{-1820, -320, -1140, 120},
           "negative origins are physical signed coordinates");
-    Check(b.physicalOuterBounds == PhysicalRect{80, 80, 760, 520}, "high-DPI transfer uses new scale");
-    Check(c.physicalOuterBounds == PhysicalRect{-1813, -313, -1147, 113},
+    Check(b.physicalOuterBounds == PhysicalRect{70, 70, 770, 530}, "high-DPI transfer uses new scale");
+    Check(c.physicalOuterBounds == PhysicalRect{-1820, -320, -1140, 120},
           "reverse transfer does not retain stale scale");
     Check(a.monitorIdentity == 17 && b.monitorIdentity == 29 && c.monitorIdentity == 17,
           "snapshot records monitor transfer both directions");
@@ -131,21 +134,23 @@ void FractionalWidth() {
     facts.dpi = 120;
     const auto result = BuildRenderInput(facts, {7.5, 6.25});
     const auto& render = Result<RenderInput>(result, "fractional DIP width is accepted");
-    Check(render.physicalOuterBounds == PhysicalRect{90, 90, 750, 510},
-          "9.375px exterior width uses ten-pixel envelope");
-    Check(render.targetRelativeToOuter == PhysicalRect{10, 10, 650, 410},
+    Check(render.physicalOuterBounds == PhysicalRect{85, 85, 755, 515},
+          "9.375px exterior width uses ten-pixel envelope plus five-pixel shadow margin");
+    Check(render.physicalPaddingPixels == 10, "padding excludes the shadow margin");
+    Check(render.targetRelativeToOuter == PhysicalRect{15, 15, 655, 415},
           "fractional band keeps exact physical content bounds");
     Near(render.widthDip * render.deviceScale, 9.375, "band is not rounded in style space");
-    Near(render.frameOriginDip, 0.5, "fractional leading gutter is half a DIP");
+    Near(render.frameOriginDip, 4.5, "leading gutter is half a DIP plus a four-DIP shadow margin");
     Near(render.frameOriginDip * render.deviceScale + render.widthDip * render.deviceScale,
-         10.0, "continuous ring reaches exact target edge");
+         15.0, "continuous ring reaches exact target edge");
     Near(render.radiusDip, 6.25, "fractional radius remains in DIP");
 
     facts.dpi = 192;
     const auto two = BuildRenderInput(facts, {2.25, 0});
     const auto& narrow = Result<RenderInput>(two, "narrow fractional width at 200 percent");
-    Check(narrow.physicalOuterBounds == PhysicalRect{95, 95, 745, 505}, "4.5px band has five-pixel envelope");
-    Near(narrow.frameOriginDip, 0.25, "200 percent gutter");
+    Check(narrow.physicalOuterBounds == PhysicalRect{92, 92, 748, 508},
+          "4.5px band has five-pixel envelope plus three-pixel shadow margin");
+    Near(narrow.frameOriginDip, 1.75, "200 percent gutter");
     Check(narrow.squareCorners && narrow.radiusDip == 0, "zero requested radius is an actual square decision");
 }
 
@@ -156,10 +161,10 @@ void EdgeClippingAndSnapFallback() {
         PhysicalRect clip;
     };
     constexpr std::array cases{
-        Case{{0, 100, 640, 500}, {-10, 90, 650, 510}, {10, 0, 660, 420}},
-        Case{{100, 0, 740, 400}, {90, -10, 750, 410}, {0, 10, 660, 420}},
-        Case{{1280, 100, 1920, 500}, {1270, 90, 1930, 510}, {0, 0, 650, 420}},
-        Case{{100, 640, 740, 1040}, {90, 630, 750, 1050}, {0, 0, 660, 410}}
+        Case{{0, 100, 640, 500}, {-15, 85, 655, 515}, {15, 0, 670, 430}},
+        Case{{100, 0, 740, 400}, {85, -15, 755, 415}, {0, 15, 670, 430}},
+        Case{{1280, 100, 1920, 500}, {1265, 85, 1935, 515}, {0, 0, 655, 430}},
+        Case{{100, 640, 740, 1040}, {85, 625, 755, 1055}, {0, 0, 670, 415}}
     };
     for (const auto& item : cases) {
         auto facts = Ordinary();
@@ -185,27 +190,27 @@ void EdgeClippingAndSnapFallback() {
     facts.physicalTargetBounds = {100, 640, 740, 1040};
     const auto displayResult = BuildRenderInput(facts, {}, {32768, 64ull * 1024 * 1024, ClipPolicy::Display});
     Check(Result<RenderInput>(displayResult, "explicit display clipping produces geometry").clipRelativeToOuter
-          == PhysicalRect{0, 0, 660, 420}, "display clipping differs from work-area default");
+          == PhysicalRect{0, 0, 670, 430}, "display clipping differs from work-area default");
     facts.physicalTargetBounds = {100, 1040, 740, 1080};
     const auto crossing = BuildRenderInput(facts);
     Check(Result<RenderInput>(crossing, "work-area crossing has only available top exterior").clipRelativeToOuter
-          == PhysicalRect{0, 0, 660, 10}, "taskbar pixels excluded");
+          == PhysicalRect{0, 0, 670, 15}, "taskbar pixels excluded");
 
     facts = {{-1920, -600, -1280, -200}, {-1920, -600, 0, 480},
              {-1920, -600, 0, 440}, 120, 17, false, CornerPreference::Round,
              CornerEligibility::StandardFrame};
     const auto negative = BuildRenderInput(facts);
     const auto& clipped = Result<RenderInput>(negative, "negative monitor edges clip");
-    Check(clipped.physicalOuterBounds == PhysicalRect{-1933, -613, -1267, -187},
+    Check(clipped.physicalOuterBounds == PhysicalRect{-1940, -620, -1260, -180},
           "negative outer geometry is not clamped to zero");
-    Check(clipped.clipRelativeToOuter == PhysicalRect{13, 13, 666, 426},
+    Check(clipped.clipRelativeToOuter == PhysicalRect{20, 20, 680, 440},
           "negative monitor corner uses outer-relative clip");
 
     facts = Ordinary();
     facts.physicalTargetBounds = {1800, 100, 2100, 500};
     const auto straddle = BuildRenderInput(facts);
     Check(Result<RenderInput>(straddle, "straddling window uses selected-monitor clip").clipRelativeToOuter
-          == PhysicalRect{0, 0, 130, 420}, "no imaginary second-monitor exterior");
+          == PhysicalRect{0, 0, 135, 430}, "no imaginary second-monitor exterior");
 }
 
 void CapabilityPolicyAndHiddenStates() {
@@ -254,6 +259,7 @@ void CapabilityPolicyAndHiddenStates() {
     Hidden(facts, HiddenReason::NoExteriorSpace);
     facts.physicalTargetBounds = {2500, 100, 3140, 500};
     Hidden(facts, HiddenReason::OutsideClip);
+    // The shadow margin reaches the display here, but the band does not.
     facts.physicalTargetBounds = {100, 1090, 740, 1490};
     Hidden(facts, HiddenReason::OutsideClip, {32768, 64ull * 1024 * 1024, ClipPolicy::Display});
 }
@@ -263,31 +269,31 @@ void TinyAndBoundedGeometry() {
     facts.physicalTargetBounds = {100, 100, 101, 101};
     const auto result = BuildRenderInput(facts, {2.25, 8});
     const auto& render = Result<RenderInput>(result, "one-pixel window has bounded exterior");
-    Check(render.physicalOuterBounds == PhysicalRect{97, 97, 104, 104}, "tiny target envelope");
-    Check(render.targetRelativeToOuter == PhysicalRect{3, 3, 4, 4}, "tiny target is excluded, never filled");
+    Check(render.physicalOuterBounds == PhysicalRect{95, 95, 106, 106}, "tiny target envelope");
+    Check(render.targetRelativeToOuter == PhysicalRect{5, 5, 6, 6}, "tiny target is excluded, never filled");
     Near(render.radiusDip, 0.5, "radius clamps to half physical target size converted to DIP");
-    Check(render.perimeterBytesUpperBound == 672, "tiny four-surface byte ceiling is bounded");
+    Check(render.perimeterBytesUpperBound == 1408, "tiny four-surface byte ceiling is bounded");
 
     facts = Ordinary();
     const auto defaultResult = BuildRenderInput(facts);
     const auto& normal = Result<RenderInput>(defaultResult, "ordinary geometry has byte ceiling");
-    Check(normal.perimeterBytesUpperBound == 181440, "budget counts four-byte BGRA surfaces, not just pixels");
-    Failure(facts, GeometryFailure::AllocationLimit, {}, {32768, 181439});
-    const auto exact = BuildRenderInput(facts, {}, {32768, 181440});
+    Check(normal.perimeterBytesUpperBound == 228800, "budget counts four-byte BGRA surfaces, not just pixels");
+    Failure(facts, GeometryFailure::AllocationLimit, {}, {32768, 228799});
+    const auto exact = BuildRenderInput(facts, {}, {32768, 228800});
     Check(std::holds_alternative<RenderInput>(exact), "exact perimeter-byte limit is accepted");
-    Failure(facts, GeometryFailure::DimensionLimit, {}, {659, 64ull * 1024 * 1024});
-    const auto dimension = BuildRenderInput(facts, {}, {660, 64ull * 1024 * 1024});
+    Failure(facts, GeometryFailure::DimensionLimit, {}, {669, 64ull * 1024 * 1024});
+    const auto dimension = BuildRenderInput(facts, {}, {670, 64ull * 1024 * 1024});
     Check(std::holds_alternative<RenderInput>(dimension), "exact outer maximum dimension accepted");
 
-    facts = {{100, 100, 32849, 200}, {0, 0, 40000, 1080},
+    facts = {{100, 100, 32839, 200}, {0, 0, 40000, 1080},
              {0, 0, 40000, 1040}, 96, 1, false, CornerPreference::Round,
              CornerEligibility::StandardFrame};
     Failure(facts, GeometryFailure::DimensionLimit);
-    facts.physicalTargetBounds.right = 32848;
+    facts.physicalTargetBounds.right = 32838;
     const auto large = BuildRenderInput(facts);
     Check(Result<RenderInput>(large, "32768px outer width remains perimeter-bounded").physicalOuterBounds.Width()
           == 32768, "maximum dimension checked after exterior expansion");
-    facts.physicalTargetBounds = {100, 100, 28000, 200};
+    facts.physicalTargetBounds = {100, 100, 20000, 200};
     facts.dpi = 768;
     Failure(facts, GeometryFailure::AllocationLimit, {256, 8});
 
@@ -308,8 +314,8 @@ void TinyAndBoundedGeometry() {
     facts.physicalTargetBounds.top = facts.physicalTargetBounds.bottom - 1;
     Failure(facts, GeometryFailure::CoordinateOverflow);
     facts = Ordinary();
-    facts.physicalTargetBounds = {std::numeric_limits<std::int32_t>::min() + 10, 100,
-                                 std::numeric_limits<std::int32_t>::max() - 10, 500};
+    facts.physicalTargetBounds = {std::numeric_limits<std::int32_t>::min() + 15, 100,
+                                 std::numeric_limits<std::int32_t>::max() - 15, 500};
     Failure(facts, GeometryFailure::DimensionLimit);
 }
 

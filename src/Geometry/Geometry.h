@@ -82,6 +82,13 @@ enum class GeometryFailure : std::uint8_t {
     DimensionLimit, AllocationLimit, InvalidCornerEligibility
 };
 
+// Transparent desktop margin outside the band that holds the knit's soft drop
+// shadow: half the integer band padding, rounded up. The renderer's natural
+// shadow reach (offset plus blur) stays within half a band.
+constexpr std::uint32_t ShadowMarginPixels(std::uint32_t paddingPixels) noexcept {
+    return paddingPixels / 2u + paddingPixels % 2u;
+}
+
 struct RenderInput {
     const PhysicalRect physicalTargetBounds;
     const PhysicalRect physicalOuterBounds;
@@ -93,8 +100,9 @@ struct RenderInput {
     // Target/content radius; rounded outer radius is radiusDip + widthDip.
     const double radiusDip;
     const double deviceScale;
-    // Fractional leading gutter: render the continuous ring at this DIP offset.
+    // Leading gutter plus shadow margin: render the continuous ring at this DIP offset.
     const double frameOriginDip;
+    // Band padding only. The outer bounds add ShadowMarginPixels(padding) per side.
     const std::uint32_t physicalPaddingPixels;
     const std::uint32_t dpi;
     const std::uintptr_t monitorIdentity;

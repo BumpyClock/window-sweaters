@@ -1,5 +1,7 @@
 #include "Preview.h"
+#include "..\Geometry\Geometry.h"
 #include "..\Integration\IconAppearance.h"
+#include <cmath>
 #include <windows.h>
 #include <objbase.h>
 #include <condition_variable>
@@ -65,8 +67,12 @@ struct Preview::Impl {
                     if (render) result->image=render(result->configuration);
                     else {
                         rendering::KnitFrameSpec frame;
-                        frame.widthDip=400.f; frame.heightDip=140.f;
                         frame.bandDip=result->configuration.border_width_dip;
+                        // The 1x drop-shadow margin comes out of the content, so the
+                        // preview stays 400x140 plus the band at every width.
+                        auto shadow=static_cast<float>(geometry::ShadowMarginPixels(
+                            static_cast<std::uint32_t>(std::ceil(frame.bandDip))));
+                        frame.widthDip=400.f-2.f*shadow; frame.heightDip=140.f-2.f*shadow;
                         auto tile=MakeAppearance(result->configuration);
                         // Fixed 1x output and bounded 2x production supersampling keep
                         // preview memory independent of monitor size and DPI changes.

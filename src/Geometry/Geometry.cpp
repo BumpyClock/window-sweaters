@@ -112,10 +112,12 @@ GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
         static_cast<double>(std::min(target.Width(), target.Height())) / (2.0 * scale));
     square = square || radius == 0.0;
     const auto padding = static_cast<std::int64_t>(std::ceil(style.widthDip * scale));
-    const std::int64_t left = static_cast<std::int64_t>(target.left) - padding;
-    const std::int64_t top = static_cast<std::int64_t>(target.top) - padding;
-    const std::int64_t right = static_cast<std::int64_t>(target.right) + padding;
-    const std::int64_t bottom = static_cast<std::int64_t>(target.bottom) + padding;
+    const auto margin = static_cast<std::int64_t>(ShadowMarginPixels(static_cast<std::uint32_t>(padding)));
+    const auto inset = padding + margin;
+    const std::int64_t left = static_cast<std::int64_t>(target.left) - inset;
+    const std::int64_t top = static_cast<std::int64_t>(target.top) - inset;
+    const std::int64_t right = static_cast<std::int64_t>(target.right) + inset;
+    const std::int64_t bottom = static_cast<std::int64_t>(target.bottom) + inset;
     constexpr auto minCoordinate = std::numeric_limits<std::int32_t>::min();
     constexpr auto maxCoordinate = std::numeric_limits<std::int32_t>::max();
     if (left < minCoordinate || top < minCoordinate || right > maxCoordinate || bottom > maxCoordinate)
@@ -126,19 +128,24 @@ GeometryResult BuildRenderInput(const WindowQuery& query, DipStyle style,
         return GeometryFailure::DimensionLimit;
     const PhysicalRect outer{static_cast<std::int32_t>(left), static_cast<std::int32_t>(top),
         static_cast<std::int32_t>(right), static_cast<std::int32_t>(bottom)};
-    const auto clip = Intersect(outer, limits.clipPolicy == ClipPolicy::WorkArea ? work : display);
-    if (!Valid(clip)) return HiddenReason::OutsideClip;
+    const auto& area = limits.clipPolicy == ClipPolicy::WorkArea ? work : display;
+    // A visible shadow margin alone is not a decoration: the band must reach the clip.
+    const PhysicalRect band{static_cast<std::int32_t>(left + margin), static_cast<std::int32_t>(top + margin),
+        static_cast<std::int32_t>(right - margin), static_cast<std::int32_t>(bottom - margin)};
+    const auto clip = Intersect(outer, area);
+    if (!Valid(Intersect(band, area))) return HiddenReason::OutsideClip;
     if (Contains(target, clip)) return HiddenReason::NoExteriorSpace;
 
     // Covers the renderer's corner/AA/tuck depth, including fractional far-edge rounding.
     // All factors are bounded above before multiplication, including the byte stride.
-    const auto depth = static_cast<std::uint64_t>(std::ceil((style.widthDip + radius + 2.0) * scale)) + 1;
+    const auto depth = static_cast<std::uint64_t>(std::ceil((style.widthDip + radius + 2.0) * scale)) + 1
+        + static_cast<std::uint64_t>(margin);
     const auto bytes = 4ull * (2ull * width * std::min(depth, height)
                              + 2ull * height * std::min(depth, width));
     if (bytes > limits.maxPerimeterBytes) return GeometryFailure::AllocationLimit;
     const auto physicalPadding = static_cast<std::uint32_t>(padding);
     return RenderInput{target, outer, RelativeTo(clip, outer), RelativeTo(target, outer),
-        style.widthDip, radius, scale, (static_cast<double>(padding) - style.widthDip * scale) / scale,
+        style.widthDip, radius, scale, (static_cast<double>(inset) - style.widthDip * scale) / scale,
         physicalPadding, facts.dpi, facts.monitorIdentity, square, cornerDecision, bytes};
 }
 

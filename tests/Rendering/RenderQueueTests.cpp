@@ -108,7 +108,7 @@ RenderRequest Request(tracking::WindowHandle handle = 100, std::uint64_t appeara
     r.token = {{handle, GetCurrentProcessId(), 123456, 1}, appearance};
     r.configRevision = r.deviceGeneration = 1;
     r.targetBounds = {20, 30, 116, 102};
-    r.clipRelativeToOuter = {0, 0, 104, 80};
+    r.clipRelativeToOuter = {0, 0, 108, 84};
     r.frame.widthDip = 96.f;
     r.frame.heightDip = 72.f;
     r.frame.contentWidthPixels = 96;
@@ -219,11 +219,13 @@ void RealCpuFixtureAndCacheReuse() {
     first.tile.baseArgb = 0xffee1122;
     receiver.Collect(1);
     const auto& p = Perimeter(receiver.results[0]);
-    Check(p.width == 104 && p.height == 80 && p.contentInsetPixels == 4, "Physical fixture dimensions");
-    Check(p.pieces[0].image.width == 104 && p.pieces[0].image.height == 6
-        && p.pieces[1].x == 98 && p.pieces[1].image.width == 6
-        && p.pieces[1].image.height == 80 && p.pieces[2].y == 74
-        && p.pieces[3].image.width == 6, "Four narrow fixture pieces");
+    // 4px band plus a 2px drop-shadow margin per side.
+    Check(p.width == 108 && p.height == 84 && p.contentInsetPixels == 6 && p.shadowMarginPixels == 2,
+        "Physical fixture dimensions");
+    Check(p.pieces[0].image.width == 108 && p.pieces[0].image.height == 8
+        && p.pieces[1].x == 100 && p.pieces[1].image.width == 8
+        && p.pieces[1].image.height == 84 && p.pieces[2].y == 76
+        && p.pieces[3].image.width == 8, "Four narrow fixture pieces");
     Check(receiver.results[0].request->frame.contentWidthPixels == 96
         && receiver.results[0].request->tile.baseArgb == 0xff4e8098u, "Request owns immutable value snapshot");
     knitting::TileCache fixtureCache;
@@ -231,8 +233,8 @@ void RealCpuFixtureAndCacheReuse() {
     for (std::size_t i = 0; i < 4; ++i)
         Check(p.pieces[i].image.pixels == direct.pieces[i].image.pixels, "Queue wraps real CPU renderer fixture");
     const auto composed = KnitRaster::Compose(p);
-    Check(composed.pixels[40u * 104u + 52u] == 0, "Fixture content remains transparent");
-    Check((composed.pixels[2u * 104u + 52u] >> 24) == 255, "Fixture has opaque actual yarn");
+    Check(composed.pixels[42u * 108u + 54u] == 0, "Fixture content remains transparent");
+    Check((composed.pixels[4u * 108u + 54u] >> 24) == 255, "Fixture has opaque actual yarn");
     const auto firstWorker = workerThread.load();
     auto second = Request(101);
     second.frame.contentWidthPixels = 160;
@@ -324,7 +326,7 @@ void ReadyBytesBackpressure() {
     auto gate = std::make_shared<Gate>();
     Receiver receiver;
     RenderQueueLimits limits;
-    limits.maxReadyBytes = 20000;
+    limits.maxReadyBytes = 28000; // One reservation fits; a second waits for drain.
     receiver.Start(limits, Pinned(gate));
     gate->Entered();
     Check(receiver.queue->Submit(Request(100)) == S_OK && receiver.queue->Submit(Request(101)) == S_OK,
@@ -346,7 +348,7 @@ void EveryAcceptedCurrentJobCompletesAndCapacityRecovers() {
     RenderQueueLimits limits;
     limits.maxPending = 8;
     limits.maxReady = 1;
-    limits.maxReadyBytes = 20000;
+    limits.maxReadyBytes = 28000;
     receiver.Start(limits, Pinned(gate));
     gate->Entered();
     for (tracking::WindowHandle hwnd = 100; hwnd < 108; ++hwnd) {

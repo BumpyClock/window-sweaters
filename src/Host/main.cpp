@@ -2172,7 +2172,7 @@ void Host::RunConsumerContracts() {
     pump(prepared);
     require(host.counters_.uploads == firstUploads + 1 &&
         host.entries_.at(10001)->render.prepared->frame.bandDip == 24.0f &&
-        host.entries_.at(10001)->overlay.Bounds().right - host.entries_.at(10001)->overlay.Bounds().left == 349,
+        host.entries_.at(10001)->overlay.Bounds().right - host.entries_.at(10001)->overlay.Bounds().left == 373,
         "Stationary width change republishes actual four-piece perimeter at new width");
     const auto beforePause = host.counters_.uploads;
     change(true, 24.0f);
@@ -2950,7 +2950,7 @@ void Host::RunConsumerContracts() {
         host.ApplyBatch(contract.model.Observe(window, Dirty::Geometry, GetTickCount64()));
     };
     require(host.MovePrepared(publicationTarget) == S_FALSE &&
-        host.entries_.at(10001)->overlay.Bounds().left == 136,
+        host.entries_.at(10001)->overlay.Bounds().left == 124,
         "Pumping desktop probe moves to fresh B placement, never pre-query A");
     require(host.PlaceAndShow(publicationTarget) == S_OK, "Establish current presentation before stale polling probe");
     const auto stalePollUploads = host.counters_.uploads;

@@ -18,7 +18,10 @@ Link `WindowSweaters.Geometry.vcxproj`, `user32.lib`, and `dwmapi.lib`.
 3. Place the overlay at `physicalOuterBounds`, using integer physical dimensions.
    Render with `widthDip`, `radiusDip`, and `deviceScale`; do not scale the DWM
    rectangle. `physicalPaddingPixels = ceil(widthDip * deviceScale)` encloses the
-   continuous fractional band. `frameOriginDip` is its leading transparent gutter.
+   continuous fractional band. The outer bounds add `ShadowMarginPixels(padding)`
+   (`ceil(padding / 2)`) per side for the renderer's drop shadow.
+   `frameOriginDip` is the leading transparent gutter plus that margin. If only the
+   margin reaches the clip, the window is `OutsideClip`.
    Pass physical content dimensions to the perimeter renderer rather than
    round-tripping them through float DIP dimensions.
    Pass `physicalPaddingPixels` as the renderer's authoritative padding override

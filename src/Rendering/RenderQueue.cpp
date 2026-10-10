@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "RenderQueue.h"
+#include "..\Geometry\Geometry.h"
 #include "..\Knitting\WicSurface.h"
 #include <objbase.h>
 #include <algorithm>
@@ -99,7 +100,8 @@ TileBudget BoundTile(knitting::TileSpec spec) {
         }
     }
     const auto pixels = static_cast<std::size_t>(width * height * 4u);
-    return {sizeof(knitting::Tile) + pixels + (spec.chart ? spec.chart->ByteSize() : 0),
+    // Albedo plus an equal-size stitch height image.
+    return {sizeof(knitting::Tile) + 2 * pixels + (spec.chart ? spec.chart->ByteSize() : 0),
             pixels, static_cast<std::size_t>(cells)};
 }
 
@@ -137,7 +139,8 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             : std::ceil(static_cast<double>(f.widthDip) * f.deviceScale);
         const double ch = f.contentHeightPixels ? f.contentHeightPixels
             : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
-        const double w = cw + 2. * inset, h = ch + 2. * inset;
+        const auto margin = geometry::ShadowMarginPixels(inset);
+        const double w = cw + 2. * (inset + margin), h = ch + 2. * (inset + margin);
         if (!std::isfinite(w) || !std::isfinite(h) || w > 32768. || h > 32768.)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
         const float ow = f.widthDip + 2.f * f.bandDip;
@@ -145,7 +148,7 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
         float depth = f.bandDip + f.tuckDip
             + std::max(0.f, f.radiusDip - f.tuckDip) * (1.f - .7071067811865475244f) + 1.f;
         depth = std::min(depth, std::min(ow, oh) * .5f);
-        const double narrow = std::ceil(depth * f.deviceScale) + 2.;
+        const double narrow = std::ceil(depth * f.deviceScale) + 2. + margin;
         const double output = 2. * narrow * (w + h) * 4.;
         if (!std::isfinite(output) || output > static_cast<double>(limits.maxPerimeterBytes))
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
@@ -170,11 +173,12 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
         }
         const auto outputBytes = static_cast<std::size_t>(output);
         b.readyBytes = errorBytes + sizeof(KnitPerimeter) + outputBytes + tile.retained;
-        // Four output vectors, one side's live WIC bitmap, three uploaded tile
-        // copies and the core's six simultaneous tile-generation pixel buffers.
+        // Four output vectors, one side's live colour and stitch-height WIC bitmaps
+        // plus the height read-back, uploaded tile copies (albedo and height) and
+        // the core's eight simultaneous tile-generation pixel buffers.
         b.transientBytes = b.requestBytes + sizeof(KnitPerimeter) + outputBytes
-            + static_cast<std::size_t>(narrow * std::max(w, h) * 4.)
-            + 2 * retainedTiles + 6 * largestPixels + largestCells;
+            + static_cast<std::size_t>(3. * narrow * std::max(w, h) * 4.)
+            + 2 * retainedTiles + 8 * largestPixels + largestCells;
         if (b.readyBytes > limits.maxReadyBytes || b.transientBytes > limits.maxTransientBytes)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
     } catch (const RenderError& error) {

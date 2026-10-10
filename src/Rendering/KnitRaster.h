@@ -24,9 +24,10 @@ struct KnitRasterPiece {
 };
 struct KnitPerimeter {
     std::uint32_t width = 0, height = 0;
-    // Desktop placement is target physical top-left minus contentInsetPixels.
+    // Desktop placement is target physical top-left minus contentInsetPixels:
+    // band padding plus shadowMarginPixels of desktop for the soft drop shadow.
     // Fractional band*scale uses a transparent subpixel gutter, not a target shift.
-    std::uint32_t contentInsetPixels = 0;
+    std::uint32_t contentInsetPixels = 0, shadowMarginPixels = 0;
     float bandDip = 0.f, deviceScale = 1.f;
     std::array<KnitRasterPiece, 4> pieces; // top, right, bottom, left
     std::shared_ptr<const knitting::Tile> tile;

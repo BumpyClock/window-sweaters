@@ -25,5 +25,6 @@ D2D1_COLOR_F OpaqueColor(std::uint32_t argb, float multiplier = 1.f);
 struct YarnCell { int column, row; std::uint32_t argb; };
 RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& layout,
                           const std::vector<YarnCell>& chartCells = {},
-                          RasterImage* diagnosticHeight = nullptr);
+                          RasterImage* diagnosticHeight = nullptr,
+                          RasterImage* stitchHeight = nullptr);
 }
