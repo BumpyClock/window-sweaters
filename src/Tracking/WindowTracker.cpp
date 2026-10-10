@@ -71,9 +71,10 @@ bool ReadStyle(HWND hwnd, int index, LONG_PTR& style) noexcept {
     return style != 0 || GetLastError() == ERROR_SUCCESS;
 }
 
-// Single definition of "ordinary" for Query and the Probe prefilter.
-bool OrdinaryTopLevel(HWND hwnd, LONG_PTR style, LONG_PTR extendedStyle) noexcept {
-    return !(style & (WS_CHILD | WS_POPUP)) && (style & WS_CAPTION) == WS_CAPTION
+// Single definition of "ordinary" for Query and the Probe prefilter. Packaged app frames use captioned WS_POPUP roots.
+bool OrdinaryTopLevel(HWND hwnd, const wchar_t* className, LONG_PTR style, LONG_PTR extendedStyle) noexcept {
+    const bool supportedPopup = !(style & WS_POPUP) || std::wcscmp(className,L"ApplicationFrameWindow")==0;
+    return !(style & WS_CHILD) && supportedPopup && (style & WS_CAPTION) == WS_CAPTION
         && !(extendedStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))
         && GetAncestor(hwnd, GA_ROOT) == hwnd && !GetWindow(hwnd, GW_OWNER)
         && hwnd != GetDesktopWindow() && hwnd != GetShellWindow();
@@ -81,9 +82,11 @@ bool OrdinaryTopLevel(HWND hwnd, LONG_PTR style, LONG_PTR extendedStyle) noexcep
 
 // True only on a definite rejection; any unreadable fact defers to the full Query.
 bool PlainlyUnsupported(HWND hwnd) noexcept {
+    wchar_t className[256]{};
     LONG_PTR style{}, extendedStyle{};
     return ReadStyle(hwnd,GWL_STYLE,style) && ReadStyle(hwnd,GWL_EXSTYLE,extendedStyle)
-        && !OrdinaryTopLevel(hwnd,style,extendedStyle);
+        && GetClassNameW(hwnd,className,static_cast<int>(std::size(className)))
+        && !OrdinaryTopLevel(hwnd,className,style,extendedStyle);
 }
 
 Observation FailedQuery(HWND hwnd) {
@@ -224,7 +227,7 @@ Observation WindowTracker::Query(HWND hwnd, NativeQueryFailure* failure) {
     const auto& bounds = monitorInfo.rcMonitor;
     const bool fullscreen = outer.left <= bounds.left && outer.top <= bounds.top
         && outer.right >= bounds.right && outer.bottom >= bounds.bottom;
-    const bool ordinary = OrdinaryTopLevel(hwnd, style, extendedStyle);
+    const bool ordinary = OrdinaryTopLevel(hwnd, className, style, extendedStyle);
     return AliveWindow{
         handle, {pid, processStart, ObservedIdentity(threadId, className)}, className,
         {rect.left, rect.top, rect.right, rect.bottom}, dpi, ordinary,

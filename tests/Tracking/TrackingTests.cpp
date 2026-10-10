@@ -439,6 +439,92 @@ void NativeReceiverContract() {
     Check(std::holds_alternative<DestroyedWindow>(WindowTracker::Query(receiver)), "Confirmed native death");
 }
 
+void NativeApplicationFramePolicy() {
+    const auto instance=GetModuleHandleW(nullptr);
+    const wchar_t* classes[]{L"ApplicationFrameWindow",L"WindowSweaters.NativePopupPolicy"};
+    struct Classes {
+        HINSTANCE instance;
+        const wchar_t* const* names;
+        unsigned registered{};
+        ~Classes() {
+            for (unsigned i=0;i<registered;++i) UnregisterClassW(names[i],instance);
+        }
+    } registered{instance,classes};
+    for (const auto name:classes) {
+        WNDCLASSW registration{};
+        registration.hInstance=instance;
+        registration.lpfnWndProc=DefWindowProcW;
+        registration.lpszClassName=name;
+        if (!RegisterClassW(&registration))
+            throw std::runtime_error("Register hidden native popup/frame test class "+
+                std::to_string(registered.registered)+": "+std::to_string(GetLastError()));
+        ++registered.registered;
+    }
+    struct OwnedWindow {
+        HWND value{};
+        ~OwnedWindow() { if (value) DestroyWindow(value); }
+    } owner{CreateWindowExW(0,classes[1],L"",WS_OVERLAPPEDWINDOW,0,0,240,160,
+        nullptr,nullptr,instance,nullptr)};
+    Check(owner.value!=nullptr,"Create hidden native owner for owned-frame rejection");
+    unsigned assertions{};
+    const auto verify=[&](HWND window,bool expected) {
+        NativeQueryFailure failure;
+        const auto query=WindowTracker::Query(window,&failure);
+        if (!std::holds_alternative<AliveWindow>(query)) {
+            Check(!expected && failure.stage!=NativeQueryStage::None &&
+                Evaluate(query,Policy{})==Eligibility::Uncertain,
+                "Unsupported hidden frame with unavailable native geometry stays fail-closed");
+            ++assertions;
+            return;
+        }
+        Check(failure.stage==NativeQueryStage::None,"Complete native frame query has no failure diagnostic");
+        const auto& alive=std::get<AliveWindow>(query);
+        Check(alive.ordinaryTopLevel==expected,"Native popup/frame style must match exact supported gate");
+        Policy policy;
+        const auto eligibility=Evaluate(query,policy);
+        Check(eligibility==(expected ? Eligibility::Suppressed : Eligibility::Unsupported),
+            "Production gate preserves hidden suppression or unsupported style without overlay authorization");
+        assertions+=3;
+    };
+    struct Case { const wchar_t* name; DWORD style,extended; HWND owner; bool admitted; };
+    const Case cases[]{
+        {classes[0],WS_POPUP|WS_OVERLAPPEDWINDOW,0,nullptr,true},
+        {classes[0],WS_OVERLAPPEDWINDOW,0,nullptr,true},
+        {classes[0],WS_POPUP|WS_CAPTION,WS_EX_TOOLWINDOW,nullptr,false},
+        {classes[0],WS_POPUP|WS_CAPTION,WS_EX_NOACTIVATE,nullptr,false},
+        {classes[0],WS_POPUP,0,nullptr,false},
+        {classes[0],WS_POPUP|WS_CAPTION,0,owner.value,false},
+        {classes[0],WS_CHILD|WS_CAPTION,0,owner.value,false},
+        {classes[1],WS_POPUP|WS_CAPTION,0,nullptr,false}
+    };
+    for (const auto& item:cases) {
+        OwnedWindow window{CreateWindowExW(item.extended,item.name,L"",item.style,0,0,240,160,
+            item.owner,nullptr,instance,nullptr)};
+        Check(window.value!=nullptr,"Create hidden native frame/popup policy case");
+        verify(window.value,item.admitted);
+        verify(window.value,item.admitted);
+    }
+    OwnedWindow changing{CreateWindowExW(0,classes[0],L"",WS_POPUP|WS_CAPTION,0,0,240,160,
+        nullptr,nullptr,instance,nullptr)};
+    Check(changing.value!=nullptr,"Create hidden native frame for style revalidation");
+    verify(changing.value,true);
+    auto menu=std::get<AliveWindow>(WindowTracker::Query(changing.value));
+    menu.className=L"#32768";
+    Check(Evaluate(menu,Policy{})==Eligibility::Unsupported,
+        "Existing explicit menu-class exclusion outranks otherwise ordinary frame facts");
+    ++assertions;
+    SetLastError(0);
+    const auto previous=SetWindowLongPtrW(changing.value,GWL_EXSTYLE,WS_EX_TOOLWINDOW);
+    Check(previous!=0 || GetLastError()==0,"Change only owned hidden frame extended style");
+    verify(changing.value,false);
+    SetLastError(0);
+    Check(SetWindowLongPtrW(changing.value,GWL_EXSTYLE,previous)!=0 || GetLastError()==0,
+        "Restore only owned hidden frame extended style");
+    verify(changing.value,true);
+    std::cout<<"PASS: "<<assertions<<" native ApplicationFrameWindow style/query/gate assertions; "
+        "captioned ownerless popup exception only, hidden windows, no desktop app mutation\n";
+}
+
 void NativeProbePrefilter() {
     const auto instance=GetModuleHandleW(nullptr);
     const wchar_t* name=L"WindowSweaters.NativeProbePrefilter";
@@ -665,11 +751,14 @@ int main(int argc, char** argv) {
         std::cout << "PASS: 12 deterministic tracking contract scenarios, including suppressed selections/reuse/capacity (scripted, not desktop evidence)\n";
         if (argc == 2 && std::string_view{argv[1]} == "--native-contract") {
             NativeReceiverContract();
+            NativeApplicationFramePolicy();
             NativeProbePrefilter();
             NativeSelectedTracker();
             std::cout << "PASS: isolated native receiver/query rejection contract (not cross-process fixture evidence)\n";
+        } else if (argc == 2 && std::string_view{argv[1]} == "--frame-policy-only") {
+            NativeApplicationFramePolicy();
         } else if (argc != 1) {
-            throw std::runtime_error("Usage: TrackingTests.exe [--native-contract]");
+            throw std::runtime_error("Usage: TrackingTests.exe [--native-contract|--frame-policy-only]");
         }
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
