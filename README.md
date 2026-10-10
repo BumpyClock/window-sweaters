@@ -27,6 +27,8 @@ From PowerShell at the repository root:
 
 The build script accepts `-MSBuild <path>` for other Visual Studio editions or installation locations. Native artifacts are written to `out\x64\<Configuration>`. The current CLI checks validate arguments without selecting desktop applications; they do not prove input transparency or visual parity.
 
+To iterate on chart designs, `python scripts\preview-designs.py` renders the Windows-authored themes as flat labelled strips to `out\design-preview.png`. Pass theme IDs to select themes, or `--all` for the whole catalogue. It shows chart cells only; the Knitting tests write knitted renders to `tests\Knitting\outputs`.
+
 For Computer Use verification, `.\scripts\test.ps1 -Desktop` builds the separate-process fixture and prints its executable path. It does not launch or interact with desktop applications. Launch `Fixture.exe` through Computer Use, then use the fixture's **Start test host** control. The host receives only that fixture's HWND in test mode. Stop it through **Stop test host** or the host tray's **Quit** command.
 
 The host now tracks ordinary windows through WinEvents and bounded reconciliation.
