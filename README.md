@@ -4,6 +4,11 @@ A native Windows port of [Window Sweaters](https://github.com/saragordic/window-
 
 Implementation is in progress under [issue #1](https://github.com/BumpyClock/window-sweaters/issues/1). This repository is not yet a release-qualified application. The [parity ledger](docs/parity.md) separates implemented code from desktop and distribution evidence.
 
+Microsoft Store distribution is now the target. MSIX packaging is in progress.
+Until Partner Center identity values are supplied, packages use an explicitly
+marked development identity and are not Store submissions. Package creation,
+signing, installation, and publication are separate operations.
+
 ## Platform
 
 The target is Windows 11 x64, build 22000 or later. The tray host uses C++20, Win32, Direct2D, and DirectComposition. Portable knitting code remains C where practical. Settings use an on-demand C++/WinRT WinUI 3 process; the host does not load WinUI or the Windows App SDK.
@@ -24,7 +29,16 @@ The build script accepts `-MSBuild <path>` for other Visual Studio editions or i
 
 For Computer Use verification, `.\scripts\test.ps1 -Desktop` builds the separate-process fixture and prints its executable path. It does not launch or interact with desktop applications. Launch `Fixture.exe` through Computer Use, then use the fixture's **Start test host** control. The host receives only that fixture's HWND in test mode. Stop it through **Stop test host** or the host tray's **Quit** command.
 
-This first slice supports one explicitly selected, restored, ordinary target at fixed geometry. Tracking, knitted textures, settings, and general desktop compatibility have separate acceptance gates. Closing or changing the selected target must not leave a stale border.
+The host now tracks ordinary windows through WinEvents and bounded reconciliation.
+Run `WindowSweaters.Host.exe` without arguments for production discovery.
+Fixture mode requires an explicitly selected fixture and seals its initial
+identity; it must not select other desktop applications. Pure movement reuses
+decoration, actual resize suppresses it until settlement, and hidden/minimized
+windows can recover without losing their lifetime.
+
+Knitted texture upload, native settings integration, and broader desktop
+compatibility still have separate acceptance gates. Do not treat the compiled
+knitting core or settings executable as proof that those features are connected.
 
 ## Safety and scope
 

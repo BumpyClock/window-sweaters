@@ -26,6 +26,7 @@
       <RuntimeLibrary Condition="'$(Configuration)' != 'Debug'">MultiThreaded</RuntimeLibrary>
       <Optimization Condition="'$(Configuration)' == 'Debug'">Disabled</Optimization>
       <Optimization Condition="'$(Configuration)' != 'Debug'">MaxSpeed</Optimization>
+      <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
     <Link>
       <AdditionalDependencies>d2d1.lib;d3d11.lib;dxgi.lib;dcomp.lib;dwmapi.lib;shell32.lib;ole32.lib;user32.lib;gdi32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -34,8 +35,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="HostContractTests.cpp" />
     <ClCompile Include="..\Rendering\Overlay.cpp" />
+    <ClCompile Include="..\Tracking\TrackingModel.cpp" />
+    <ClCompile Include="..\Tracking\WindowTracker.cpp" />
+    <ClInclude Include="OverlayState.h" />
     <ClInclude Include="..\Rendering\Overlay.h" />
+    <ClInclude Include="..\Tracking\TrackingModel.h" />
+    <ClInclude Include="..\Tracking\WindowTracker.h" />
     <Manifest Include="Host.manifest" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

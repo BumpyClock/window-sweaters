@@ -4,7 +4,8 @@ param(
     [string]$Configuration = 'Debug',
     [string]$MSBuild = 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe',
     [switch]$Rebuild,
-    [switch]$IncludeFixture
+    [switch]$IncludeFixture,
+    [switch]$IncludeTrackingTests
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -18,5 +19,11 @@ if ($IncludeFixture) {
     if (-not (Test-Path -LiteralPath $fixture)) { throw "Fixture project not found: $fixture" }
     & $MSBuild $fixture /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw "Fixture build failed: $LASTEXITCODE" }
+}
+if ($IncludeTrackingTests) {
+    $tracking = Join-Path $root 'tests\Tracking\TrackingTests.vcxproj'
+    if (-not (Test-Path -LiteralPath $tracking)) { throw "Tracking test project not found: $tracking" }
+    & $MSBuild $tracking /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
+    if ($LASTEXITCODE -ne 0) { throw "Tracking test build failed: $LASTEXITCODE" }
 }
 Write-Output (Join-Path $root "out\x64\$Configuration\WindowSweaters.Host.exe")
