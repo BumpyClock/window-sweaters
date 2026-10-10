@@ -1,6 +1,6 @@
 # Attribution
 
-This Windows implementation ports Window Sweaters by Sasa Gordic:
+This Windows implementation ports Window Sweaters by saragordic:
 https://github.com/saragordic/window-sweaters
 
 The reviewed source baseline is

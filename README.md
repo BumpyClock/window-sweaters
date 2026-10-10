@@ -8,7 +8,23 @@ Implementation is in progress under [issue #1](https://github.com/BumpyClock/win
 
 The target is Windows 11 x64, build 22000 or later. The tray host uses C++20, Win32, Direct2D, and DirectComposition. Portable knitting code remains C where practical. Settings use an on-demand C++/WinRT WinUI 3 process; the host does not load WinUI or the Windows App SDK.
 
-Native projects use Visual Studio/MSBuild, not CMake. The implementation toolchain is Visual Studio 2026, the v145 platform toolset, and Windows SDK 10.0.26100.0. Settings target the stable Windows App SDK 2.5.1. Build and execution commands will be documented with each verified slice.
+Native projects use Visual Studio/MSBuild, not CMake. Install Visual Studio 2026 with the Desktop development with C++ workload and Windows SDK 10.0.26100.0. Projects pin the v145 platform toolset, C++20, and C17. Settings target the stable Windows App SDK 2.5.1.
+
+## Build the first slice
+
+From PowerShell at the repository root:
+
+```powershell
+.\scripts\build.ps1 -Configuration Debug -IncludeFixture
+.\scripts\build.ps1 -Configuration Release -IncludeFixture
+.\scripts\test.ps1 -Configuration Debug -NoBuild
+```
+
+The build script accepts `-MSBuild <path>` for other Visual Studio editions or installation locations. Native artifacts are written to `out\x64\<Configuration>`. The current CLI checks validate arguments without selecting desktop applications; they do not prove input transparency or visual parity.
+
+For Computer Use verification, `.\scripts\test.ps1 -Desktop` builds the separate-process fixture and prints its executable path. It does not launch or interact with desktop applications. Launch `Fixture.exe` through Computer Use, then use the fixture's **Start test host** control. The host receives only that fixture's HWND in test mode. Stop it through **Stop test host** or the host tray's **Quit** command.
+
+This first slice supports one explicitly selected, restored, ordinary target at fixed geometry. Tracking, knitted textures, settings, and general desktop compatibility have separate acceptance gates. Closing or changing the selected target must not leave a stale border.
 
 ## Safety and scope
 

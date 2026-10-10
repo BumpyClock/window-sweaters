@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A4910D43-DFB1-4575-81BA-712E17D064E6}</ProjectGuid>
+    <RootNamespace>WindowSweaters</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.22000.0</WindowsTargetPlatformMinVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)' != 'Debug'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)' == 'Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><TargetName>WindowSweaters.Host</TargetName></PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <RuntimeLibrary Condition="'$(Configuration)' == 'Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)' != 'Debug'">MultiThreaded</RuntimeLibrary>
+      <Optimization Condition="'$(Configuration)' == 'Debug'">Disabled</Optimization>
+      <Optimization Condition="'$(Configuration)' != 'Debug'">MaxSpeed</Optimization>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>d2d1.lib;d3d11.lib;dxgi.lib;dcomp.lib;dwmapi.lib;shell32.lib;ole32.lib;user32.lib;gdi32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest><AdditionalManifestFiles>Host.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="..\Rendering\Overlay.cpp" />
+    <ClInclude Include="..\Rendering\Overlay.h" />
+    <Manifest Include="Host.manifest" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

@@ -6,7 +6,7 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 
 | Issue | Contract | Implementation | Qualification |
 | --- | --- | --- | --- |
-| [#2](https://github.com/BumpyClock/window-sweaters/issues/2) | Native tray host and noninteractive exterior border | In progress | Pending native input and build evidence |
+| [#2](https://github.com/BumpyClock/window-sweaters/issues/2) | Native tray host and noninteractive exterior border | Implemented and independently reviewed | Debug/Release builds, Computer Use targeted input, caption controls, and graceful shutdown verified; foreground pixel, resize-handle, and taskbar/Alt-Tab qualification pending |
 | [#3](https://github.com/BumpyClock/window-sweaters/issues/3) | Target discovery, lifetime safety, move/resize settlement | In progress | Pending model and desktop evidence |
 | [#4](https://github.com/BumpyClock/window-sweaters/issues/4) | Below-target stacking, dialogs, topmost bands | Pending | Pending visible ordering and input evidence |
 | [#5](https://github.com/BumpyClock/window-sweaters/issues/5) | Faithful stockinette, shading, oriented edges, corners | Pending | Pending rendering and upstream comparison |
@@ -33,3 +33,24 @@ Settings are separate from the tray host, which is the only configuration writer
 ## Evidence still required
 
 Visual parity requires actual pinned-upstream output with stated tolerances. Windows-renderer output cannot serve as its own upstream baseline. A clean-machine check must use the produced Release artifact on an environment without development dependencies. Neither check is implied by compilation or model tests.
+
+## First native slice
+
+Measured on Windows 11 Enterprise build 26300, x64: the Release fixture started
+the companion host, received targeted center and exterior-receiver clicks through
+Computer Use, scrolled its list, accepted ten characters, and completed a
+maximize/restore round trip. The host quit with exit code zero and both its
+notification HWND and overlay HWND were destroyed.
+
+Independent review found that assigning the hidden host as an overlay owner could
+prevent below-target placement. The overlay is now an unowned tool window with
+explicit host-managed destruction; positioning verifies its z-order postcondition.
+Debug and Release rebuilt after this fix, and the same reviewer found no
+significant issue in the correction.
+
+The background overlay capture shows its colored exterior. The read-only screen
+probe refused foreground pixel sampling because another application covered the
+sample locations. Targeted Computer Use delivery is not proof of physical mouse
+hit testing on an unobscured desktop. That check, resize handles, taskbar/Alt-Tab
+absence, and clean-checkout qualification remain open. No user application was
+selected by the fixture host.
