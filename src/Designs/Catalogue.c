@@ -14,42 +14,50 @@ struct collection_chart {
 #include "AuthoredCharts.inc"
 #include "ChartViews.inc"
 #include "ThemeViews.inc"
+#include "WindowsDesigns.inc"
 
 #define COUNT_OF(array) (sizeof(array) / sizeof((array)[0]))
 
+// Pinned import shape; Windows-authored designs extend the catalogue without changing it.
 _Static_assert(COUNT_OF(k_collection) == 47, "The pinned source has 47 chart repeats");
 _Static_assert(COUNT_OF(k_chart_views) == COUNT_OF(k_collection), "Every chart has a view");
 _Static_assert(COUNT_OF(k_theme_views) == 37, "The pinned source has 37 authored app themes");
 
 size_t ws_design_chart_count(void) {
-    return COUNT_OF(k_chart_views);
+    return COUNT_OF(k_chart_views) + COUNT_OF(k_windows_chart_views);
 }
 
 const ChartView* ws_design_chart_at(size_t index) {
-    return index < COUNT_OF(k_chart_views) ? &k_chart_views[index] : NULL;
+    if (index < COUNT_OF(k_chart_views))
+        return &k_chart_views[index];
+    index -= COUNT_OF(k_chart_views);
+    return index < COUNT_OF(k_windows_chart_views) ? &k_windows_chart_views[index] : NULL;
 }
 
 const ChartView* ws_design_chart_by_name(const char* name) {
     if (name)
-        for (size_t i = 0; i < COUNT_OF(k_chart_views); ++i)
-            if (strcmp(name, k_chart_views[i].name) == 0)
-                return &k_chart_views[i];
+        for (size_t i = 0; i < ws_design_chart_count(); ++i)
+            if (strcmp(name, ws_design_chart_at(i)->name) == 0)
+                return ws_design_chart_at(i);
     return NULL;
 }
 
 size_t ws_design_theme_count(void) {
-    return COUNT_OF(k_theme_views);
+    return COUNT_OF(k_theme_views) + COUNT_OF(k_windows_theme_views);
 }
 
 const ThemeView* ws_design_theme_at(size_t index) {
-    return index < COUNT_OF(k_theme_views) ? &k_theme_views[index] : NULL;
+    if (index < COUNT_OF(k_theme_views))
+        return &k_theme_views[index];
+    index -= COUNT_OF(k_theme_views);
+    return index < COUNT_OF(k_windows_theme_views) ? &k_windows_theme_views[index] : NULL;
 }
 
 const ThemeView* ws_design_theme_by_id(const char* id) {
     if (id)
-        for (size_t i = 0; i < COUNT_OF(k_theme_views); ++i)
-            if (strcmp(id, k_theme_views[i].id) == 0)
-                return &k_theme_views[i];
+        for (size_t i = 0; i < ws_design_theme_count(); ++i)
+            if (strcmp(id, ws_design_theme_at(i)->id) == 0)
+                return ws_design_theme_at(i);
     return NULL;
 }
 

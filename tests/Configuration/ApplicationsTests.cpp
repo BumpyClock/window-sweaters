@@ -68,7 +68,7 @@ void MigrationAndBounds(std::filesystem::path const& root) {
     Put(old,36,std::bit_cast<std::uint32_t>(8.5f)); Put(old,40,0xff228833); Put(old,44,7);
     std::copy_n("spotify",7,old.begin()+48); Write(storage.File(),old);
     auto original=Bytes(storage.File()); auto loaded=storage.Load();
-    Check(loaded.state==StorageState::ready && loaded.configuration.schema==3 &&
+    Check(loaded.state==StorageState::ready && loaded.configuration.schema==configuration_schema &&
         loaded.configuration.revision==72 && loaded.configuration.paused && loaded.configuration.border_width_dip==25.5f &&
         loaded.configuration.design_id=="spotify" && loaded.configuration.stitch_style==StitchStyle::garter &&
         loaded.configuration.material_style==MaterialStyle::plain && loaded.configuration.stitch_rows==8.5f &&

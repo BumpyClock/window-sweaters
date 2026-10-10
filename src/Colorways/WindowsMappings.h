@@ -9,11 +9,12 @@
 
 namespace window_sweaters::colorways {
 
-enum class WindowsRoot { PackageIdentity, ProgramFiles, ProgramFilesX86, LocalAppData };
+enum class WindowsRoot { PackageIdentity, ProgramFiles, ProgramFilesX86, LocalAppData, Windows };
 struct WindowsInstallRoots {
     std::wstring program_files;
     std::wstring program_files_x86;
     std::wstring local_app_data;
+    std::wstring windows;
 };
 // OS Known Folder queries only; cache outside the resolver. Failed roots remain empty.
 WindowsInstallRoots QueryWindowsInstallRoots();
@@ -24,7 +25,7 @@ struct WindowsMapping {
     // Exact package AUMID, or exact path relative to a trusted OS Known Folder.
     std::wstring_view identity;
     std::wstring_view executable;
-    std::string_view provenance;
+    std::string_view provenance; // Public document URL(s), or a dated local package measurement.
 };
 std::span<const WindowsMapping> WindowsMappings() noexcept;
 // Matches only process-derived AppIdentity and exact documented installation locations.
@@ -39,7 +40,7 @@ struct ThemeCoverage {
     WindowsCoverage coverage;
     std::string_view limitation;
 };
-// All 37 original themes remain manually selectable, independent of this coverage table.
+// One entry per catalogue theme; every theme remains manually selectable regardless of coverage.
 std::span<const ThemeCoverage> WindowsThemeCoverage() noexcept;
 
 } // namespace window_sweaters::colorways

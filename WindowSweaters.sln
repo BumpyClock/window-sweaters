@@ -22,7 +22,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Knitting", "
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Designs", "src\Designs\WindowSweaters.Designs.vcxproj", "{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConfigurationTests", "tests\Configuration\WindowSweaters.Configuration.Tests.vcxproj", "{C2E0DB90-F77E-491B-B314-360CE1BD1952}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Configuration.Tests", "tests\Configuration\WindowSweaters.Configuration.Tests.vcxproj", "{C2E0DB90-F77E-491B-B314-360CE1BD1952}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConfigurationHostTests", "tests\Integration\ConfigurationHostTests.vcxproj", "{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}"
 EndProject
@@ -30,13 +30,13 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Applications", "src\Applica
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ApplicationsTests", "tests\Applications\ApplicationsTests.vcxproj", "{C3A49CFB-F074-4BDD-9862-95E13D623557}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KnittingTests", "tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj", "{B5165810-80B9-4390-A1A4-A7FD5731B3D2}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Knitting.Tests", "tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj", "{B5165810-80B9-4390-A1A4-A7FD5731B3D2}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RenderQueueTests", "tests\Rendering\RenderQueueTests.vcxproj", "{156DB83C-1A93-4AD1-AD5C-F306A678D64E}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GraphicsRecoveryTests", "tests\Rendering\GraphicsRecoveryTests.vcxproj", "{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}"
 EndProject
-Project("{C7167F0D-BC9F-4E6E-A544-4CDB81DD3EEB}") = "WindowSweaters.Package", "packaging\WindowSweaters.Package.wapproj", "{3BF239C2-7D56-456A-973C-40DAB1CC4B51}"
+Project("{C7167F0D-BC9F-4E6E-AFE1-012C56B48DB5}") = "WindowSweaters.Package", "packaging\WindowSweaters.Package.wapproj", "{3BF239C2-7D56-456A-973C-40DAB1CC4B51}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -57,6 +57,7 @@ Global
 		{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}.Release|x64.ActiveCfg = Release|x64
 		{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}.Release|x64.Build.0 = Release|x64
 		{7A061F2D-0D4F-4A74-AB62-1711BC2F65E1}.Debug|x64.ActiveCfg = Debug|x64
+		{7A061F2D-0D4F-4A74-AB62-1711BC2F65E1}.Debug|x64.Build.0 = Debug|x64
 		{7A061F2D-0D4F-4A74-AB62-1711BC2F65E1}.Release|x64.ActiveCfg = Release|x64
 		{B76D8596-88C1-423E-958A-05D3F06BE709}.Debug|x64.ActiveCfg = Debug|x64
 		{B76D8596-88C1-423E-958A-05D3F06BE709}.Debug|x64.Build.0 = Debug|x64
@@ -112,5 +113,8 @@ Global
 		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|x64.Build.0 = Release|x64
 		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|x64.ActiveCfg = Debug|x64
 		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|x64.ActiveCfg = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal

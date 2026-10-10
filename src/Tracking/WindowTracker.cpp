@@ -34,15 +34,19 @@ void Append(ActionBatch& destination, ActionBatch source) {
                        std::make_move_iterator(source.end()));
 }
 
-std::uint64_t ProcessStart(DWORD pid) noexcept {
+std::uint64_t ProcessStart(DWORD pid, NativeQueryFailure* failure = nullptr) noexcept {
     const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!process) {
+        if (failure) *failure={NativeQueryStage::OpenProcess,GetLastError()};
         return 0;
     }
     FILETIME creation{}, exit{}, kernel{}, user{};
     const bool success = GetProcessTimes(process, &creation, &exit, &kernel, &user) != FALSE;
+    if (!success && failure) *failure={NativeQueryStage::ProcessTimes,GetLastError()};
     CloseHandle(process);
-    return success ? (std::uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime : 0;
+    const auto start=success ? (std::uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime : 0;
+    if (success && !start && failure) *failure={NativeQueryStage::ProcessTimes,ERROR_INVALID_DATA};
+    return start;
 }
 
 std::uint64_t ObservedIdentity(DWORD threadId, const wchar_t* className) noexcept {
@@ -132,18 +136,29 @@ bool WindowTracker::OnOwnerThread() const noexcept {
     return GetCurrentThreadId() == ownerThreadId_;
 }
 
-Observation WindowTracker::Query(HWND hwnd) {
+Observation WindowTracker::Query(HWND hwnd, NativeQueryFailure* failure) {
+    if (failure) *failure={};
     const auto handle = reinterpret_cast<WindowHandle>(hwnd);
+    const auto failed=[&](NativeQueryStage stage,DWORD error=0,HRESULT result=S_OK) {
+        if (failure) *failure={stage,error,result};
+        return FailedQuery(hwnd);
+    };
+    const auto uncertain=[&](NativeQueryStage stage,DWORD error=0) {
+        if (failure) *failure={stage,error};
+        return Observation{UncertainWindow{handle}};
+    };
     if (!hwnd || !IsWindow(hwnd)) {
+        if (failure) *failure={NativeQueryStage::Window,ERROR_INVALID_WINDOW_HANDLE};
         return DestroyedWindow{handle};
     }
     const PhysicalCoordinates coordinates;
     if (!coordinates.Valid()) {
-        return FailedQuery(hwnd);
+        return failed(NativeQueryStage::DpiContext,GetLastError());
     }
     DWORD pid{};
     const DWORD threadId = GetWindowThreadProcessId(hwnd, &pid);
-    const auto processStart = ProcessStart(pid);
+    const auto threadError=threadId && pid ? DWORD{} : GetLastError();
+    const auto processStart = ProcessStart(pid,failure);
     wchar_t className[256]{};
     LONG_PTR style{}, extendedStyle{};
     RECT rect{}, outer{};
@@ -151,26 +166,38 @@ Observation WindowTracker::Query(HWND hwnd) {
     const UINT dpi = GetDpiForWindow(hwnd);
     const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
     MONITORINFO monitorInfo{sizeof(MONITORINFO)};
-    if (!threadId || !pid || !processStart || !dpi
-        || !GetClassNameW(hwnd, className, static_cast<int>(std::size(className)))
-        || !ReadStyle(hwnd, GWL_STYLE, style) || !ReadStyle(hwnd, GWL_EXSTYLE, extendedStyle)
-        || FAILED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect)))
-        || FAILED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))
-        || !GetWindowRect(hwnd, &outer) || !GetMonitorInfoW(monitor, &monitorInfo)
-        || rect.right <= rect.left || rect.bottom <= rect.top) {
-        return FailedQuery(hwnd);
+    if (!threadId || !pid) return failed(NativeQueryStage::WindowProcess,threadError);
+    if (!processStart) return FailedQuery(hwnd);
+    if (!dpi) return failed(NativeQueryStage::Dpi,GetLastError());
+    if (!GetClassNameW(hwnd,className,static_cast<int>(std::size(className))))
+        return failed(NativeQueryStage::Class,GetLastError());
+    if (!ReadStyle(hwnd,GWL_STYLE,style)) return failed(NativeQueryStage::Style,GetLastError());
+    if (!ReadStyle(hwnd,GWL_EXSTYLE,extendedStyle)) return failed(NativeQueryStage::ExtendedStyle,GetLastError());
+    const auto frameResult=DwmGetWindowAttribute(hwnd,DWMWA_EXTENDED_FRAME_BOUNDS,&rect,sizeof(rect));
+    if (FAILED(frameResult)) return failed(NativeQueryStage::FrameBounds,0,frameResult);
+    const auto cloakResult=DwmGetWindowAttribute(hwnd,DWMWA_CLOAKED,&cloaked,sizeof(cloaked));
+    if (FAILED(cloakResult)) return failed(NativeQueryStage::Cloak,0,cloakResult);
+    if (!GetWindowRect(hwnd,&outer)) return failed(NativeQueryStage::WindowBounds,GetLastError());
+    if (!GetMonitorInfoW(monitor,&monitorInfo)) return failed(NativeQueryStage::Monitor,GetLastError());
+    if (rect.right<=rect.left || rect.bottom<=rect.top) return failed(NativeQueryStage::EmptyBounds);
+    if (failure) {
+        // Earlier successful APIs may leave a nonzero last-error value.
+        *failure={};
     }
     DWORD finalPid{};
     wchar_t finalClassName[256]{};
     if (!IsWindow(hwnd)) {
+        if (failure) *failure={NativeQueryStage::RevalidateWindow,ERROR_INVALID_WINDOW_HANDLE};
         return DestroyedWindow{handle};
     }
-    if (GetWindowThreadProcessId(hwnd, &finalPid) != threadId || finalPid != pid
-        || ProcessStart(finalPid) != processStart
-        || !GetClassNameW(hwnd, finalClassName, static_cast<int>(std::size(finalClassName)))
-        || std::wcscmp(className, finalClassName) != 0) {
-        return UncertainWindow{handle};
-    }
+    if (GetWindowThreadProcessId(hwnd,&finalPid)!=threadId || finalPid!=pid)
+        return uncertain(NativeQueryStage::RevalidateProcess,GetLastError());
+    const auto finalStart=ProcessStart(finalPid,failure);
+    if (!finalStart) return UncertainWindow{handle};
+    if (finalStart!=processStart) return uncertain(NativeQueryStage::RevalidateProcess);
+    if (!GetClassNameW(hwnd,finalClassName,static_cast<int>(std::size(finalClassName))))
+        return uncertain(NativeQueryStage::RevalidateClass,GetLastError());
+    if (std::wcscmp(className,finalClassName)!=0) return uncertain(NativeQueryStage::RevalidateClass);
     const auto& bounds = monitorInfo.rcMonitor;
     const bool fullscreen = outer.left <= bounds.left && outer.top <= bounds.top
         && outer.right >= bounds.right && outer.bottom >= bounds.bottom;

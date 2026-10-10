@@ -14,7 +14,7 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Catalogue rendering, host appearance wiring, and persisted WinUI controls independently reviewed | 971 renderer checks and 43 production appearance comparisons pass; real Spotify selection, live width/pause, preview, persistence and restart verified through Computer Use |
 | [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Host-owned persistence and native Apps controls integrated and independently reviewed | Computer Use verified per-app changes, default-off overrides, persistence across new PID/HWND, all-off before first rendering, and retained exact-control focus without the former viewport jump |
 | [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Per-target host resolution and bounded preview tracking integrated and independently reviewed | Clean Debug/Release: 487 Host checks, 616 adapter checks, 43 appearance comparisons, and 12 tracking scenarios plus hidden native tracking; Computer Use verified distinct Word/Excel sweaters and manual override |
-| [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Source palette math and bounded icon preparation independently reviewed; host integration pending | Synthetic and own-executable icon checks pass; cross-feature runtime qualification pending |
+| [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Host worker/resolver integration and distinct persisted mode independently reviewed | Clean Debug/Release: 558 Host, 619 adapter, and 1,279 configuration checks pass; positive native sampling and two Shared Zigzag restarts verified; earlier selection rejection remains unexplained |
 | [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Native import model independently reviewed; host/UI persistence pending | Debug/Release: 1,618 checks pass, including removal/reimport revision safety; real restart qualification pending |
 | [#12](https://github.com/BumpyClock/window-sweaters/issues/12) | Physical geometry, mixed DPI, Snap, clipping | Geometry and GPU corner policy integrated and independently reviewed | 1,645 focused geometry checks and actual GPU rounded-mask readback pass; normal fixture corners inspected at 100%; physical mixed-monitor matrix pending |
 | [#13](https://github.com/BumpyClock/window-sweaters/issues/13) | Desktop, session, and power visibility | Public-API visibility and host wiring independently reviewed | Ten native/model groups pass; current-desktop tool-window publication verified; actual switching/lock/sleep transitions pending |
@@ -124,7 +124,7 @@ an actual driver reset.
 
 ## Native application exclusions
 
-Schema 3 and protocol 4 carry the host-owned default eligibility and persistent
+The exclusion slice introduced schema 3 and protocol 4 for default eligibility and persistent
 application exceptions. Older supported configuration files migrate in memory
 without a startup rewrite. Running owners remain in the Apps list when disabled;
 saved non-running choices remain distinguishable from running owners. Inaccessible
@@ -188,3 +188,38 @@ application was closed or edited during this preview.
 Native persisted restart of this two-app preview remains unverified; the
 identity/relaunch and configuration persistence checks are separate model and
 IPC evidence.
+
+## Icon yarn integration
+
+Schema 4 and protocol 5 add an explicit Shared Zigzag selection while preserving
+the previous mode values and application exceptions. Valid schemas 1–3 migrate
+in memory without startup writes. The live endpoint rejects older protocols;
+legacy decoding is limited to disk migration.
+
+Computer Use selected By app and Shared Zigzag in the native Settings app.
+Mapped Word kept its authored palette in By app. Unknown packaged Notepad's
+icon returned an explicit monochrome fallback. Shared Zigzag applied its
+generated motif with provisional app-specific colors; Word's icon also returned
+an explicit unsupported-source fallback. The host reported no appearance errors,
+and the shared selection was durably saved as schema 4. These observations prove
+the native mode and fallback flow, not a successful live icon sample.
+
+The ordinary native fixture now embeds the existing known-color test icon.
+Production PE sampling checks its exact `0xffc04b4b` base and `0xfff6f0de`
+contrast. Computer Use then verified actual red/cream knitted publication with
+`icon_sampled=true`, no fallback, and no appearance error. Shared Zigzag retained
+that sampled palette and saved its distinct mode.
+
+A new fixture process restored the saved By app mode and sampled the same color.
+A subsequent same-fixture restart after saving Shared Zigzag exited with code 3
+before configuration loading or overlay creation. Two explicit starts produced
+the same pre-selection rejection. The previous stopped probe was not evidence
+of a newly started host. The normal all-app host continued running independently.
+
+The exact FixtureOnly selector now exposes bounded native-stage/error diagnostics.
+Its read-only inspector accepted the same fixture. Two subsequent user-driven
+starts with the diagnostic candidate restored Shared Zigzag revision 30,
+resampled the exact red yarn, and published a visible border without appearance
+errors. The earlier rejection did not reproduce; its cause remains unknown.
+The diagnostic change preserves eligibility and query semantics rather than
+substituting an unsafe fallback. No claim is made that it fixed the unseen cause.

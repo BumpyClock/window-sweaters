@@ -114,10 +114,10 @@ MetadataResult ResolveWindowOwnerMetadata(
     const auto& root = std::get<AppMetadata>(rootProcess);
     if (root.Provenance() == MetadataProvenance::WindowApplicationId)
         return WindowFailure(UnavailableReason::InvalidMetadata, QueryStage::Resolver);
-    if (const auto* packaged = std::get_if<PackagedAumid>(&windowApplicationId)) {
-        auto identity = AppIdentity::FromPackagedAumid(packaged->value);
-        if (!identity)
-            return WindowFailure(UnavailableReason::InvalidMetadata, QueryStage::WindowApplicationId);
+    // Unpackaged apps may set an explicit window AUMID (Chromium: "MSEdge.udd.Default").
+    // It names no package, so only the verified root process below can identify the owner.
+    const auto* packaged = std::get_if<PackagedAumid>(&windowApplicationId);
+    if (auto identity = packaged ? AppIdentity::FromPackagedAumid(packaged->value) : std::nullopt) {
         const bool packagedRoot = root.Identity().Kind() == IdentityKind::PackagedAumid;
         if (packagedRoot && root.Identity() != *identity)
             return WindowFailure(UnavailableReason::ConflictingOwner, QueryStage::WindowApplicationId);

@@ -86,9 +86,21 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ResourceCompile Include="$(IntDir)IconResources\FixtureIcon.rc">
+      <AdditionalIncludeDirectories>$(IntDir)IconResources;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="Fixture.manifest" />
   </ItemGroup>
+  <Target Name="GenerateFixtureIcon" BeforeTargets="ResourceCompile"
+          Inputs="$(ProjectDir)..\IconYarn\FixtureIcon.base64;$(ProjectDir)..\IconYarn\FixtureIcon.rc"
+          Outputs="$(IntDir)IconResources\build\FixtureIcon.ico;$(IntDir)IconResources\FixtureIcon.rc">
+    <MakeDir Directories="$(IntDir)IconResources\build" />
+    <!-- RC-relative icon lookup must use this project's isolated intermediate. -->
+    <Copy SourceFiles="$(ProjectDir)..\IconYarn\FixtureIcon.rc"
+          DestinationFiles="$(IntDir)IconResources\FixtureIcon.rc" />
+    <Exec Command="powershell -NoProfile -NonInteractive -Command &quot;[System.IO.File]::WriteAllBytes('$(IntDir)IconResources\build\FixtureIcon.ico', [System.Convert]::FromBase64String([System.IO.File]::ReadAllText('$(ProjectDir)..\IconYarn\FixtureIcon.base64')))&quot;" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

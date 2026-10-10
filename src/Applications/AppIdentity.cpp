@@ -127,13 +127,24 @@ bool ProcessInstance::operator<(const ProcessInstance& other) const noexcept {
 
 AppMetadata::AppMetadata(AppIdentity identity, MetadataProvenance provenance, std::wstring displayName,
                          DisplayNameProvenance displayProvenance,
-                         std::optional<std::wstring> executableAlias)
+                         std::optional<std::wstring> executableAlias,
+                         std::optional<std::wstring> executableSource)
     : identity_(std::move(identity)), provenance_(provenance), displayName_(std::move(displayName)),
-      displayProvenance_(displayProvenance), executableAlias_(std::move(executableAlias)) {}
+      displayProvenance_(displayProvenance), executableAlias_(std::move(executableAlias)),
+      executableSource_(std::move(executableSource)) {}
+
+AppMetadata AppMetadata::WithVerifiedProcessSource(const AppMetadata& process) const {
+    auto result = *this;
+    if (process.Provenance() == MetadataProvenance::ProcessApplicationId &&
+        identity_ == process.Identity() && !process.ExecutableSource().empty())
+        result.executableSource_ = std::wstring(process.ExecutableSource());
+    return result;
+}
 
 std::size_t AppMetadata::RetainedBytes() const noexcept {
     return sizeof(AppMetadata) + sizeof(wchar_t) * (identity_.Key().capacity() + 1 +
-        displayName_.capacity() + 1 + (executableAlias_ ? executableAlias_->capacity() + 1 : 0));
+        displayName_.capacity() + 1 + (executableAlias_ ? executableAlias_->capacity() + 1 : 0) +
+        (executableSource_ ? executableSource_->capacity() + 1 : 0));
 }
 
 MetadataResult ResolveMetadata(const PackagedIdentityQuery& packaged, const ExecutablePathQuery& image) {
@@ -147,9 +158,12 @@ MetadataResult ResolveMetadata(const PackagedIdentityQuery& packaged, const Exec
         if (!identity) return MetadataUnavailable{UnavailableReason::InvalidMetadata, QueryStage::Resolver};
         auto alias = path ? std::optional<std::wstring>(Basename(*path)) : std::nullopt;
         auto display = alias ? *alias : identity->Key().substr(identity->Key().find(L'!') + 1);
+        auto source = path && CompareStringOrdinal(alias->c_str(), -1,
+            L"ApplicationFrameHost.exe", -1, TRUE) != CSTR_EQUAL ? std::optional(path->Key()) : std::nullopt;
         return AppMetadata(std::move(*identity), MetadataProvenance::ProcessApplicationId,
             std::move(display), alias ? DisplayNameProvenance::ExecutableBasename :
-            DisplayNameProvenance::PackageRelativeApplicationId, std::move(alias));
+            DisplayNameProvenance::PackageRelativeApplicationId, std::move(alias),
+            std::move(source));
     }
     if (!path) {
         if (const auto* unavailable = std::get_if<MetadataUnavailable>(&image)) return *unavailable;

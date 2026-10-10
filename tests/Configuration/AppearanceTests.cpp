@@ -46,14 +46,14 @@ Configuration Original(char const* id) {
     return value;
 }
 void DomainAndFrames() {
-    Check(configuration_schema==3 && protocol_version==4 && frame_size==176,"Appearance and eligibility use bounded schema3/protocol4");
+    Check(configuration_schema==4 && protocol_version==5 && frame_size==176,"Appearance and eligibility use bounded schema4/protocol5");
     auto defaults=settings::MakeAppearance(Configuration{});
     Check(Configuration{}.material_style==MaterialStyle::raised &&
           defaults.material==knitting::Material::Raised && defaults.stitch==knitting::Stitch::Stockinette,
           "Fresh semantic defaults map directly to production raised stockinette");
-    Check(designs::ws_design_theme_count()==37,"All 37 original applications are available");
+    Check(designs::ws_design_theme_count()>0,"Catalogue applications are available");
     std::set<std::string> ids;
-    for (std::size_t i=0;i<37;++i) {
+    for (std::size_t i=0;i<designs::ws_design_theme_count();++i) {
         auto theme=designs::ws_design_theme_at(i);
         Check(theme && ids.insert(theme->id).second,"Every original theme has a unique stable ID");
         auto value=Original(theme->id);
@@ -96,7 +96,7 @@ void DomainAndFrames() {
               "All plain stitch styles are supported semantic values");
     }
     Configuration bad;
-    bad.design_selection=static_cast<DesignSelection>(3); Check(!Valid(bad),"Unsupported selection cannot auto-upgrade");
+    bad.design_selection=static_cast<DesignSelection>(4); Check(!Valid(bad),"Unsupported selection cannot auto-upgrade");
     bad={}; bad.design_id="finder"; Check(!Valid(bad),"Plain selection cannot silently carry an original ID");
     bad={}; bad.stitch_style=static_cast<StitchStyle>(3); Check(!Valid(bad),"Unsupported stitch is rejected");
     bad={}; bad.material_style=static_cast<MaterialStyle>(2); Check(!Valid(bad),"Unsupported material is rejected");
@@ -148,7 +148,7 @@ void Migration(std::filesystem::path const& root) {
     Write(storage.File(),invalid);
     Check(storage.Load().state==StorageState::corrupt && Bytes(storage.File())==invalid &&
           storage.Save({})!=0,"Invalid old values are preserved, not blanket-upgraded");
-    auto future=legacy; Put(future,4,4,4); Write(storage.File(),future);
+    auto future=legacy; Put(future,4,configuration_schema+1,4); Write(storage.File(),future);
     Check(storage.Load().state==StorageState::newer_schema && storage.Save({})!=0 &&
           Bytes(storage.File())==future,"Newer settings remain preserved and require explicit reset");
 }
@@ -221,7 +221,7 @@ void ProductionPreview() {
     settings::Preview worker([&](auto value){views.Add(std::move(value));});
     knitting::TileCache cache;
     rendering::KnitFrameSpec frame; frame.widthDip=400; frame.heightDip=140;
-    for (std::size_t i=0;i<37;++i) {
+    for (std::size_t i=0;i<designs::ws_design_theme_count();++i) {
         auto theme=designs::ws_design_theme_at(i);
         auto value=Original(theme->id); value.border_width_dip=16; value.stitch_rows=6; value.yarn_argb=theme->base_argb;
         auto generation=worker.Submit(value); auto result=views.Wait(generation);

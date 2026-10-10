@@ -232,14 +232,15 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             design_.Items().Append(item);
         };
         add_design(L"Plain knit","");
-        add_design(L"By app (preview: Finder example)","@by-app");
+        add_design(L"By app (authored or icon-derived)","@by-app");
+        add_design(L"Shared Zigzag (each app's colors)","@shared-zigzag");
         for (std::size_t i=0;i<designs::ws_design_theme_count();++i) {
             auto theme=designs::ws_design_theme_at(i);
             auto name=to_hstring(theme->name); add_design(name.c_str(),theme->id);
         }
         design_.SelectedIndex(0); layout.Children().Append(design_);
         auto mode_help=TextBlock{};
-        mode_help.Text(L"Original charts keep their authored stitches, material, corners and cuffs. Raised material uses stockinette; Pattern knit restores the selected plain stitch. By app shows a Finder example; app resolution is supplied by the host.");
+        mode_help.Text(L"Original charts keep their authored stitches, material, corners and cuffs. Raised material uses stockinette; Pattern knit restores the selected plain stitch. By app keeps mapped palettes and samples unknown app icons. Shared Zigzag samples each app's colors. Automatic previews are representative, not a selected app.");
         mode_help.TextWrapping(TextWrapping::Wrap); layout.Children().Append(mode_help);
         stitch_=ComboBox{}; stitch_.Header(box_value(L"Plain stitch")); stitch_.HorizontalAlignment(HorizontalAlignment::Stretch);
         for (auto name:{L"Stockinette",L"Rib",L"Garter"}) stitch_.Items().Append(box_value(name));
@@ -594,7 +595,8 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         configuration.paused=pause_.IsOn(); configuration.border_width_dip=static_cast<float>(width_.Value());
         auto tag=to_string(unbox_value<hstring>(design_.SelectedItem().as<ComboBoxItem>().Tag()));
         configuration.design_selection=tag.empty()?contracts::DesignSelection::plain:
-            tag=="@by-app"?contracts::DesignSelection::by_app:contracts::DesignSelection::original;
+            tag=="@by-app"?contracts::DesignSelection::by_app:
+            tag=="@shared-zigzag"?contracts::DesignSelection::shared_zigzag:contracts::DesignSelection::original;
         configuration.design_id=configuration.design_selection==contracts::DesignSelection::original?tag:"";
         configuration.stitch_style=static_cast<contracts::StitchStyle>(stitch_.SelectedIndex());
         configuration.material_style=static_cast<contracts::MaterialStyle>(material_.SelectedIndex());
@@ -649,9 +651,10 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             if (pause_.IsOn()!=configuration.paused) pause_.IsOn(configuration.paused);
             if (width_.Value()!=configuration.border_width_dip) width_.Value(configuration.border_width_dip);
             width_label_.Text(L"Border width: "+to_hstring(configuration.border_width_dip)+L" DIP");
-            int selected=configuration.design_selection==contracts::DesignSelection::by_app?1:0;
+            int selected=configuration.design_selection==contracts::DesignSelection::by_app?1:
+                configuration.design_selection==contracts::DesignSelection::shared_zigzag?2:0;
             if (configuration.design_selection==contracts::DesignSelection::original) {
-                for (std::uint32_t i=2;i<design_.Items().Size();++i) {
+                for (std::uint32_t i=3;i<design_.Items().Size();++i) {
                     auto item=design_.Items().GetAt(i).as<ComboBoxItem>();
                     if (to_string(unbox_value<hstring>(item.Tag()))==configuration.design_id) {
                         selected=static_cast<int>(i); break;
@@ -685,7 +688,10 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         } else {
             preview_label=L"Committed preview · revision "+to_hstring(configuration.revision);
         }
-        if (configuration.design_selection==contracts::DesignSelection::by_app) preview_label=preview_label+L" · Finder example";
+        if (configuration.design_selection==contracts::DesignSelection::by_app)
+            preview_label=preview_label+L" · representative Finder palette; actual apps differ";
+        else if (configuration.design_selection==contracts::DesignSelection::shared_zigzag)
+            preview_label=preview_label+L" · representative yarn; each app uses its own icon colors";
         preview_status_.Text(preview_label);
         bool recovery=state.status==contracts::Status::recovery_required;
         EnableControls(state.connected&&!recovery);

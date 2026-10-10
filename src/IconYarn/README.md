@@ -1,8 +1,10 @@
 # IconYarn preparation contract
 
-This module is the portable sampling and bounded preparation portion of issue #10.
-It does not wire the Host, settings UI, application identity owner, resolver or renderer.
-Issue #10 remains incomplete until the integration after #9 and independent review.
+This module supplies portable sampling and bounded preparation for issue #10.
+The Host integrates its completion gate and worker with validated owner metadata,
+the shared resolver, and native knitting publication. Settings exposes a distinct
+persisted Shared Zigzag mode. Native acceptance and independent integration review
+are recorded separately in `docs\parity.md`.
 Portable consumers compile `IconPalette.cpp` and `Preparation.cpp` with C++20.
 Windows consumers add `WindowsIcon.cpp` and link `user32.lib`, `gdi32.lib`,
 `ole32.lib` and `windowscodecs.lib`; the standalone test project supplies these.
@@ -43,7 +45,7 @@ window titles, display names and basenames are not valid persistent salts.
 
 ## Resolver interoperability and precedence
 
-The Host may translate successful sampling to
+The Host translates successful sampling to
 `colorways::AutomaticAppearance{base_argb, contrast_argb, chart_name}`:
 copy `baseArgb`, copy `contrastArgb` for By App, and use
 `string(MotifName(StableMotif(canonicalAppIdentity)))` as the generated built-in motif.
@@ -92,6 +94,9 @@ the complete target token still guards acceptance. A changed icon/source require
 an incremented icon revision. Positive and negative results are cached identically.
 A retry after temporary unavailability is an explicit icon revision change, not a
 timer or automatic redraw-driven resubmission.
+The current Host does not watch files for same-path icon resource replacement.
+An executable-source path change invalidates the owner's sample; replacement
+at the same path is detected only after Host restart.
 
 Defaults: two workers, 32 pending jobs, 128 total subscriptions including completed
 results, 256 KiB charged pending bytes, 64 cache entries and 256 KiB charged cache

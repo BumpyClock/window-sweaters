@@ -1,6 +1,6 @@
 # Configuration contract
 
-`contracts::Configuration` schema 3 contains semantic settings, not target handles,
+`contracts::Configuration` schema 4 contains semantic settings, not target handles,
 tile indexes, cache keys, or renderer output:
 
 | Field | Contract |
@@ -8,7 +8,7 @@ tile indexes, cache keys, or renderer output:
 | `revision` | Host-owned committed revision; mutations supply the expected revision |
 | `paused` | Pause decoration |
 | `border_width_dip` | Finite 2–64 DIP, default 16 |
-| `design_selection` | `plain`, `original`, or `by_app` |
+| `design_selection` | `plain`, `original`, `by_app`, or `shared_zigzag` |
 | `design_id` | Exact immutable catalogue theme ID, required only for `original` |
 | `stitch_style` | `stockinette`, `rib`, or `garter`; retained plain-stitch preference |
 | `material_style` | `plain` or `raised`; default `raised`, retained plain-material preference |
@@ -16,7 +16,7 @@ tile indexes, cache keys, or renderer output:
 | `yarn_argb` | Opaque ARGB, default `0xff4e8098` |
 | `eligibility` | Default-on plus explicit `AppIdentity`-keyed enable/disable exceptions |
 
-All 37 original catalogue IDs are accepted. Unknown IDs, unsupported enum values,
+Every catalogue ID (pinned originals and Windows-authored designs) is accepted. Unknown IDs, unsupported enum values,
 nonfinite/out-of-range floats, translucent yarn, and noncanonical selection/ID
 pairs are rejected. No truncation, clamping, or unsupported-value upgrade occurs.
 Original charts determine their own stitch/material from authored flags; plain
@@ -32,8 +32,8 @@ only application preferences. Neither operation overwrites the other feature.
 
 ## Storage and migration
 
-Schema 3 is length-framed: 12-byte little-endian magic/schema/total-length header,
-a bounded protocol-4 configuration record, then CRC-32 of all preceding bytes.
+Schema 4 is length-framed: 12-byte little-endian magic/schema/total-length header,
+a bounded protocol-5 configuration record, then CRC-32 of all preceding bytes.
 The file is limited to 1 MiB plus its 16-byte envelope. The configuration record
 contains appearance plus a tagged eligibility section; no snapshots, PNGs,
 target handles or process identities are persisted.
@@ -57,10 +57,12 @@ IDs are at most 63 ASCII bytes (`a`–`z`, `0`–`9`, `-`), a bounded UTF-8 subs
 containing the exact authored semantic IDs. Embedded NULs and nonzero padding are
 invalid. Reads validate the fixed header and aggregate file limit before allocation.
 
-Valid legacy schema-1/32-byte and schema-2/120-byte records migrate **in memory only**, preserving
-revision/pause/width and using appearance defaults. Startup and snapshot reads do
-not rewrite them. Migration sets eligibility to default-on with no exceptions.
-Schema 1 acquires raised stockinette; schema 2 retains every appearance field.
+Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3 records
+migrate **in memory only**. Startup and snapshot reads do not rewrite them.
+Schema 1 acquires raised stockinette. Schema 2 retains every appearance field;
+both acquire default-on eligibility with no exceptions. Schema 3 retains its
+appearance and application exceptions. Its supported selection values remain
+0–2; a legacy record cannot introduce the new value 3 by changing enum bytes.
 A successful validated mutation performs the ordinary staged,
 flushed atomic replacement; failed writes retain legacy bytes and committed
 state. Corrupt, unsupported old values, or newer-schema files remain untouched.
@@ -73,7 +75,7 @@ failed save or weakening permanent failed-write retention.
 
 ## IPC and acknowledgment
 
-Protocol version 4 retains the first 176 appearance bytes and adds typed,
+Protocol version 5 retains the first 176 appearance bytes and its typed,
 length-framed sections. The byte-mode pipe reads a 12-byte header, validates the
 total bound, then reads exactly that frame. The previous header/request/client/
 server/revision/schema/pause/width offsets are unchanged. Offset 76 now carries
@@ -85,6 +87,8 @@ an application snapshot; tag 4 the acknowledged operation. Required tags are
 operation-specific. Unknown/duplicate tags, unsupported operations, trailing
 data, invalid identities, duplicate edits, bad counts and unchecked lengths
 are rejected. The 1 MiB aggregate limit applies before payload allocation.
+The live endpoint accepts protocol 5 only. Protocol-4/schema-3 decoding exists
+solely for validated disk migration, not an alternate live mutation path.
 The existing three-second I/O budget covers the complete header/body read;
 partial byte progress does not restart the deadline.
 Pending mutations retain the existing 32-command limit and an additional

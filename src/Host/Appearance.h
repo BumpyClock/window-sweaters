@@ -3,6 +3,7 @@
 #include "..\Contracts\Configuration.h"
 #include "..\Colorways\Resolver.h"
 #include "..\Knitting\KnitTile.h"
+#include "..\Integration\IconAppearance.h"
 #include <stdexcept>
 #include <utility>
 
@@ -46,12 +47,11 @@ private:
     colorways::ResolutionError error_;
 };
 
-// Authored/plain resolver-to-renderer boundary; imported assets and generated
-// patterns require their own adapters and must not silently turn into plain yarn.
+// Imported personal PNGs require a validated asset adapter, never palette rewriting.
 inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& configuration,
     const colorways::ResolutionResult& resolution) {
-    if (configuration.design_selection != contracts::DesignSelection::by_app)
-        throw std::invalid_argument("ByApp appearance requires ByApp configuration");
+    if (!contracts::PerApplication(configuration.design_selection))
+        throw std::invalid_argument("Automatic appearance requires per-application configuration");
     auto tile = MakeAppearance(configuration);
     if (const auto* error = std::get_if<colorways::ResolutionError>(&resolution))
         throw AppearanceResolutionError(*error);
@@ -74,12 +74,20 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
         const auto* chart = designs::ws_design_chart_by_name(authored->name.c_str());
         if (!chart || authored->name.find('\0') != std::string::npos)
             throw AppearanceResolutionError(colorways::ResolutionError::UnknownChart);
-        if (resolved.chart_colors != colorways::ChartColorPolicy::LiteralAuthored)
-            throw std::invalid_argument("Host ByApp generated chart adaptation is unavailable");
-        tile.chart = knitting::MakeDesignChart(*chart, themeId.empty() ? authored->name : themeId);
+        if (resolved.chart_colors == colorways::ChartColorPolicy::GeneratedContrast) {
+            if (!resolved.contrast_argb)
+                throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
+            tile.chart = integration::MakeGeneratedChart(authored->name, *resolved.contrast_argb);
+        } else if (resolved.chart_colors == colorways::ChartColorPolicy::LiteralAuthored) {
+            tile.chart = knitting::MakeDesignChart(*chart, themeId.empty() ? authored->name : themeId);
+        } else throw std::invalid_argument("Unsupported authored chart color policy");
+    } else if (std::holds_alternative<colorways::ZigzagPattern>(resolved.pattern)) {
+        if (resolved.chart_colors != colorways::ChartColorPolicy::GeneratedContrast || !resolved.contrast_argb)
+            throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
+        tile.chart = integration::MakeGeneratedChart("zigzag", *resolved.contrast_argb);
     } else if (!std::holds_alternative<colorways::PlainPattern>(resolved.pattern) ||
                resolved.chart_colors != colorways::ChartColorPolicy::NoChart) {
-        throw std::invalid_argument("Host ByApp generated/personal pattern adaptation is unavailable");
+        throw std::invalid_argument("Host personal pattern adaptation is unavailable");
     }
     return knitting::NormalizeTileSpec(std::move(tile));
 }
@@ -89,11 +97,16 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
 // missing/unavailable owner stays hidden at the existing Host metadata gate; it
 // must not be fabricated as an empty identity to obtain a successful fallback.
 inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,
-    const applications::AppIdentity& application, const colorways::WindowsInstallRoots& roots) {
-    if (configuration.design_selection != contracts::DesignSelection::by_app)
+    const applications::AppIdentity& application, const colorways::WindowsInstallRoots& roots,
+    const std::optional<colorways::AutomaticAppearance>& automatic = {},
+    std::span<const colorways::PersonalRule> personal = {}) {
+    if (!contracts::PerApplication(configuration.design_selection))
         return MakeAppearance(configuration);
+    colorways::ResolverSettings settings;
+    if (configuration.design_selection == contracts::DesignSelection::shared_zigzag)
+        settings.global_pattern = colorways::ZigzagPattern{};
     return MakeByAppAppearance(configuration,
-        colorways::ResolveAppearance(&application, colorways::ResolverSettings{}, {}, roots));
+        colorways::ResolveAppearance(&application, settings, personal, roots, automatic));
 }
 
 } // namespace window_sweaters::host

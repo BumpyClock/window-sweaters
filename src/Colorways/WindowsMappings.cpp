@@ -10,6 +10,7 @@ namespace window_sweaters::colorways {
 namespace {
 // Public documentation/source reviewed 2026-10-09. These facts do not establish
 // which applications are installed, nor demonstrate their running windows.
+// Measured entries come from an installed package manifest where no public document names the AUMID.
 constexpr std::string_view teams_package =
     "https://learn.microsoft.com/en-us/microsoftteams/teams-client-vdi-requirements-deploy#remoteapp ; "
     "https://learn.microsoft.com/en-us/troubleshoot/microsoftteams/teams-administration/include-exclude-teams-from-antivirus-dlp";
@@ -28,6 +29,42 @@ constexpr std::string_view firefox =
     "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/browser/installer/windows/nsis/defines.nsi.in";
 constexpr std::string_view office =
     "https://support.microsoft.com/en-us/office/lifecycle/command-line-switches-for-microsoft-office-products";
+constexpr std::string_view edge =
+    "https://learn.microsoft.com/en-us/windows/configuration/assigned-access/configuration-file ; "
+    "https://learn.microsoft.com/en-us/windows/configuration/assigned-access/examples";
+constexpr std::string_view store =
+    "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/troubleshooting-microsoft-store-apps-download-failure ; "
+    "https://learn.microsoft.com/en-us/windows/configuration/store/find-aumid";
+constexpr std::string_view copilot =
+    "https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-windowsai#setcopilothardwarekey ; "
+    "https://learn.microsoft.com/en-us/windows/client-management/manage-windows-copilot";
+constexpr std::string_view github_copilot =
+    "Measured 2026-10-10 from the running standalone GitHub Copilot process image; "
+    "exact per-user installation only, not publisher attestation; "
+    "known-folder root: https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid";
+constexpr std::string_view zed =
+    "https://raw.githubusercontent.com/zed-industries/zed/main/crates/zed/resources/windows/zed.iss ; "
+    "https://raw.githubusercontent.com/zed-industries/zed/main/script/bundle-windows.ps1 ; "
+    "https://jrsoftware.org/ishelp/topic_setup_privilegesrequired.htm";
+constexpr std::string_view explorer =
+    "https://learn.microsoft.com/en-us/windows/configuration/assigned-access/examples ; "
+    "https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid";
+constexpr std::string_view provisioned =
+    "https://learn.microsoft.com/en-us/windows/application-management/remove-provisioned-apps-during-update";
+constexpr std::string_view calculator =
+    "https://learn.microsoft.com/en-us/windows/configuration/assigned-access/configuration-file ; "
+    "https://learn.microsoft.com/en-us/windows/configuration/assigned-access/examples";
+constexpr std::string_view weather =
+    "https://learn.microsoft.com/en-us/windows/configuration/assigned-access/quickstart-restricted-user-experience ; "
+    "https://learn.microsoft.com/en-us/windows/application-management/remove-provisioned-apps-during-update";
+constexpr std::string_view measured_package =
+    "Measured 2026-10-09 from the installed AppxManifest Application Id and Get-StartApps; "
+    "AUMID form: https://learn.microsoft.com/en-us/windows/configuration/store/find-aumid";
+constexpr std::string_view windows_app =
+    "https://learn.microsoft.com/en-us/windows-app/troubleshoot-basic";
+constexpr std::string_view windows_terminal =
+    "https://learn.microsoft.com/en-us/windows/terminal/install ; "
+    "https://raw.githubusercontent.com/microsoft/terminal/main/src/cascadia/CascadiaPackage/Package.appxmanifest";
 
 constexpr auto mappings = std::to_array<WindowsMapping>({
     {"microsoft-teams", WindowsRoot::PackageIdentity, L"MSTeams_8wekyb3d8bbwe!MSTeams", L"ms-teams.exe", teams_package},
@@ -48,6 +85,22 @@ constexpr auto mappings = std::to_array<WindowsMapping>({
     {"microsoft-powerpoint", WindowsRoot::ProgramFilesX86, L"Microsoft Office\\root\\Office16\\POWERPNT.EXE", L"POWERPNT.EXE", office},
     {"microsoft-outlook", WindowsRoot::ProgramFiles, L"Microsoft Office\\root\\Office16\\OUTLOOK.EXE", L"OUTLOOK.EXE", office},
     {"microsoft-outlook", WindowsRoot::ProgramFilesX86, L"Microsoft Office\\root\\Office16\\OUTLOOK.EXE", L"OUTLOOK.EXE", office},
+    {"microsoft-edge", WindowsRoot::ProgramFilesX86, L"Microsoft\\Edge\\Application\\msedge.exe", L"msedge.exe", edge},
+    {"microsoft-store", WindowsRoot::PackageIdentity, L"Microsoft.WindowsStore_8wekyb3d8bbwe!App", L"WinStore.App.exe", store},
+    {"microsoft-copilot", WindowsRoot::PackageIdentity, L"Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe!Microsoft.MicrosoftOfficeHub", L"copilotapp_proxy.exe", copilot},
+    {"github-copilot", WindowsRoot::LocalAppData, L"Programs\\GitHub Copilot\\github.exe", L"github.exe", github_copilot},
+    {"zed", WindowsRoot::LocalAppData, L"Programs\\Zed\\Zed.exe", L"Zed.exe", zed},
+    {"file-explorer", WindowsRoot::Windows, L"explorer.exe", L"explorer.exe", explorer},
+    {"microsoft-solitaire", WindowsRoot::PackageIdentity, L"Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App", L"Solitaire.exe", provisioned},
+    {"microsoft-photos", WindowsRoot::PackageIdentity, L"Microsoft.Windows.Photos_8wekyb3d8bbwe!App", L"Photos.exe", provisioned},
+    {"microsoft-photos", WindowsRoot::PackageIdentity, L"Microsoft.OneDrive.Photos_8wekyb3d8bbwe!OneDrive.App", L"OneDrive.App.exe", measured_package},
+    {"microsoft-to-do", WindowsRoot::PackageIdentity, L"Microsoft.Todos_8wekyb3d8bbwe!App", L"Todo.exe", measured_package},
+    {"clipchamp", WindowsRoot::PackageIdentity, L"Clipchamp.Clipchamp_yxz26nhyzhsrt!App", L"Clipchamp.exe", measured_package},
+    {"xbox", WindowsRoot::PackageIdentity, L"Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.App", L"XboxPcAppCE.exe", measured_package},
+    {"windows-calculator", WindowsRoot::PackageIdentity, L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", L"CalculatorApp.exe", calculator},
+    {"windows-app", WindowsRoot::PackageIdentity, L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!Windows365", L"Windows365.exe", windows_app},
+    {"msn-weather", WindowsRoot::PackageIdentity, L"Microsoft.BingWeather_8wekyb3d8bbwe!App", L"Microsoft.Msn.Weather.exe", weather},
+    {"windows-terminal", WindowsRoot::PackageIdentity, L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", L"WindowsTerminal.exe", windows_terminal},
 });
 
 constexpr auto coverage = std::to_array<ThemeCoverage>({
@@ -88,6 +141,24 @@ constexpr auto coverage = std::to_array<ThemeCoverage>({
     {"adobe-illustrator", WindowsCoverage::Unresolved, "Versioned Windows installation/publisher rule not verified."},
     {"terminal", WindowsCoverage::ManualOnly, "No Apple Terminal-to-cmd/PowerShell/Windows Terminal substitution."},
     {"cursor", WindowsCoverage::Unresolved, "Windows installation/publisher rule not verified."},
+    {"microsoft-edge", WindowsCoverage::Mapped, "Stable default Program Files (x86) path only; Beta/Dev/Canary, per-user and Store-stub AUMID unresolved."},
+    {"microsoft-store", WindowsCoverage::Mapped, "Exact Store package AUMID (Application Id App) only; no StoreDesktopExtension/StoreCLI mapping."},
+    {"microsoft-copilot", WindowsCoverage::Mapped, "Documented Copilot app AUMID (formerly the Microsoft 365 app) only; consumer Microsoft.Copilot Application Id is undocumented."},
+    {"github-copilot", WindowsCoverage::Mapped, "Exact per-user standalone process path measured locally; other installs, Code.exe, Windows Terminal and the CLI remain unmapped. No publisher-attestation claim."},
+    {"zed", WindowsCoverage::Mapped, "Stable per-user default path only; Preview/Nightly/dev/custom-directory installs unresolved."},
+    {"file-explorer", WindowsCoverage::Mapped, "Exact %windir%\\explorer.exe only; captioned Explorer dialogs share the theme; taskbar/desktop stay excluded by tracking filters."},
+    {"microsoft-solitaire", WindowsCoverage::Mapped, "Documented package family; Application Id App measured locally."},
+    {"pale-blue-dot", WindowsCoverage::Unresolved, "Only a sideloaded side-by-side package is known; no published package family or install path."},
+    {"get-started", WindowsCoverage::Unresolved, "Current builds host Get Started in the shared MicrosoftWindows.Client.CBS WebExperienceHost, not a unique package."},
+    {"steam", WindowsCoverage::Unresolved, "Main-window owner (steam.exe vs steamwebhelper.exe) and a readable Valve install-path document are unverified."},
+    {"clipchamp", WindowsCoverage::Mapped, "Exact package AUMID measured from the installed manifest; no official document names it."},
+    {"microsoft-to-do", WindowsCoverage::Mapped, "Exact package AUMID measured from the installed manifest; no official document names it."},
+    {"microsoft-photos", WindowsCoverage::Mapped, "Documented Windows Photos AUMID plus the measured OneDrive Photos AUMID (current Start menu Photos)."},
+    {"windows-calculator", WindowsCoverage::Mapped, "Exact inbox/Store package AUMID only; Calculator.Dev and other builds unmapped."},
+    {"xbox", WindowsCoverage::Mapped, "Main Xbox app AUMID measured from the installed manifest; Game Bar widgets and Microsoft.Xbox.AppL unmapped."},
+    {"windows-app", WindowsCoverage::Mapped, "Windows App shell (Application Id Windows365) only; ConnectionShell and remote session windows unmapped."},
+    {"msn-weather", WindowsCoverage::Mapped, "Exact documented package AUMID only."},
+    {"windows-terminal", WindowsCoverage::Mapped, "Stable packaged Terminal only; Preview, Canary and unpackaged builds unmapped."},
 });
 
 std::wstring_view RootPath(WindowsRoot root, const WindowsInstallRoots& roots) noexcept {
@@ -95,6 +166,7 @@ std::wstring_view RootPath(WindowsRoot root, const WindowsInstallRoots& roots) n
     case WindowsRoot::ProgramFiles: return roots.program_files;
     case WindowsRoot::ProgramFilesX86: return roots.program_files_x86;
     case WindowsRoot::LocalAppData: return roots.local_app_data;
+    case WindowsRoot::Windows: return roots.windows;
     default: return {};
     }
 }
@@ -117,7 +189,7 @@ std::wstring KnownFolder(REFKNOWNFOLDERID id) {
 
 WindowsInstallRoots QueryWindowsInstallRoots() {
     return {KnownFolder(FOLDERID_ProgramFiles), KnownFolder(FOLDERID_ProgramFilesX86),
-            KnownFolder(FOLDERID_LocalAppData)};
+            KnownFolder(FOLDERID_LocalAppData), KnownFolder(FOLDERID_Windows)};
 }
 
 std::span<const WindowsMapping> WindowsMappings() noexcept { return mappings; }

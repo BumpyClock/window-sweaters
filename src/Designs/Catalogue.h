@@ -34,7 +34,7 @@ typedef struct ChartView {
 typedef struct ThemeView {
     const char* id; // Stable semantic setting; never persist a catalogue index.
     const char* name;
-    const char* upstream_match; // macOS source metadata, not a Windows identity.
+    const char* upstream_match; // macOS source metadata, not a Windows identity; NULL if Windows-authored.
     const char* chart_name;
     uint32_t base_argb;
     const char* palette_description;
@@ -46,6 +46,7 @@ typedef struct ThemeAliasView {
     const char* theme_id;
 } ThemeAliasView;
 
+// Catalogue order: the pinned upstream entries, then Windows-authored entries (WindowsDesigns.inc).
 // All returned data has process lifetime, is immutable, and needs no initialization.
 size_t ws_design_chart_count(void);
 const ChartView* ws_design_chart_at(size_t index);

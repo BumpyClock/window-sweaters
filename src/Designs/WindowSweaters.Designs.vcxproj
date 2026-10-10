@@ -37,6 +37,7 @@
     <ClInclude Include="AuthoredCharts.inc" />
     <ClInclude Include="ChartViews.inc" />
     <ClInclude Include="ThemeViews.inc" />
+    <ClInclude Include="WindowsDesigns.inc" />
     <None Include="ImportCatalogue.py" />
     <None Include="PROVENANCE.txt" />
     <None Include="NOTICE.md" />

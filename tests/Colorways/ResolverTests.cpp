@@ -35,7 +35,7 @@ void Error(ResolutionResult result, ResolutionError expected) {
           std::get<ResolutionError>(result) == expected, "typed resolution error");
 }
 const WindowsInstallRoots roots{
-    L"C:\\Program Files", L"C:\\Program Files (x86)", L"C:\\Users\\Fixture\\AppData\\Local"
+    L"C:\\Program Files", L"C:\\Program Files (x86)", L"C:\\Users\\Fixture\\AppData\\Local", L"C:\\Windows"
 };
 const auto chrome = Executable(L"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe");
 const auto unknown = Executable(L"C:\\Tools\\Unknown.exe");
@@ -60,6 +60,9 @@ void KnownMappings() {
         {L"C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\POWERPNT.EXE", "microsoft-powerpoint", 0xffb9573d, "atelier-powerpoint"},
         {L"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE", "microsoft-outlook", 0xff176bb7, "atelier-outlook"},
         {L"C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE", "microsoft-outlook", 0xff176bb7, "atelier-outlook"},
+        {L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "microsoft-edge", 0xff1d5b93, "atelier-edge"},
+        {L"C:\\Users\\Fixture\\AppData\\Local\\Programs\\Zed\\Zed.exe", "zed", 0xff1d2026, "atelier-zed"},
+        {L"C:\\Windows\\explorer.exe", "file-explorer", 0xfff5eedc, "atelier-explorer"},
     };
     for (const auto& fixture : fixtures) {
         auto identity = Executable(fixture.path);
@@ -72,11 +75,36 @@ void KnownMappings() {
               !value.contrast_argb, "authored literal palette, not icon substitution");
         Check(value.mapping->provenance.starts_with("https://"), "mapping has public provenance");
     }
+    const auto copilotApp = Executable(L"C:\\Users\\Fixture\\AppData\\Local\\Programs\\GitHub Copilot\\github.exe");
+    const auto copilotAppearance = Appearance(ResolveAppearance(&copilotApp, {}, {}, roots));
+    Check(copilotAppearance.theme_id == "github-copilot" && copilotAppearance.base_argb == 0xff222733 &&
+        copilotAppearance.pattern == PatternChoice(AuthoredChart{"atelier-github-copilot"}),
+        "measured standalone GitHub Copilot path receives its literal authored design");
+    Check(copilotAppearance.mapping &&
+        copilotAppearance.mapping->provenance.starts_with("Measured 2026-10-10") &&
+        copilotAppearance.chart_colors == ChartColorPolicy::LiteralAuthored &&
+        copilotAppearance.color_source == ColorSource::AuthoredApplication,
+        "local path evidence stays distinct from public installer or publisher verification");
     auto teams = Package(L"MSTeams_8wekyb3d8bbwe!MSTeams");
     const auto packaged = Appearance(ResolveAppearance(&teams, {}));
     Check(packaged.base_argb == 0xff9283c1 && packaged.theme_id == "microsoft-teams", "documented new Teams package/publisher");
     Check(packaged.mapping && packaged.mapping->executable == L"ms-teams.exe", "new Teams executable provenance");
     Check(packaged.pattern == PatternChoice(AuthoredChart{"atelier-teams"}), "packaged and classic Teams same authored profile");
+    for (const auto& [aumid, theme] : {std::pair{L"Microsoft.WindowsStore_8wekyb3d8bbwe!App", "microsoft-store"},
+             std::pair{L"Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe!Microsoft.MicrosoftOfficeHub", "microsoft-copilot"},
+             std::pair{L"Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App", "microsoft-solitaire"},
+             std::pair{L"Microsoft.Windows.Photos_8wekyb3d8bbwe!App", "microsoft-photos"},
+             std::pair{L"Microsoft.OneDrive.Photos_8wekyb3d8bbwe!OneDrive.App", "microsoft-photos"},
+             std::pair{L"Microsoft.Todos_8wekyb3d8bbwe!App", "microsoft-to-do"},
+             std::pair{L"Clipchamp.Clipchamp_yxz26nhyzhsrt!App", "clipchamp"},
+             std::pair{L"Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.App", "xbox"},
+             std::pair{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "windows-calculator"},
+             std::pair{L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!Windows365", "windows-app"},
+             std::pair{L"Microsoft.BingWeather_8wekyb3d8bbwe!App", "msn-weather"},
+             std::pair{L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "windows-terminal"}}) {
+        auto identity = Package(aumid);
+        Check(Appearance(ResolveAppearance(&identity, {})).theme_id == theme, "documented Windows package AUMID mapping");
+    }
     auto mixed = Executable(L"c:\\PROGRAM FILES\\google\\CHROME\\application\\CHROME.EXE");
     Check(Appearance(ResolveAppearance(&mixed, {}, {}, roots)).theme_id == "google-chrome", "Windows path ordinal case matching");
     auto extended = Executable(L"\\\\?\\C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe");
@@ -94,6 +122,8 @@ void UnmappedAndSimilarNames() {
         L"C:\\Tools\\Teams.exe",
         L"C:\\Tools\\ms-teams.exe",
         L"C:\\Tools\\Code.exe",
+        L"C:\\Tools\\github.exe",
+        L"C:\\Users\\Fixture\\AppData\\Local\\Programs\\GitHub Copilot CLI\\github.exe",
         L"C:\\Tools\\Firefox.exe",
         L"C:\\Tools\\WINWORD.EXE",
         L"C:\\Program Files\\Google\\Chrome\\Application\\chrome-helper.exe",
@@ -106,7 +136,7 @@ void UnmappedAndSimilarNames() {
         L"C:\\Users\\Fixture\\AppData\\Local\\Microsoft\\Teams\\current\\TeamsHelper.exe",
         L"C:\\Users\\Fixture\\AppData\\Local\\Spotify\\Spotify.exe",
         L"C:\\Users\\Fixture\\AppData\\Local\\slack\\Slack.exe",
-        L"C:\\Windows\\explorer.exe",
+        L"C:\\Windows\\SysWOW64\\explorer.exe",
         L"C:\\Windows\\System32\\notepad.exe",
         L"C:\\Windows\\System32\\cmd.exe",
         L"\\\\server\\share\\Google\\Chrome\\Application\\chrome.exe"
@@ -121,6 +151,9 @@ void UnmappedAndSimilarNames() {
     const std::wstring_view packages[] = {
         L"MSTeams_aaaaaaaaaaaaa!MSTeams",
         L"MSTeams_8wekyb3d8bbwe!Helper",
+        L"Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe!App",
+        L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!ConnectionShell",
+        L"Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.WidgetsApp",
         L"msteams_8wekyb3d8bbwe!MSTeams",
         L"com.tinyspeck.slackdesktop_8yrtsj140pw4g!Slack",
         L"Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -327,7 +360,7 @@ void PersonalPixelsAndValidation() {
 
 void CoverageAndManualCatalogue() {
     const auto covered = WindowsThemeCoverage();
-    Check(covered.size() == 37, "all original themes have explicit Windows coverage");
+    Check(covered.size() == designs::ws_design_theme_count(), "every catalogue theme has explicit Windows coverage");
     std::size_t mapped = 0;
     for (std::size_t i = 0; i < covered.size(); ++i) {
         const auto& entry = covered[i];
@@ -343,9 +376,13 @@ void CoverageAndManualCatalogue() {
         Check(has_mapping == (entry.coverage == WindowsCoverage::Mapped), "coverage and implemented mapping agree");
         if (has_mapping) ++mapped;
     }
-    Check(mapped == 8 && WindowsMappings().size() == 18, "eight supported themes, eighteen exact variants");
+    Check(mapped > 0, "at least one theme maps to exact Windows variants");
+    for (const auto& map : WindowsMappings())
+        Check(std::any_of(covered.begin(), covered.end(), [&](const auto& entry) {
+                  return entry.theme_id == map.theme_id && entry.coverage == WindowsCoverage::Mapped;
+              }) && !map.provenance.empty(), "every exact variant belongs to a Mapped theme and cites provenance");
     const auto native = QueryWindowsInstallRoots();
-    Check(!native.program_files.empty() && !native.local_app_data.empty(), "native OS Known Folder boundary responsive; no application install probing");
+    Check(!native.program_files.empty() && !native.local_app_data.empty() && !native.windows.empty(), "native OS Known Folder boundary responsive; no application install probing");
 }
 } // namespace
 

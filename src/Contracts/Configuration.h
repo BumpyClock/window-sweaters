@@ -6,7 +6,7 @@
 #include "ApplicationPayload.h"
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint32_t configuration_schema = 3;
+inline constexpr std::uint32_t configuration_schema = 4;
 inline constexpr float minimum_width_dip = 2.0f;
 inline constexpr float maximum_width_dip = 64.0f;
 inline constexpr float default_width_dip = 16.0f;
@@ -14,7 +14,10 @@ inline constexpr float default_width_dip = 16.0f;
 inline constexpr std::size_t maximum_design_id_bytes = 63;
 inline constexpr float minimum_stitch_rows = 1.5f;
 inline constexpr float maximum_stitch_rows = 12.f;
-enum class DesignSelection : std::uint32_t { plain, original, by_app };
+enum class DesignSelection : std::uint32_t { plain, original, by_app, shared_zigzag };
+inline bool PerApplication(DesignSelection selection) noexcept {
+    return selection == DesignSelection::by_app || selection == DesignSelection::shared_zigzag;
+}
 enum class StitchStyle : std::uint32_t { stockinette, rib, garter };
 enum class MaterialStyle : std::uint32_t { plain, raised };
 
@@ -36,7 +39,7 @@ struct Configuration {
 inline bool Valid(Configuration const& value) noexcept {
     return value.schema == configuration_schema && BoundedPreferences(value.eligibility) && std::isfinite(value.border_width_dip) &&
         value.border_width_dip >= minimum_width_dip && value.border_width_dip <= maximum_width_dip &&
-        value.design_selection <= DesignSelection::by_app && value.stitch_style <= StitchStyle::garter &&
+        value.design_selection <= DesignSelection::shared_zigzag && value.stitch_style <= StitchStyle::garter &&
         value.material_style <= MaterialStyle::raised &&
         std::isfinite(value.stitch_rows) && value.stitch_rows >= minimum_stitch_rows &&
         value.stitch_rows <= maximum_stitch_rows && (value.yarn_argb >> 24) == 255 &&

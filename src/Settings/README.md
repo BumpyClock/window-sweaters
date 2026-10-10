@@ -1,7 +1,7 @@
 # Native appearance settings
 
-The native WinUI app includes pause, width, all 37 original application designs,
-plain/by-app selection, stockinette/rib/garter, pattern/raised material, stitch
+The native WinUI app includes pause, width, every catalogue application design,
+plain/by-app/shared-Zigzag selection, stockinette/rib/garter, pattern/raised material, stitch
 rows, and a native opaque-yarn `ColorPicker`. Selecting an original design loads
 its authored base color; later color edits replace that base yarn without
 changing the chart's contrast yarns. Selecting another design preserves width,
@@ -12,10 +12,16 @@ schema-1 settings acquire that appearance default on read-only migration.
 Existing schema-2 material choices, including explicit Pattern knit, stay unchanged.
 
 Original charts use their authored material/stitches/corners/cuffs. Those plain
-controls are disabled while an original/by-app design is selected. Raised plain
+controls are disabled while an original/by-app/shared-Zigzag design is selected. Raised plain
 material uses stockinette; returning to Pattern knit restores the retained plain
 stitch. By-app preview is explicitly a **Finder example**, not an application
 resolver. The host owns actual app resolution and application of these settings.
+Shared Zigzag has its own persisted selection and a fixed representative-yarn
+preview. The live host samples each eligible app's local executable icon.
+Mapped By app owners keep their authored palettes; unmapped owners may acquire
+stable icon-derived Zigzag, Picnic, or Twinkle. Shared Zigzag uses each app's
+winning base yarn and derives contrast from that base. Neither representative
+preview claims to show the selected application's icon or live border.
 
 Every user edit captures **all** current appearance inputs with the exact
 displayed committed configuration, server identity, and client lease. Rapid
@@ -45,8 +51,8 @@ A fresh admitted snapshot after host restart or client-lease expiry clears the
 transient expiry status and confirms its complete configuration. A later
 disconnect therefore retains the renewed host's latest appearance, not a
 previous instance's values. Publication/edit/confirmation metadata is local to
-Settings; protocol 4 preserves this local ordering contract while schema 3 adds
-persisted eligibility.
+Settings; protocol 5 preserves this local ordering contract while schema 4 adds
+the distinct shared mode and retains persisted eligibility.
 
 ## Applications
 
@@ -213,7 +219,7 @@ remaining platform qualification.
 App SDK 2.5.1, C++/WinRT 2.0.240405.15, and self-contained App SDK settings remain
 pinned. Release retains `NDEBUG`, `WINRT_NO_SOURCE_LOCATION`, and portable
 `/PDBALTPATH:%_PDB%` metadata. No UI launch, certificate operation, or Store
-installation is required for these checks. Host application of all 37 variants,
+installation is required for these checks. Host application of all catalogue variants,
 native visual verification, independent review, and Store qualification are
 separate gates; these settings alone do not complete issue #7.
 

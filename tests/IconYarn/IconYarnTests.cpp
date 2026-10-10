@@ -451,8 +451,19 @@ void Native() {
 
 } // namespace
 
-int main() {
+int wmain(int argc, wchar_t** argv) {
     try {
+        if (argc == 3 && std::wstring_view(argv[1]) == L"--fixture-icon") {
+            const IconInput fixture{"exe:KnownColorFixture", 0, argv[2]};
+            Require(Palette(SampleExecutableIcon(fixture, {}, std::chrono::steady_clock::now() + 500ms)) ==
+                SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "ordinary fixture executable must contain the known colorful PE icon");
+            std::cout << "PASS ordinary Fixture PE icon: base=0xffc04b4b contrast=0xfff6f0de; 500ms bound, no GUI\n";
+            return 0;
+        }
+        if (argc != 1) {
+            std::cerr << "Usage: IconYarnTests.exe [--fixture-icon <absolute Fixture.exe path>]\n";
+            return 2;
+        }
         Sampling();
         Lifetimes();
         Workers();

@@ -20,6 +20,7 @@
   <ItemGroup>
     <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
     <ClCompile Include="..\Knitting\KnitTile.cpp"/><ClCompile Include="..\Knitting\Chart.cpp"/><ClCompile Include="..\Rendering\KnitRaster.cpp"/><ClCompile Include="Preview.cpp"/>
+    <ClCompile Include="..\IconYarn\IconPalette.cpp"/>
     <ClInclude Include="Preview.h"/>
   </ItemGroup>
   <ItemGroup><ProjectReference Include="..\Configuration\WindowSweaters.Configuration.vcxproj"><Project>{2D727CBB-89D4-47D2-A630-0212AF370E26}</Project></ProjectReference></ItemGroup>

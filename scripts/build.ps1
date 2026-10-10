@@ -29,6 +29,7 @@ if ($IncludeContractTests) {
         'tests\Applications\ApplicationsTests.vcxproj',
         'tests\Integration\ConfigurationHostTests.vcxproj',
         'src\Host\HostAppearanceTests.vcxproj',
+        'tests\IconYarn\IconYarnTests.vcxproj',
         'tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj',
         'tests\Rendering\RenderQueueTests.vcxproj',
         'tests\Rendering\GraphicsRecoveryTests.vcxproj',

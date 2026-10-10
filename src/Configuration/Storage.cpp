@@ -68,7 +68,8 @@ LoadedConfiguration Storage::Load() const noexcept {
             result.state=StorageState::corrupt; return result;
         }
         auto schema=Get(header,4,4);
-        if (schema==3 && (read!=12 || Get(header,8,4)!=static_cast<std::uint64_t>(size.QuadPart))) {
+        if ((schema==3 || schema==4) &&
+            (read!=12 || Get(header,8,4)!=static_cast<std::uint64_t>(size.QuadPart))) {
             result.state=StorageState::corrupt; return result;
         }
         std::vector<std::byte> bytes(static_cast<std::size_t>(size.QuadPart));
@@ -78,11 +79,26 @@ LoadedConfiguration Storage::Load() const noexcept {
             result.state=StorageState::io_error; result.error=GetLastError(); return result;
         }
         if (read!=bytes.size()) { result.state=StorageState::corrupt; return result; }
-        if (schema==3) {
+        if (schema==3 || schema==4) {
             contracts::Message decoded;
             if (Get(bytes,0,4)!=0x31435357 ||
-                Get(bytes,bytes.size()-4,4)!=Crc(std::span(bytes).first(bytes.size()-4)) ||
-                !contracts::Decode(std::span(bytes).subspan(12,bytes.size()-16),decoded) ||
+                bytes.size()<12+contracts::frame_size+16+4 ||
+                Get(bytes,bytes.size()-4,4)!=Crc(std::span(bytes).first(bytes.size()-4))) {
+                result.state=StorageState::corrupt; return result;
+            }
+            // Only disk schema3 migrates protocol4. Network clients must speak protocol5.
+            // Preserve the original bytes until the next acknowledged atomic save.
+            if (schema==3) {
+                if (Get(bytes,12+4,2)!=4 || Get(bytes,12+64,4)!=3 ||
+                    Get(bytes,12+88,4)>static_cast<unsigned>(contracts::DesignSelection::by_app)) {
+                    result.state=StorageState::corrupt; return result;
+                }
+                Put(bytes,12+4,contracts::protocol_version,2);
+                Put(bytes,12+64,contracts::configuration_schema,4);
+            } else if (Get(bytes,12+64,4)!=schema) {
+                result.state=StorageState::corrupt; return result;
+            }
+            if (!contracts::Decode(std::span(bytes).subspan(12,bytes.size()-16),decoded) ||
                 decoded.operation!=contracts::Operation::snapshot || decoded.request_id ||
                 !contracts::EmptyIdentity(decoded.client) || !contracts::EmptyIdentity(decoded.server) ||
                 decoded.client_lease || decoded.error || decoded.status!=contracts::Status::saved) {
@@ -107,6 +123,9 @@ LoadedConfiguration Storage::Load() const noexcept {
         result.configuration.paused=Get(bytes,16,4)==1;
         result.configuration.border_width_dip=std::bit_cast<float>(static_cast<std::uint32_t>(Get(bytes,20,4)));
         if (!legacy) {
+            if (Get(bytes,24,4)>static_cast<unsigned>(contracts::DesignSelection::by_app)) {
+                result.configuration={}; result.state=StorageState::corrupt; return result;
+            }
             result.configuration.design_selection=static_cast<contracts::DesignSelection>(Get(bytes,24,4));
             result.configuration.stitch_style=static_cast<contracts::StitchStyle>(Get(bytes,28,4));
             result.configuration.material_style=static_cast<contracts::MaterialStyle>(Get(bytes,32,4));

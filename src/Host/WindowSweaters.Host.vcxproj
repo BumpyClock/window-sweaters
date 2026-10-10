@@ -38,6 +38,9 @@
     <ClCompile Include="HostContractTests.cpp" />
     <ClCompile Include="..\Colorways\Resolver.cpp" />
     <ClCompile Include="..\Colorways\WindowsMappings.cpp" />
+    <ClCompile Include="..\IconYarn\IconPalette.cpp" />
+    <ClCompile Include="..\IconYarn\Preparation.cpp" />
+    <ClCompile Include="..\IconYarn\WindowsIcon.cpp" />
     <ClCompile Include="..\Rendering\Overlay.cpp" />
     <ClCompile Include="..\Rendering\Stacking.cpp" />
     <ClCompile Include="..\Rendering\RenderQueue.cpp" />

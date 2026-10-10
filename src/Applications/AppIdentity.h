@@ -81,6 +81,13 @@ public:
     const std::wstring& DisplayName() const noexcept { return displayName_; }
     DisplayNameProvenance DisplayProvenance() const noexcept { return displayProvenance_; }
     const std::optional<std::wstring>& ExecutableAlias() const noexcept { return executableAlias_; }
+    std::wstring_view ExecutableSource() const noexcept {
+        if (identity_.Kind() == IdentityKind::NormalizedExecutablePath) return identity_.Key();
+        return executableSource_ ? std::wstring_view(*executableSource_) : std::wstring_view{};
+    }
+    // The worker may recover a packaged process image stripped by the window-AUMID
+    // adapter, but never associate a hosting executable with another app's identity.
+    AppMetadata WithVerifiedProcessSource(const AppMetadata& process) const;
     std::size_t RetainedBytes() const noexcept;
 
 private:
@@ -89,12 +96,14 @@ private:
     friend std::variant<AppMetadata, MetadataUnavailable> ResolveWindowOwnerMetadata(
         const PackagedIdentityQuery&, const std::variant<AppMetadata, MetadataUnavailable>&);
     AppMetadata(AppIdentity identity, MetadataProvenance provenance, std::wstring displayName,
-                DisplayNameProvenance displayProvenance, std::optional<std::wstring> executableAlias);
+                DisplayNameProvenance displayProvenance, std::optional<std::wstring> executableAlias,
+                std::optional<std::wstring> executableSource = {});
     AppIdentity identity_;
     MetadataProvenance provenance_;
     std::wstring displayName_;
     DisplayNameProvenance displayProvenance_;
     std::optional<std::wstring> executableAlias_;
+    std::optional<std::wstring> executableSource_;
 };
 
 using MetadataResult = std::variant<AppMetadata, MetadataUnavailable>;

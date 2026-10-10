@@ -10,7 +10,7 @@
 #include <objbase.h>
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint16_t protocol_version = 4;
+inline constexpr std::uint16_t protocol_version = 5;
 inline constexpr std::size_t frame_size = 176;
 inline constexpr std::size_t frame_header_size = 12;
 inline constexpr DWORD io_timeout_ms = 3000;

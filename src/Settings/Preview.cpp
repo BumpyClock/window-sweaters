@@ -1,4 +1,5 @@
 #include "Preview.h"
+#include "..\Integration\IconAppearance.h"
 #include <windows.h>
 #include <objbase.h>
 #include <condition_variable>
@@ -16,7 +17,10 @@ knitting::TileSpec MakeAppearance(contracts::Configuration const& configuration)
     tile.gauge.rows=configuration.stitch_rows;
     tile.stitch=static_cast<knitting::Stitch>(configuration.stitch_style);
     tile.material=static_cast<knitting::Material>(configuration.material_style);
-    if (configuration.design_selection!=contracts::DesignSelection::plain) {
+    if (configuration.design_selection==contracts::DesignSelection::shared_zigzag) {
+        tile.baseArgb=0xff769cc0u;
+        tile.chart=integration::MakeGeneratedChart("zigzag",icon_yarn::ZigzagContrast(tile.baseArgb));
+    } else if (configuration.design_selection!=contracts::DesignSelection::plain) {
         auto id=configuration.design_selection==contracts::DesignSelection::original
             ? configuration.design_id.c_str() : "finder";
         auto theme=designs::ws_design_theme_by_id(id);

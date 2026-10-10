@@ -276,11 +276,34 @@ void ResolverBoundaryAndFinishing() {
           tile.baseArgb == 0xff112233u && tile.chart->argbCells[0] == 0 && tile.chart->argbCells[2] == 0xfff2eee4u,
         "Explicit resolver chart outranks personal plain without losing personal base");
     settings.global_pattern = colorways::ZigzagPattern{};
-    Rejected([&] { (void)host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&chrome, settings, {}, roots)); });
+    tile = host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&chrome, settings, {}, roots));
+    Check(tile.chart && tile.chart->semanticId == "automatic-zigzag" &&
+          tile.baseArgb == 0xfff4f0e6u && tile.chart->argbCells[0] == colorways::ZigzagContrast(tile.baseArgb),
+        "Shared Zigzag adapts the winning authored provisional base with derived contrast");
     rules[0].pattern = colorways::PersonalChart{"valid-but-no-asset-adapter", 1};
     Rejected([&] { (void)host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&chrome, {}, rules, roots)); });
-    Rejected([&] { (void)host::MakeByAppAppearance(configuration,
-        colorways::ResolveAppearance(&unknown, {}, {}, roots, colorways::AutomaticAppearance{0xff112233u, {}, "twinkle"})); });
+    tile = host::MakeByAppAppearance(configuration,
+        colorways::ResolveAppearance(&unknown, {}, {}, roots, colorways::AutomaticAppearance{0xff112233u, {}, "twinkle"}));
+    Check(tile.chart && tile.chart->semanticId == "automatic-twinkle" && tile.chart->argbCells[14] ==
+        colorways::ZigzagContrast(0xff112233u), "Automatic motif adapts the sampled base and contrast");
+    auto shared = configuration;
+    shared.design_selection = contracts::DesignSelection::shared_zigzag;
+    const colorways::AutomaticAppearance sample{0xff769cc0u, 0xfff6f0deu, "picnic"};
+    std::array<colorways::PersonalRule, 1> personal{{{unknown, {{0xff112233u}, {}}, {}}}};
+    tile = host::MakeAppearance(shared, unknown, roots, sample, personal);
+    Check(tile.baseArgb == 0xff112233u && tile.chart->semanticId == "automatic-zigzag" &&
+        tile.chart->argbCells[0] == colorways::ZigzagContrast(0xff112233u),
+        "Runtime adapter resolver seam keeps personal base precedence and derives shared contrast from that winning base");
+    personal[0].colors.contrast_argb = 0xffaabbccu;
+    tile = host::MakeAppearance(shared, unknown, roots, sample, personal);
+    Check(tile.chart->argbCells[0] == 0xffaabbccu && tile.chart->argbCells[1] == 0,
+        "Explicit personal contrast survives generated adaptation with transparent base sentinels unchanged");
+    const auto mappedWithoutSample = host::MakeAppearance(configuration, chrome, roots);
+    const auto mappedWithSample = host::MakeAppearance(configuration, chrome, roots, sample);
+    Check(mappedWithSample.baseArgb == mappedWithoutSample.baseArgb &&
+        mappedWithSample.chart->argbCells == mappedWithoutSample.chart->argbCells &&
+        mappedWithSample.chart->appearance == mappedWithoutSample.chart->appearance,
+        "By App completed icon cannot recolor any literal mapped authored cells or finishing");
     for (const auto theme : {"notes", "calendar", "whatsapp", "messages"}) {
         settings = {};
         settings.design = colorways::SelectedTheme{theme};

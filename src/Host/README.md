@@ -62,7 +62,7 @@ border; it does not invent a rectangle or display a placeholder.
 
 The decoration is source-derived knitting, not a uniformly colored placeholder.
 Committed configuration selects yarn color, stitch rows, stockinette/rib/garter,
-plain/raised material, width, pause, and each of the 37 semantic original designs.
+plain/raised material, width, pause, and each semantic catalogue design.
 Original charts retain their authored flags, corners, cuffs, palettes, and material
 normalization; they are not recolored or exaggerated for visibility. Fine plain
 yarn may look nearly solid from a distance.
@@ -70,9 +70,10 @@ yarn may look nearly solid from a distance.
 The host and Settings preview use the same production knitting core. In By-app
 mode, each validated owner resolves through the reviewed Windows identity
 mappings. Authored charts retain their literal palettes and finishing flags.
-Unmatched owners use the resolver's stable identity-based Wool color and plain
-pattern; icon sampling is not integrated yet. Explicit plain or original design
-selection preserves the saved manual appearance instead of applying app rules.
+Unmatched owners initially use the resolver's stable identity-based Wool color
+and plain pattern, then may acquire locally sampled colors and a stable
+Zigzag, Picnic, or Twinkle motif. Explicit plain or original design selection
+preserves the saved manual appearance instead of applying app rules.
 The Settings Finder image remains a labelled example, not the selected owner's
 actual appearance.
 
@@ -82,6 +83,37 @@ retire that entry's render epoch before queue publication; unchanged owner facts
 and unrelated eligibility changes do not regenerate its yarn. Resolution errors
 are reported and suppress unsafe publication, rather than becoming a successful
 plain fallback.
+
+## Icon yarn and shared Zigzag
+
+Shared Zigzag is a distinct persisted mode. It samples every eligible owner,
+including mapped apps, and applies one shared motif with per-app colors.
+Ordinary By app mode does not sample mapped owners or alter their authored
+palettes. The resolver derives shared contrast from the winning base yarn;
+its personal-rule precedence remains available, but personal import persistence
+and UI are not integrated yet.
+
+The host supplies kind-prefixed canonical UTF-8 identity bytes. Executable keys
+use invariant uppercase; packaged AUMIDs remain exact. Icon input uses a verified
+transient process-image source, never a basename, window title, or foreign
+application content. A hosted application's missing source does not fall back
+to ApplicationFrameHost's icon.
+
+One completion gate and one bounded preparation worker belong to the Host.
+Owner-thread draining checks the full target lifetime, process birth, mode,
+eligibility, source, icon appearance epoch, and device generation. Only a changed
+resolved TileSpec advances the affected target's rendering. Closing, excluding,
+or superseding a target retires its subscription before late work can publish.
+Worker saturation receives at most four targeted retries; invalid/stopped work
+and unavailable or insufficient-color icons retain explicit fallback reasons.
+Positive and negative results stay retained by each current entry, so cache
+eviction alone cannot schedule new sampling or redraws.
+
+Local PE icon reads retain the module's 64 MiB executable, 256 KiB icon,
+500 ms cooperative deadline, and aggregate queue/cache bounds. They do not
+load executables as code or invoke shell handlers. There is no file watcher:
+a changed source path invalidates the sample, while same-path replacement
+requires Host restart. These limits can reject valid large or unusual app icons.
 
 ## Application eligibility
 

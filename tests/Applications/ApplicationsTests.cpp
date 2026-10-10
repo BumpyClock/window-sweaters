@@ -229,9 +229,14 @@ void WindowOwnerTests() {
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(denied, Metadata())) == denied,
         "property failure does not downgrade to root process executable");
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{L"bad"}, first.root)).reason ==
-        UnavailableReason::InvalidMetadata, "unverified malformed shell property fails closed");
+        UnavailableReason::OwnerUnverified, "non-package shell property on a frame host fails closed");
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{std::wstring(131, L'a')},
-        first.root)).reason == UnavailableReason::InvalidMetadata, "oversized property identity is bounded");
+        first.root)).reason == UnavailableReason::OwnerUnverified, "oversized property identity is bounded");
+    const auto browser = Metadata(L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe");
+    const auto explicitAumid = ResolveWindowOwnerMetadata(PackagedAumid{L"MSEdge.udd.Default"}, browser);
+    Check(std::get<AppMetadata>(explicitAumid).Identity() == std::get<AppMetadata>(browser).Identity() &&
+        std::get<AppMetadata>(explicitAumid).Provenance() == std::get<AppMetadata>(browser).Provenance(),
+        "unpackaged explicit window AUMID falls back to the verified root executable");
     const auto packagedRoot = ResolveMetadata(PackagedAumid{Package().Key()},
         ExecutablePath{L"C:\\Packages\\Calculator.exe"});
     const auto agreed = ResolveWindowOwnerMetadata(PackagedAumid{Package().Key()}, packagedRoot);
@@ -278,7 +283,7 @@ void WindowOwnerTests() {
     const std::wstring invalidUnicode = L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!" +
         std::wstring(1, wchar_t(0xD800));
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{invalidUnicode}, first.root)).reason ==
-        UnavailableReason::InvalidMetadata, "invalid UTF16 property never forms a persistent package key");
+        UnavailableReason::OwnerUnverified, "invalid UTF16 property never forms a persistent package key");
 
     const auto disabled = Apply(EligibilityPreferences{},
         {{}, false, {SetApplicationPreference{one.Identity(), false}}});

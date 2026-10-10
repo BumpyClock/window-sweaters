@@ -48,6 +48,19 @@ Every theme, including macOS-only designs, is available for manual selection.
 All views and nested data have process lifetime; no allocation, mutation,
 reload, shared active-chart singleton, or synchronization is needed.
 
+Windows-authored designs (WindowsDesigns.inc) are original to this port, not
+imported. The catalogue lists them after the pinned entries; the pinned
+arrays, counts, and ImportCatalogue.py --verify are unchanged. Their themes
+have upstream_match = NULL and no source aliases. Current set: Microsoft Edge,
+Microsoft Store, Microsoft Copilot, GitHub Copilot, Zed, File Explorer,
+Microsoft Solitaire Collection, Pale Blue Dot, Get Started, Steam, Clipchamp,
+Microsoft To Do, Microsoft Photos, Calculator, Xbox, Windows App, Weather,
+Windows Terminal.
+To add one: append rows/yarn, a chart view, and a theme view there, then a
+WindowsThemeCoverage entry (src/Colorways/WindowsMappings.cpp) with a
+documented mapping or an explicit limitation. Tests derive totals from the
+catalogue; only the pinned fixtures in tests/Designs are exact.
+
 Import/verify the exact reviewed source from a local Git checkout:
   py -3 src\Designs\ImportCatalogue.py <upstream-checkout>
   py -3 src\Designs\ImportCatalogue.py <upstream-checkout> --verify

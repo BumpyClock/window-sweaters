@@ -8,6 +8,7 @@
 #include "..\Configuration\Pipe.h"
 #include "..\Visibility\NativeVisibility.h"
 #include "..\Rendering\GraphicsRecovery.h"
+#include "..\IconYarn\WindowsIcon.h"
 
 #include <shellapi.h>
 #include <sddl.h>
@@ -54,6 +55,7 @@ constexpr wchar_t Usage[] =
     L"  Without overrides, test mode derives storage/IPC from an owned --probe-output parent.\n"
     L"  --probe-output requires a fixture/preview target; writes appearance snapshots and action counters.\n"
     L"  --inspect-preview <HWND>: read-only owner metadata and a lifetime-bound selection token.\n"
+    L"  --inspect-fixture <HWND>: read-only exact FixtureOnly startup selection diagnostics.\n"
     L"  --preview-target <HWND:PID:birth:fingerprint> (up to two): isolated explicit real-app preview.\n"
     L"  Preview requires --test-mode, --storage-dir, --endpoint-suffix and --probe-output; no production profile.\n"
     L"WindowSweaters.Host.exe --integration-contract  (scripted checks; no desktop launch)\n"
@@ -106,6 +108,7 @@ struct Options {
     bool help{};
     bool integrationContract{};
     WindowHandle inspectPreview{};
+    WindowHandle inspectFixture{};
     std::vector<PreviewSelection> preview;
     std::optional<WindowIdentity> fixtureIdentity;
     std::filesystem::path probeOutput;
@@ -154,6 +157,11 @@ bool ParseOptions(Options& options) {
             valid=count==3 && !options.inspectPreview && value && *value &&
                 *value<=std::numeric_limits<UINT_PTR>::max();
             if (valid) options.inspectPreview=static_cast<WindowHandle>(*value);
+        } else if (std::wcscmp(arguments[index], L"--inspect-fixture") == 0 && index+1<count) {
+            const auto value=ParseUnsigned(arguments[++index]);
+            valid=count==3 && !options.inspectFixture && value && *value &&
+                *value<=std::numeric_limits<UINT_PTR>::max();
+            if (valid) options.inspectFixture=static_cast<WindowHandle>(*value);
         } else if (std::wcscmp(arguments[index], L"--preview-target") == 0 && index+1<count) {
             const auto selection=ParsePreviewSelection(arguments[++index]);
             valid=selection && options.preview.size()<2;
@@ -273,19 +281,71 @@ int InspectPreview(WindowHandle hwnd) {
     return 0;
 }
 
-std::optional<WindowIdentity> SelectFixture(HWND target) {
-    const auto observation = WindowTracker::Query(target);
+struct FixtureSelectionDiagnostics {
+    unsigned observation{};
+    Eligibility eligibility{Eligibility::Uncertain};
+    DWORD error{};
+    int titleCharacters{};
+    const char* failure{"query"};
+    bool ordinary{};
+    bool fixtureClass{}, fixtureTitle{};
+    NativeQueryFailure query;
+};
+
+std::optional<WindowIdentity> SelectFixture(HWND target, FixtureSelectionDiagnostics* diagnostic = nullptr) {
+    const auto observation = WindowTracker::Query(target,diagnostic ? &diagnostic->query : nullptr);
+    if (diagnostic) {
+        diagnostic->observation=static_cast<unsigned>(observation.index());
+        diagnostic->error=diagnostic->query.error;
+    }
     Policy policy;
     policy.mode = TrackingMode::FixtureOnly;
     policy.fixtureTarget = reinterpret_cast<WindowHandle>(target);
     policy.hostPid = GetCurrentProcessId();
     const auto eligibility = Evaluate(observation, policy);
+    if (diagnostic) {
+        diagnostic->eligibility=eligibility;
+        diagnostic->failure=std::holds_alternative<AliveWindow>(observation) ? "eligibility" : "native_query";
+        if (const auto* alive=std::get_if<AliveWindow>(&observation))
+            diagnostic->ordinary=alive->ordinaryTopLevel;
+    }
     if (eligibility != Eligibility::Eligible && eligibility != Eligibility::Suppressed) return std::nullopt;
     const auto& snapshot = std::get<AliveWindow>(observation);
+    if (diagnostic) diagnostic->ordinary=snapshot.ordinaryTopLevel;
     wchar_t title[128]{};
-    if (!GetWindowTextW(target, title, static_cast<int>(std::size(title)))
-        || !MatchesFixtureSelection(snapshot, snapshot.identity, title)) return std::nullopt;
+    const auto characters=GetWindowTextW(target, title, static_cast<int>(std::size(title)));
+    if (diagnostic) {
+        diagnostic->titleCharacters=characters;
+        diagnostic->error=characters ? 0 : GetLastError();
+        diagnostic->failure=characters ? "fixture_class_or_title" : "title_query";
+        diagnostic->fixtureClass=snapshot.className==L"WindowSweaters.TestFixture";
+        diagnostic->fixtureTitle=std::wstring_view(title)==L"WindowSweaters Fixture";
+    }
+    if (!characters || !MatchesFixtureSelection(snapshot, snapshot.identity, title)) return std::nullopt;
+    if (diagnostic) diagnostic->failure="none";
     return snapshot.identity;
+}
+
+std::string FixtureSelectionJson(WindowHandle target, bool selected,
+    const FixtureSelectionDiagnostics& diagnostic) {
+    char text[768]{};
+    sprintf_s(text,"{\"target_hwnd\":%llu,\"selected\":%s,\"failure\":\"%s\","
+        "\"observation\":%u,\"eligibility\":%u,\"native_error\":%lu,\"native_stage\":%u,"
+        "\"native_hresult\":%ld,\"title_characters\":%d,\"ordinary\":%s,\"fixture_class\":%s,\"fixture_title\":%s}\n",
+        static_cast<unsigned long long>(target),selected ? "true" : "false",diagnostic.failure,
+        diagnostic.observation,static_cast<unsigned>(diagnostic.eligibility),
+        static_cast<unsigned long>(diagnostic.error),static_cast<unsigned>(diagnostic.query.stage),
+        static_cast<long>(diagnostic.query.result),diagnostic.titleCharacters,
+        diagnostic.ordinary ? "true" : "false",diagnostic.fixtureClass ? "true" : "false",
+        diagnostic.fixtureTitle ? "true" : "false");
+    return text;
+}
+
+int InspectFixture(WindowHandle target) {
+    FixtureSelectionDiagnostics diagnostic;
+    const auto selected=SelectFixture(reinterpret_cast<HWND>(target),&diagnostic);
+    std::printf("%s",FixtureSelectionJson(target,selected.has_value(),diagnostic).c_str());
+    return selected ? 0 : 3;
 }
 
 bool HelperImage(const wchar_t* name, bool fixtureOnly) noexcept {
@@ -344,6 +404,8 @@ public:
         if (FAILED(result)) return result;
         if (!SetTimer(window_, ConfigurationTimer, 100, nullptr)) return LastError();
         metadataWorker_=std::make_unique<window_sweaters::applications::MetadataWorker>();
+        iconWorker_=std::make_unique<window_sweaters::icon_yarn::PreparationWorker>(
+            window_sweaters::icon_yarn::SampleExecutableIcon);
         tracker_ = std::make_unique<WindowTracker>(window_, MakeTrackerConfig(options_));
         ActionBatch actions;
         if (!tracker_->Start(actions))
@@ -378,7 +440,7 @@ public:
         const Entry* entry = found == entries_.end() ? nullptr : found->second.get();
         const auto* tile = entry && entry->appearance ?
             std::get_if<window_sweaters::knitting::TileSpec>(&entry->appearance->result) : nullptr;
-        if (!tile && committed_.design_selection != window_sweaters::contracts::DesignSelection::by_app)
+        if (!tile && !window_sweaters::contracts::PerApplication(committed_.design_selection))
             tile = &appearance_;
         const auto* appearanceFailure = entry && entry->appearance ?
             std::get_if<AppearanceFailure>(&entry->appearance->result) : nullptr;
@@ -388,6 +450,7 @@ public:
         const auto queueStats = queue_ ? queue_->Status() : finalQueueStats_;
         const auto configurationStatus = configuration_.Status();
         const auto visibilityStats = visibility_ ? visibility_->Stats() : window_sweaters::visibility::NativeStats{};
+        const auto iconStats = iconWorker_ ? iconWorker_->Statistics() : finalIconStats_;
         output << "{\n"
             << "  \"host_pid\": " << GetCurrentProcessId() << ",\n"
             << "  \"host_hwnd\": " << reinterpret_cast<UINT_PTR>(window_) << ",\n"
@@ -429,6 +492,13 @@ public:
             << (committed_.design_selection == window_sweaters::contracts::DesignSelection::by_app &&
                 tile && !tile->chart ? "true" : "false") << ",\n"
             << "  \"appearance_resolutions\": " << counters_.appearanceResolutions
+            << ", \"icon_queries\": " << iconStats.queries << ", \"icon_cache_hits\": " << iconStats.cacheHits
+            << ", \"icon_pending_jobs\": " << iconStats.pendingJobs << ", \"icon_subscribers\": " << iconStats.subscribers
+            << ", \"icon_cache_entries\": " << iconStats.cacheEntries
+            << ", \"icon_accepted\": " << counters_.iconAccepted << ", \"icon_stale\": " << counters_.iconStale
+            << ", \"icon_recolors\": " << counters_.iconRecolors << ", \"icon_full\": " << counters_.iconFull
+            << ", \"icon_invalid\": " << counters_.iconInvalid
+            << ", \"icon_pending_bytes\": " << iconStats.pendingBytes << ", \"icon_cache_bytes\": " << iconStats.cacheBytes
             << ", \"appearance_errors\": " << counters_.appearanceErrors
             << ", \"appearance_error\": " << (appearanceFailure ? appearanceFailure->result : S_OK)
             << ", \"resolution_error\": " << (appearanceFailure && appearanceFailure->resolution ?
@@ -472,6 +542,12 @@ public:
                 << ",\"metadata_available\":" << (target->metadata &&
                     std::holds_alternative<window_sweaters::applications::AppMetadata>(*target->metadata) ? "true" : "false")
                 << ",\"appearance_error\":" << (failure ? failure->result : S_OK)
+                << ",\"icon_pending\":" << (target->iconPending ? "true" : "false")
+                << ",\"icon_sampled\":" << (target->iconPalette &&
+                    std::holds_alternative<window_sweaters::icon_yarn::SampledPalette>(*target->iconPalette) ? "true" : "false")
+                << ",\"icon_fallback\":" << (target->iconPalette &&
+                    std::holds_alternative<window_sweaters::icon_yarn::Fallback>(*target->iconPalette) ?
+                    static_cast<int>(std::get<window_sweaters::icon_yarn::Fallback>(*target->iconPalette).reason) : -1)
                 << ",\"overlay_hwnd\":" << reinterpret_cast<UINT_PTR>(target->overlay.Window())
                 << ",\"overlay_visible\":" << (target->presentationVisible ? "true" : "false") << "}";
             first=false;
@@ -546,12 +622,18 @@ private:
         std::uint64_t renderEpoch{};
         std::uint64_t eligibilityRevision{};
         bool eligibilityObserved{};
+        std::optional<window_sweaters::icon_yarn::IconInput> iconInput;
+        window_sweaters::icon_yarn::ImmutablePalette iconPalette;
+        std::uint64_t iconEpoch{1}, nextIconRetry{};
+        unsigned iconAttempts{};
+        bool iconPending{};
     };
     struct Counters {
         std::uint64_t creates{}, removes{}, geometryUpdates{}, draws{}, pureMoves{};
         std::uint64_t hides{}, shows{}, reorders{}, staleActions{}, placementFailures{};
         std::uint64_t uploads{}, renderErrors{}, staleResults{};
         std::uint64_t appearanceResolutions{}, appearanceErrors{};
+        std::uint64_t iconAccepted{}, iconStale{}, iconRecolors{}, iconFull{}, iconInvalid{};
     };
     static constexpr std::uint64_t DeviceGeneration = 1;
 
@@ -602,6 +684,7 @@ private:
                     if (wparam == ConfigurationTimer) {
                         host->PollConfiguration();
                         host->PollMetadata();
+                        host->PollIcons();
                         host->CheckQueue();
                         host->PollVisibility();
                         return 0;
@@ -718,6 +801,7 @@ private:
                 const bool epochChanged=entry->eligibilityObserved && entry->eligibilityRevision!=revision;
                 entry->eligibilityRevision=revision; entry->eligibilityObserved=true;
                 if (!allowedChanged && !epochChanged) continue;
+                ForgetIcon(*entry, true);
                 AdvanceRenderEpoch(*entry);
                 if (!committed_.eligibility.Allows(*entry->metadata)) Hide(*entry);
                 else entry->placementPending=entry->state.requestedVisible;
@@ -728,6 +812,7 @@ private:
         renderRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
+            ForgetIcon(*entry);
             Hide(*entry);
             entry->render.Invalidate();
             AdvanceRenderEpoch(*entry);
@@ -754,6 +839,7 @@ private:
         renderRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
+            ForgetIcon(*entry);
             Hide(*entry);
             entry->render.Invalidate();
             entry->placementPending = false;
@@ -803,6 +889,7 @@ private:
         renderRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
+            ForgetIcon(*entry);
             Hide(*entry);
             if (visibility_ && entry->visibilityRegistered) visibility_->UnregisterOverlay(entry->overlay.Window());
             entry->visibilityRegistered = false;
@@ -1073,7 +1160,7 @@ private:
 
     bool ResolveTargetAppearance(Entry& entry) {
         using namespace window_sweaters;
-        const bool byApp = committed_.design_selection == contracts::DesignSelection::by_app;
+        const bool byApp = contracts::PerApplication(committed_.design_selection);
         const auto* known = entry.metadata ? std::get_if<applications::AppMetadata>(entry.metadata.get()) : nullptr;
         if (byApp && !known) return false;
         if (entry.appearance && entry.appearance->revision == renderRevision_) {
@@ -1095,7 +1182,10 @@ private:
                 contract_->nextAppearanceFailure.reset();
                 appearance.result = host::MakeByAppAppearance(committed_, error);
             } else {
-                appearance.result = byApp ? host::MakeAppearance(committed_, known->Identity(), installRoots_) : appearance_;
+                const auto automatic = entry.iconInput && entry.iconPalette ?
+                    integration::AutomaticProposal(*entry.iconInput, *entry.iconPalette) :
+                    std::optional<colorways::AutomaticAppearance>{};
+                appearance.result = byApp ? host::MakeAppearance(committed_, known->Identity(), installRoots_, automatic) : appearance_;
             }
         } catch (const host::AppearanceResolutionError& error) {
             appearance.result = AppearanceFailure{E_INVALIDARG, error.Error()};
@@ -1117,12 +1207,13 @@ private:
         if (!ConfigurationCurrent()) return false;
         if (entry.state.excluded || !entry.state.requestedVisible || committed_.paused) return false;
         if (contract_ && !contract_->requireMetadata &&
-            committed_.design_selection != window_sweaters::contracts::DesignSelection::by_app)
+            !window_sweaters::contracts::PerApplication(committed_.design_selection))
             return ResolveTargetAppearance(entry);
         auto known=entry.metadata?std::get_if<window_sweaters::applications::AppMetadata>(entry.metadata.get()):nullptr;
         if (!known) return false;
         const auto revision=EligibilityRevision(known->Identity());
         if (entry.eligibilityObserved && revision!=entry.eligibilityRevision) {
+            ForgetIcon(entry, true);
             AdvanceRenderEpoch(entry);
             Hide(entry);
             entry.placementPending=entry.state.requestedVisible;
@@ -1194,15 +1285,26 @@ private:
                 auto refreshed=std::get_if<AppMetadata>(entry->metadata.get());
                 if ((previous!=nullptr)!=(refreshed!=nullptr) ||
                     (previous && refreshed && previous->Identity()!=refreshed->Identity())) {
+                    ForgetIcon(*entry, true);
                     AdvanceRenderEpoch(*entry); Hide(*entry); entry->eligibilityObserved=false;
                     entry->appearance.reset();
                 } else if (entry->appearance && entry->appearance->owner) {
                     entry->appearance->owner = entry->metadata;
                 }
             }
-            if (auto known=std::get_if<AppMetadata>(entry->metadata.get()))
+            if (auto known=std::get_if<AppMetadata>(entry->metadata.get())) {
                 entry->state.excluded=known->ExecutableAlias() &&
                     HelperImage(known->ExecutableAlias()->c_str(),options_.target!=nullptr);
+                if (entry->iconInput && CompareStringOrdinal(entry->iconInput->executablePath.data(),
+                    static_cast<int>(entry->iconInput->executablePath.size()), known->ExecutableSource().data(),
+                    static_cast<int>(known->ExecutableSource().size()), TRUE) != CSTR_EQUAL) {
+                    ForgetIcon(*entry, true);
+                    entry->appearance.reset();
+                    AdvanceRenderEpoch(*entry); Hide(*entry);
+                }
+            }
+            if (entry->state.excluded || !committed_.eligibility.Allows(*entry->metadata))
+                ForgetIcon(*entry, true);
             if (EligibleNow(*entry)) entry->placementPending=true;
             else Hide(*entry);
             changed=true;
@@ -1223,6 +1325,138 @@ private:
             --budget;
         }
         if (changed) { PublishApplications(); probeDirty_=true; }
+        RetryPlacement();
+    }
+
+    void ForgetIcon(Entry& entry, bool discard = false) {
+        iconGate_.Forget(entry.state.target.hwnd);
+        if (iconWorker_) iconWorker_->Forget(entry.state.target.hwnd);
+        if (entry.iconEpoch == UINT64_MAX) throw std::overflow_error("Icon appearance epoch exhausted");
+        ++entry.iconEpoch;
+        entry.iconPending = false;
+        entry.iconAttempts = 0;
+        entry.nextIconRetry = 0;
+        if (discard) { entry.iconInput.reset(); entry.iconPalette.reset(); }
+    }
+
+    std::optional<window_sweaters::icon_yarn::WorkToken> CurrentIconToken(const Entry& entry) const {
+        using namespace window_sweaters;
+        const auto* owner = entry.metadata ? std::get_if<applications::AppMetadata>(entry.metadata.get()) : nullptr;
+        if (stopped_ || !contracts::PerApplication(committed_.design_selection) || !owner ||
+            entry.state.excluded || !entry.state.requestedVisible || committed_.paused ||
+            !committed_.eligibility.Allows(owner->Identity()) || !recovery_.CanRender(recovery_.Generation()) ||
+            Model().Current(entry.state.target.hwnd) != entry.state.target)
+            return {};
+        return icon_yarn::WorkToken{entry.state.target.hwnd, entry.state.target.processStart,
+            entry.state.target.generation, entry.iconEpoch, recovery_.Generation()};
+    }
+
+    // Both tiles came from the same immutable configuration and owner; only the
+    // automatic proposal changed. Compare the effective inputs before retiring pixels.
+    static bool SameAutomaticAppearance(const window_sweaters::knitting::TileSpec& a,
+        const window_sweaters::knitting::TileSpec& b) {
+        if (a.baseArgb != b.baseArgb || a.stitch != b.stitch || a.material != b.material ||
+            a.gauge.rows != b.gauge.rows || a.bandDip != b.bandDip) return false;
+        if (a.chart == b.chart) return true;
+        return a.chart && b.chart && a.chart->semanticId == b.chart->semanticId &&
+            a.chart->contentRevision == b.chart->contentRevision &&
+            a.chart->width == b.chart->width && a.chart->height == b.chart->height &&
+            a.chart->appearance == b.chart->appearance && a.chart->argbCells == b.chart->argbCells;
+    }
+
+    void PollIcons() {
+        using namespace window_sweaters;
+        if (!iconWorker_ || !ConfigurationCurrent()) return;
+        for (const auto& completion : iconWorker_->Drain()) {
+            const auto found = entries_.find(completion.request.Token().targetId);
+            auto* entry = found == entries_.end() ? nullptr : found->second.get();
+            const auto current = entry ? CurrentIconToken(*entry) : std::nullopt;
+            if (!entry || !entry->iconInput || *entry->iconInput != *completion.request.Input() ||
+                !iconGate_.Accept(completion, current)) {
+                ++counters_.iconStale;
+                if (entry && entry->iconPending && entry->iconEpoch == completion.request.Token().appearanceRevision)
+                    ForgetIcon(*entry);
+                continue;
+            }
+            entry->iconPending = false;
+            entry->iconPalette = completion.palette;
+            ++counters_.iconAccepted;
+            if (std::holds_alternative<icon_yarn::SampledPalette>(*completion.palette)) {
+                const auto* owner = std::get_if<applications::AppMetadata>(entry->metadata.get());
+                try {
+                    auto proposed = host::MakeAppearance(committed_, owner->Identity(), installRoots_,
+                        integration::AutomaticProposal(*entry->iconInput, *completion.palette));
+                    const auto* old = entry->appearance ?
+                        std::get_if<knitting::TileSpec>(&entry->appearance->result) : nullptr;
+                    if (!old || !SameAutomaticAppearance(*old, proposed)) {
+                        AdvanceRenderEpoch(*entry);
+                        Hide(*entry);
+                        entry->appearance = TargetAppearance{renderRevision_, entry->metadata, std::move(proposed)};
+                        entry->placementPending = entry->state.requestedVisible;
+                        ++counters_.iconRecolors;
+                    }
+                } catch (const std::exception&) {
+                    entry->iconPalette = std::make_shared<const icon_yarn::PaletteResult>(
+                        icon_yarn::Fallback{icon_yarn::FallbackReason::InvalidResource});
+                    ++counters_.iconInvalid;
+                    LogError(L"icon proposal rejected; stable provisional appearance retained", E_INVALIDARG);
+                }
+            }
+            probeDirty_ = true;
+        }
+        std::size_t budget = 8;
+        for (auto& [hwnd, entry] : entries_) {
+            (void)hwnd;
+            auto current = CurrentIconToken(*entry);
+            if (!current) {
+                if (entry->iconPending) ForgetIcon(*entry);
+                continue;
+            }
+            if (!budget || entry->iconPending || entry->iconPalette ||
+                entry->iconAttempts >= 4 || GetTickCount64() < entry->nextIconRetry) continue;
+            const auto& owner = std::get<applications::AppMetadata>(*entry->metadata);
+            // By App never needs to sample an authored owner. Shared Zigzag does.
+            if (committed_.design_selection == contracts::DesignSelection::by_app &&
+                colorways::MatchWindowsApplication(owner.Identity(), installRoots_)) continue;
+            auto input = integration::MakeIconInput(owner.Identity(), owner.ExecutableSource());
+            if (const auto* failure = std::get_if<icon_yarn::Fallback>(&input)) {
+                entry->iconPalette = std::make_shared<const icon_yarn::PaletteResult>(*failure);
+                ++counters_.iconInvalid; probeDirty_ = true;
+                LogError(L"icon identity/source rejected; stable provisional yarn retained", E_INVALIDARG);
+                continue;
+            }
+            entry->iconInput = std::move(std::get<icon_yarn::IconInput>(input));
+            auto request = iconGate_.Begin(*current, *entry->iconInput);
+            ++entry->iconAttempts;
+            --budget;
+            if (!request) {
+                entry->iconPalette = std::make_shared<const icon_yarn::PaletteResult>(
+                    icon_yarn::Fallback{icon_yarn::FallbackReason::ResourceLimit});
+                ++counters_.iconInvalid; probeDirty_ = true;
+                LogError(L"icon request admission rejected; stable provisional yarn retained",
+                    HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA));
+                continue;
+            }
+            const auto submitted = iconWorker_->Submit(*request);
+            if (submitted == icon_yarn::SubmitStatus::Accepted ||
+                submitted == icon_yarn::SubmitStatus::Deduplicated || submitted == icon_yarn::SubmitStatus::Cached) {
+                entry->iconPending = true;
+            } else {
+                iconGate_.Forget(entry->state.target.hwnd);
+                if (submitted == icon_yarn::SubmitStatus::Full) {
+                    ++counters_.iconFull;
+                    entry->nextIconRetry = GetTickCount64() + 250 * entry->iconAttempts;
+                    if (entry->iconAttempts == 4)
+                        entry->iconPalette = std::make_shared<const icon_yarn::PaletteResult>(
+                            icon_yarn::Fallback{icon_yarn::FallbackReason::ResourceLimit});
+                } else {
+                    entry->iconPalette = std::make_shared<const icon_yarn::PaletteResult>(
+                        icon_yarn::Fallback{icon_yarn::FallbackReason::QueryFailed});
+                    ++counters_.iconInvalid;
+                }
+                probeDirty_ = true;
+            }
+        }
         RetryPlacement();
     }
     void Hide(Entry& entry) noexcept {
@@ -1617,6 +1851,7 @@ private:
                 std::erase(renderRetries_, action.target);
                 std::erase(visibilityOrder_, action.target);
                 if (visibility_ && entry->visibilityRegistered) visibility_->UnregisterOverlay(entry->overlay.Window());
+                ForgetIcon(*entry, true);
                 entries_.erase(action.target.hwnd);
                 metadataGate_.Forget(action.target.hwnd);
                 PublishApplications();
@@ -1629,6 +1864,7 @@ private:
                     continue;
                 }
                 if (!entry->state.requestedVisible) {
+                    if (entry->iconPending) ForgetIcon(*entry);
                     Hide(*entry);
                     RetireRenderRetry(*entry);
                 }
@@ -1716,6 +1952,12 @@ private:
             entry->placementPending = false;
         }
         configuration_.Quit();
+        iconGate_.Clear();
+        if (iconWorker_) {
+            iconWorker_->Stop();
+            finalIconStats_ = iconWorker_->Statistics();
+            iconWorker_.reset();
+        }
         if (metadataWorker_) {
             for (auto const& retirement:metadataWorker_->Stop()) metadataGate_.Retire(retirement);
             metadataWorker_.reset();
@@ -1762,6 +2004,9 @@ private:
     std::uint64_t renderRevision_{};
     window_sweaters::applications::CompletionGate metadataGate_;
     std::unique_ptr<window_sweaters::applications::MetadataWorker> metadataWorker_;
+    window_sweaters::icon_yarn::CompletionGate iconGate_;
+    std::unique_ptr<window_sweaters::icon_yarn::PreparationWorker> iconWorker_;
+    window_sweaters::icon_yarn::PreparationStatistics finalIconStats_;
     ContractState* contract_{};
     HWND window_{};
     GraphicsDevice graphics_;
@@ -1846,6 +2091,13 @@ void Host::RunConsumerContracts() {
         nullptr, host.instance_, &host);
     require(host.window_ != nullptr && SUCCEEDED(host.graphics_.Initialize()),
         "Consumer contract native receiver and graphics");
+    FixtureSelectionDiagnostics invalidSelection;
+    require(!SelectFixture(reinterpret_cast<HWND>(1),&invalidSelection) &&
+        invalidSelection.query.stage==NativeQueryStage::Window &&
+        invalidSelection.query.error==ERROR_INVALID_WINDOW_HANDLE &&
+        invalidSelection.eligibility==Eligibility::Destroyed &&
+        invalidSelection.failure==std::string_view("native_query"),
+        "Exact fixture selector reports native invalid-window stage without creating a target");
     // A ready slot held until the receiver consumes it forces a real >32 pending
     // burst, without replacing or blocking the production renderer with a stub.
     host.queueLimits_.maxReady = 1;
@@ -2238,6 +2490,236 @@ void Host::RunConsumerContracts() {
         appearanceChange(previousConfiguration);
         std::puts("PASS: actual ByApp exe/package authored palettes, stable unknown relaunch, manual override/mode races, target-only async owner epochs and bounded typed resolution failures");
     }
+    {
+        const auto previousConfiguration=host.committed_;
+        auto iconConfiguration=previousConfiguration;
+        iconConfiguration.border_width_dip=16.f;
+        appearanceChange(iconConfiguration);
+        wchar_t self[32768]{};
+        require(GetModuleFileNameW(nullptr,self,32768)!=0,"Native icon consumer locates its sibling fixture");
+        auto iconFixture=std::filesystem::path(self).parent_path()/L"IconYarnTests.exe";
+        if (!std::filesystem::is_regular_file(iconFixture)) {
+#ifdef NDEBUG
+            iconFixture=std::filesystem::current_path()/L"tests"/L"IconYarn"/L"build"/L"x64"/L"Release"/L"IconYarnTests.exe";
+#else
+            iconFixture=std::filesystem::current_path()/L"tests"/L"IconYarn"/L"build"/L"x64"/L"Debug"/L"IconYarnTests.exe";
+#endif
+        }
+        require(std::filesystem::is_regular_file(iconFixture),
+            "Build IconYarnTests before Host contracts: native PE fixture is required, not an optional model pass");
+        add(19501); add(19502);
+        const auto nativeOwner=appMetadata(iconFixture.wstring());
+        const auto mappedOwner=appMetadata(host.installRoots_.program_files+L"\\Google\\Chrome\\Application\\chrome.exe");
+        host.entries_.at(19501)->metadata=nativeOwner;
+        host.entries_.at(19502)->metadata=mappedOwner;
+        for (const auto handle:{19501,19502}) host.PlaceAndShow(host.entries_.at(handle)->state.target);
+        pump(prepared);
+        const auto mappedEpoch=host.entries_.at(19502)->renderEpoch;
+        const auto mappedPreparation=*host.entries_.at(19502)->render.prepared;
+        host.iconWorker_=std::make_unique<icon_yarn::PreparationWorker>(icon_yarn::SampleExecutableIcon);
+        struct StopIcons {
+            Host& host;
+            ~StopIcons() {
+                if (host.iconWorker_) { host.iconWorker_->Stop(); host.iconWorker_.reset(); }
+                host.iconGate_.Clear();
+            }
+        } stopIcons{host};
+        auto pollUntil=[&](const auto& predicate) {
+            const auto deadline=GetTickCount64()+10000;
+            while (!predicate() && GetTickCount64()<deadline) { host.PollIcons(); Sleep(5); }
+            require(predicate(),"Actual Host icon consumer reaches bounded completion");
+        };
+        pollUntil([&]{return host.entries_.at(19501)->iconPalette!=nullptr;});
+        pump(prepared);
+        const auto& native=*host.entries_.at(19501);
+        require(std::get<icon_yarn::SampledPalette>(*native.iconPalette)==
+            icon_yarn::SampledPalette{0xffc04b4bu,0xfff6f0deu} &&
+            native.render.prepared->tile.baseArgb==0xffc04b4bu && native.render.prepared->tile.chart &&
+            native.render.prepared->tile.chart->semanticId.starts_with("automatic-"),
+            "Actual Host bounded PE resource/WIC worker proposal reaches native generated tile and GPU publication");
+        require(host.entries_.at(19502)->renderEpoch==mappedEpoch &&
+            host::SamePreparation(*host.entries_.at(19502)->render.prepared,mappedPreparation) &&
+            !host.entries_.at(19502)->iconInput && !host.entries_.at(19502)->iconPending,
+            "By App mapped authored owner is never sampled or invalidated by an unrelated native icon completion");
+        const auto nativeSalt=native.iconInput->canonicalAppIdentity;
+        const auto nativeQueryCount=host.iconWorker_->Statistics().queries;
+        const auto nativeGeneration=native.state.target.generation;
+        host.ApplyBatch(contract.model.Observe(DestroyedWindow{19501},Dirty::Lifecycle,GetTickCount64()));
+        windows.at(19501).identity.processStart=9876;
+        host.ApplyBatch(contract.model.Observe(windows.at(19501),Dirty::Lifecycle,GetTickCount64()));
+        host.entries_.at(19501)->metadata=nativeOwner;
+        host.PlaceAndShow(host.entries_.at(19501)->state.target);
+        pollUntil([&]{return host.entries_.at(19501)->iconPalette!=nullptr;}); pump(prepared);
+        require(host.entries_.at(19501)->state.target.generation!=nativeGeneration &&
+            host.entries_.at(19501)->iconInput->canonicalAppIdentity==nativeSalt &&
+            host.entries_.at(19501)->render.prepared->tile.baseArgb==0xffc04b4bu &&
+            host.iconWorker_->Statistics().queries==nativeQueryCount && host.iconWorker_->Statistics().cacheHits>0,
+            "Native same-executable relaunch has a new target birth, identical salt/pixels and cached sampled colors");
+        host.iconWorker_->Stop(); host.iconWorker_.reset(); host.iconGate_.Clear();
+        {
+            icon_yarn::PreparationLimits limits;
+            limits.pendingBytes=1;
+            host.iconWorker_=std::make_unique<icon_yarn::PreparationWorker>(
+                [](const icon_yarn::IconInput&,std::stop_token,std::chrono::steady_clock::time_point) ->
+                    icon_yarn::PaletteResult { return icon_yarn::SampledPalette{0xff000000u,0xffffffffu}; },limits);
+            add(19503);
+            host.entries_.at(19503)->metadata=appMetadata(L"C:\\Private\\FullAdmission.exe");
+            host.PlaceAndShow(host.entries_.at(19503)->state.target); pump(prepared);
+            const auto stable=*host.entries_.at(19503)->render.prepared;
+            for (unsigned retry=0;retry<8;++retry) {
+                host.entries_.at(19503)->nextIconRetry=0;
+                host.PollIcons();
+            }
+            require(host.entries_.at(19503)->iconAttempts==4 && !host.entries_.at(19503)->iconPending &&
+                std::get<icon_yarn::Fallback>(*host.entries_.at(19503)->iconPalette).reason==icon_yarn::FallbackReason::ResourceLimit &&
+                !host.iconGate_.Size() && !host.iconWorker_->Statistics().queries &&
+                host::SamePreparation(*host.entries_.at(19503)->render.prepared,stable),
+                "Actual Host Full admission explicitly retires four bounded retries and retains unchanged provisional pixels, never a false palette");
+            host.iconWorker_->Stop();
+            add(19504);
+            host.entries_.at(19504)->metadata=appMetadata(L"C:\\Private\\StoppedAdmission.exe");
+            host.PlaceAndShow(host.entries_.at(19504)->state.target); pump(prepared);
+            host.PollIcons();
+            require(host.entries_.at(19504)->iconPalette && !host.entries_.at(19504)->iconPending &&
+                std::holds_alternative<icon_yarn::Fallback>(*host.entries_.at(19504)->iconPalette) &&
+                !host.iconGate_.Size() && !host.iconWorker_->Statistics().queries,
+                "Actual Host Stopped admission retires its gate and publishes only typed unavailable sampling state");
+            host.iconWorker_.reset();
+            for (const auto handle:{WindowHandle{19503},WindowHandle{19504}}) {
+                host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()));
+                windows.erase(handle);
+            }
+        }
+        struct IconLatch {
+            std::mutex mutex;
+            std::condition_variable wake;
+            bool entered{}, released{};
+            void Block(std::stop_token stop) {
+                std::unique_lock lock(mutex); entered=true; wake.notify_all();
+                std::stop_callback callback(stop,[&]{wake.notify_all();});
+                wake.wait(lock,[&]{return released || stop.stop_requested();});
+            }
+            bool Wait() {
+                std::unique_lock lock(mutex);
+                return wake.wait_for(lock,std::chrono::seconds(10),[&]{return entered;});
+            }
+            void Release() { std::lock_guard lock(mutex); released=true; wake.notify_all(); }
+        };
+        auto modeAll=[&](contracts::DesignSelection mode) {
+            auto snapshot=host.committed_; ++snapshot.revision;
+            snapshot.design_selection=mode; snapshot.design_id.clear();
+            host.ApplyConfiguration(snapshot);
+            for (const auto& [handle,entry]:host.entries_) {
+                (void)entry;
+                host.ApplyBatch(contract.model.Observe(windows.at(handle),Dirty::Appearance,GetTickCount64()));
+            }
+        };
+        for (unsigned scenario=0;scenario<4;++scenario) {
+            IconLatch latch;
+            icon_yarn::PreparationLimits limits; limits.cacheEntries=1;
+            host.iconWorker_=std::make_unique<icon_yarn::PreparationWorker>(
+                [&](const icon_yarn::IconInput& input,std::stop_token stop,
+                    std::chrono::steady_clock::time_point) -> icon_yarn::PaletteResult {
+                    if (input.executablePath.find(L"Slow")!=std::wstring::npos) latch.Block(stop);
+                    if (stop.stop_requested()) return icon_yarn::Fallback{icon_yarn::FallbackReason::Cancelled};
+                    return input.executablePath.find(L"Slow")!=std::wstring::npos ?
+                        icon_yarn::SampledPalette{0xff719d79u,0xfff6f0deu} :
+                        icon_yarn::SampledPalette{0xff769cc0u,0xfff6f0deu};
+                },limits);
+            struct ReleaseIcons {
+                IconLatch& latch;
+                Host& host;
+                ~ReleaseIcons() {
+                    latch.Release();
+                    if (host.iconWorker_) { host.iconWorker_->Stop(); host.iconWorker_.reset(); }
+                    host.iconGate_.Clear();
+                }
+            } releaseIcons{latch,host};
+            modeAll(contracts::DesignSelection::shared_zigzag);
+            add(19510); add(19511);
+            const auto slowOwner=appMetadata(L"C:\\Private\\Slow"+std::to_wstring(scenario)+L".exe");
+            const auto fastOwner=appMetadata(L"C:\\Private\\Fast"+std::to_wstring(scenario)+L".exe");
+            host.entries_.at(19510)->metadata=slowOwner;
+            host.entries_.at(19511)->metadata=fastOwner;
+            host.PlaceAndShow(host.entries_.at(19510)->state.target);
+            host.PlaceAndShow(host.entries_.at(19511)->state.target);
+            pump(prepared);
+            host.PollIcons();
+            require(latch.Wait(),"Actual icon worker reaches delayed owner source");
+            pollUntil([&]{return host.entries_.at(19511)->iconPalette!=nullptr;});
+            pump(prepared);
+            require(host.entries_.at(19510)->iconPending && !host.entries_.at(19510)->iconPalette &&
+                host.entries_.at(19511)->render.prepared->tile.baseArgb==0xff769cc0u &&
+                host.entries_.at(19511)->render.prepared->tile.chart->semanticId=="automatic-zigzag" &&
+                host.entries_.at(19501)->render.prepared->tile.baseArgb==0xffc04b4bu,
+                "Out-of-order owner completion publishes only its per-app shared Zigzag; slow source keeps provisional yarn");
+            if (scenario==0)
+                require(host.entries_.at(19502)->render.prepared->tile.baseArgb==0xff769cc0u &&
+                    host.entries_.at(19502)->render.prepared->tile.chart->semanticId=="automatic-zigzag",
+                    "Shared Zigzag samples mapped app color instead of retaining its authored By App palette");
+            const auto slowEpoch=host.entries_.at(19510)->renderEpoch;
+            const auto recolors=host.counters_.iconRecolors;
+            const auto stableQueries=host.iconWorker_->Statistics().queries;
+            if (scenario==0) {
+                const auto pendingEpoch=host.entries_.at(19510)->iconEpoch;
+                applications::EligibilityMutation unrelated;
+                unrelated.edits.emplace_back(applications::SetApplicationPreference{
+                    *applications::AppIdentity::FromExecutablePath(L"C:\\Private\\SavedNonRunning.exe"),false});
+                auto observation=host.committed_; ++observation.revision;
+                observation.eligibility=std::get<applications::EligibilityPreferences>(observation.eligibility.Apply(unrelated));
+                host.ApplyConfiguration(observation);
+                require(host.entries_.at(19510)->iconPending && host.entries_.at(19510)->iconEpoch==pendingEpoch &&
+                    host.iconWorker_->Statistics().queries==stableQueries,
+                    "Unrelated saved eligibility revision does not invalidate or resubmit an in-flight owner's icon work");
+                applications::EligibilityMutation disable;
+                disable.edits.emplace_back(applications::SetApplicationPreference{
+                    std::get<applications::AppMetadata>(*slowOwner).Identity(),false});
+                auto snapshot=host.committed_; ++snapshot.revision;
+                snapshot.eligibility=std::get<applications::EligibilityPreferences>(snapshot.eligibility.Apply(disable));
+                host.ApplyConfiguration(snapshot);
+            } else if (scenario==1) {
+                host.ApplyBatch(contract.model.Observe(DestroyedWindow{19510},Dirty::Lifecycle,GetTickCount64()));
+            } else if (scenario==2) {
+                modeAll(contracts::DesignSelection::plain);
+            } else {
+                const auto oldGeneration=host.recovery_.Generation();
+                require(host.GpuFailure(L"icon consumer device retirement",DXGI_ERROR_DEVICE_RESET,oldGeneration)==S_FALSE &&
+                    host.recovery_.Generation()>oldGeneration,
+                    "Actual graphics failure retires pending icon device generation before recovery");
+            }
+            latch.Release();
+            pollUntil([&]{return host.iconWorker_->Statistics().pendingJobs==0;});
+            host.PollIcons();
+            require(host.counters_.iconRecolors==recolors &&
+                (!host.entries_.contains(19510) || !host.entries_.at(19510)->iconPalette ||
+                    !std::holds_alternative<icon_yarn::SampledPalette>(*host.entries_.at(19510)->iconPalette)),
+                "Late icon after exclusion/destruction/manual mode/device retirement cannot recolor or resurrect owner decoration");
+            if (scenario==0)
+                require(!host.entries_.at(19510)->presentationVisible &&
+                    host.entries_.at(19510)->renderEpoch>slowEpoch,
+                    "Exclusion suppresses actual overlay and retires only affected owner's effective epoch");
+            if (scenario==3) {
+                host.ApplyBatch(contract.model.Observe(DestroyedWindow{19510},Dirty::Lifecycle,GetTickCount64()));
+                if (host.recoveryRetry_) host.RecoveryTick(host.recoveryRetry_->due);
+            }
+            require(host.recovery_.CanRender(host.recovery_.Generation()),"Icon race fixture restores real shared graphics before later contracts");
+            for (unsigned repeat=0;repeat<8;++repeat) host.PollIcons();
+            require(host.iconWorker_->Statistics().queries==stableQueries &&
+                host.iconWorker_->Statistics().cacheEntries<=1,
+                "Positive/negative per-owner results survive cache pressure without eviction-resubmission feedback");
+            for (const auto handle:{WindowHandle{19510},WindowHandle{19511}}) {
+                if (host.entries_.contains(handle))
+                    host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()));
+                windows.erase(handle);
+            }
+        }
+        for (const auto handle:{WindowHandle{19501},WindowHandle{19502}}) {
+            host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()));
+            windows.erase(handle);
+        }
+        appearanceChange(previousConfiguration);
+        std::puts("PASS: actual hidden Host native PE/WIC-to-GPU icon yarn, cached relaunch, shared per-app colors, out-of-order completion, exclusion/destruction/mode/device fences and no eviction feedback; tracker lifetimes are scripted, not desktop verification");
+    }
     auto appA=appMetadata(L"C:\\PrivateFixtures\\One\\app.exe");
     auto appB=appMetadata(L"C:\\PrivateFixtures\\Two\\app.exe");
     host.entries_.at(10001)->metadata=appA;
@@ -2535,6 +3017,7 @@ void Host::RunConsumerContracts() {
     const auto recoveredTarget = host.entries_.at(10001)->state.target;
     const auto obsoleteRequest = *host.entries_.at(10001)->render.prepared;
     const auto cacheBeforeRecovery = host.queue_->Status();
+    const auto recoveryAttemptsBeforeFault = host.recoveryAttempts_;
     require(!host.TrayCommand(SimulateGraphicsFailureCommand),
         "Production Host does not expose fixture graphics-failure command");
     require(host.GpuFailure(L"CPU WIC rejection is not a GPU fault", E_INVALIDARG,
@@ -2556,7 +3039,7 @@ void Host::RunConsumerContracts() {
         "Actual render queue and publication reject old device generation");
     const auto faultGeneration = host.recovery_.Generation();
     host.GpuFailure(L"coalesced second overlay fault", DXGI_ERROR_DEVICE_RESET, obsoleteRequest.deviceGeneration);
-    require(host.recovery_.Generation() == faultGeneration && host.recoveryAttempts_ == 0,
+    require(host.recovery_.Generation() == faultGeneration && host.recoveryAttempts_ == recoveryAttemptsBeforeFault,
         "Per-window faults coalesce into one shared recovery ticket");
     auto pausedDuringRecovery = host.committed_;
     ++pausedDuringRecovery.revision;
@@ -2572,7 +3055,7 @@ void Host::RunConsumerContracts() {
         require(host.recoveryRetry_.has_value(), "Bounded shared attempt has exactly one timer ticket");
         host.RecoveryTick(host.recoveryRetry_->due);
     }
-    require(host.recovery_.State() == RecoveryState::Ready && host.recoveryAttempts_ == 3 &&
+    require(host.recovery_.State() == RecoveryState::Ready && host.recoveryAttempts_ == recoveryAttemptsBeforeFault+3 &&
         !host.recoveryRetry_ && host.graphics_.Composition() &&
         !host.entries_.at(10001)->overlay.Window(),
         "Three injected attempt outcomes recreate real D3D/DComp once eligible, while Pause prevents overlay publication");
@@ -2781,6 +3264,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             return 0;
         }
         if (options.integrationContract) return window_sweaters::host::RunHostContractTests();
+        if (options.inspectFixture) return InspectFixture(options.inspectFixture);
         OSVERSIONINFOEXW minimum{sizeof(minimum)};
         minimum.dwMajorVersion = 10;
         minimum.dwBuildNumber = 22000;
@@ -2801,8 +3285,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             }
         }
         if (options.target) {
-            options.fixtureIdentity = SelectFixture(options.target);
+            FixtureSelectionDiagnostics diagnostic;
+            options.fixtureIdentity = SelectFixture(options.target,&diagnostic);
             if (!options.fixtureIdentity) {
+                const auto text=FixtureSelectionJson(reinterpret_cast<WindowHandle>(options.target),false,diagnostic);
+                std::fprintf(stderr,"%s",text.c_str());
+                if (options.testMode && !options.probeOutput.empty() && BindFixtureStorage(options)) {
+                    const auto path=std::filesystem::path(options.probeOutput.wstring()+L".selection.json");
+                    std::ofstream output(path,std::ios::binary|std::ios::trunc);
+                    output<<text;
+                    if (!output.good()) LogError(L"fixture startup selection diagnostic write",E_FAIL);
+                }
                 LogError(L"select exact foreign WindowSweaters Fixture target", E_INVALIDARG);
                 return 3;
             }

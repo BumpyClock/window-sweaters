@@ -701,13 +701,14 @@ void ResolverPrecedenceTest() {
 
 void CatalogueBoundsTest() {
     ImportCatalogue candidate;
-    for (unsigned i = 0; i != 81; ++i)
+    const auto import_capacity = maximum_effective_charts - designs::ws_design_chart_count();
+    for (std::size_t i = 0; i != import_capacity; ++i)
         candidate = Value(BuildCandidate(candidate,
-            AddChart{"chart-" + std::to_string(i), Value(DecodePng(Solid(0xff010100u + i)))}));
-    Check(candidate.Charts().size() == 81, "47 immutable built-ins plus81 imports reaches128 effective charts");
+            AddChart{"chart-" + std::to_string(i), Value(DecodePng(Solid(0xff010100u + static_cast<std::uint32_t>(i))))}));
+    Check(candidate.Charts().size() == import_capacity, "Immutable built-ins plus imports reach the effective chart limit");
     Reject(BuildCandidate(candidate, AddChart{"overflow", Value(DecodePng(Solid(0xff998877)))}),
         ErrorCode::CatalogueLimit, "Effective128-chart source bound enforced");
-    Check(candidate.Charts().size() == 81, "Failed catalogue overflow leaves committed data unchanged");
+    Check(candidate.Charts().size() == import_capacity, "Failed catalogue overflow leaves committed data unchanged");
     ImportCatalogue padded_catalogue;
     for (unsigned i = 0; i != 8; ++i) {
         const auto fixture_png = Solid(0xff112200u + i);

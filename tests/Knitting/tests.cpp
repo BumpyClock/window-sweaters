@@ -672,9 +672,9 @@ void ChartContracts() {
                     == ws_design_cell_argb(source, x, y);
         Require(exact && copied->width == source->width && copied->height == source->height
             && copied->appearance.flags == source->flags && copied->appearance.cornerArgb == source->corner_argb
-            && copied->appearance.cuffArgb == source->cuff_argb, "All 47 copied charts preserve cells, palette and flags");
+            && copied->appearance.cuffArgb == source->cuff_argb, "All catalogue charts preserve cells, palette and flags when copied");
         auto custom = TileSpec{}; custom.chart = copied;
-        Require(!cache.Get(custom)->image.pixels.empty(), "All 47 literal chart repeats render through production");
+        Require(!cache.Get(custom)->image.pixels.empty(), "All catalogue chart repeats render through production");
     }
     auto notes = ThemeSpec("notes");
     Require(std::none_of(notes.chart->argbCells.begin(), notes.chart->argbCells.end(),
@@ -850,7 +850,7 @@ void CatalogueFixtures(const std::filesystem::path& root) {
                 && image.height == static_cast<std::uint32_t>(160*scale)
                 && Alpha(Pixel(image, image.width/2, image.height/2)) == 0
                 && Alpha(Pixel(image, image.width/2, 2)) == 255,
-                "All 37 original themes render opaque bands and transparent content at 1x/2x");
+                "All catalogue themes render opaque bands and transparent content at 1x/2x");
             Premultiplied(image);
         }
         for (float scale : {1.f, 2.f})
@@ -869,7 +869,7 @@ void CatalogueFixtures(const std::filesystem::path& root) {
                             178+2*tolerance, 108+2*tolerance, std::max(0.f, r-1)+tolerance);
                         if (outer && !hole && Alpha(Pixel(image, x, y)) != 255) valid = false;
                     }
-                Require(valid, "All 37 source designs preserve opaque mitres at 1x/2x and square/rounded/clamped radii");
+                Require(valid, "All catalogue designs preserve opaque mitres at 1x/2x and square/rounded/clamped radii");
             }
     }
 
@@ -928,7 +928,7 @@ void CatalogueFixtures(const std::filesystem::path& root) {
         SavePng(KnitRaster::RenderFrame(frame, spec, cache),
             (output / (stitch == Stitch::Rib ? L"rib-2x.png" : L"garter-2x.png")).c_str());
     }
-    std::cout << "catalogue fixtures: 37 themes x 1x/2x, cache bytes=" << cache.ResidentBytes() << "\n";
+    std::cout << "catalogue fixtures: " << ws_design_theme_count() << " themes x 1x/2x, cache bytes=" << cache.ResidentBytes() << "\n";
 }
 
 void SpecialFinishContracts() {

@@ -42,6 +42,7 @@ public:
 // Window AUMIDs are explicit public property-store facts, not package registration/publisher proof.
 // A differing packaged root identity is ambiguous. Only a matching packaged process supplies an
 // executable alias; a frame host's executable is never presented as its hosted application's alias.
+// A window AUMID that names no package (an unpackaged app's explicit ID) defers to the root process.
 MetadataResult ResolveWindowOwnerMetadata(
     const PackagedIdentityQuery& windowApplicationId, const MetadataResult& rootProcess);
 MetadataResult QueryWindowOwnerMetadata(const TargetToken& expected, WindowOwnerSource& source);

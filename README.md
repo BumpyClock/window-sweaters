@@ -15,7 +15,7 @@ The target is Windows 11 x64, build 22000 or later. The tray host uses C++20, Wi
 
 Native projects use Visual Studio/MSBuild, not CMake. Install Visual Studio 2026 with the Desktop development with C++ workload and Windows SDK 10.0.26100.0. Projects pin the v145 platform toolset, C++20, and C17. Settings target the stable Windows App SDK 2.5.1.
 
-## Build the first slice
+## Build and run
 
 From PowerShell at the repository root:
 
@@ -36,13 +36,24 @@ identity; it must not select other desktop applications. Pure movement reuses
 decoration, actual resize suppresses it until settlement, and hidden/minimized
 windows can recover without losing their lifetime.
 
-Knitted texture upload, native settings integration, and broader desktop
-compatibility still have separate acceptance gates. Do not treat the compiled
-knitting core or settings executable as proof that those features are connected.
+Open Settings from the tray and select **By app** for authored Windows mappings
+and icon-derived colors, or **Shared Zigzag** for one motif with per-app colors.
+Manual original designs remain selectable. Settings saves choices through the
+host; closing Settings leaves decoration running.
+
+Exterior borders are intentionally hidden for minimized, maximized, fullscreen,
+off-desktop, locked, and uncertain targets. Restore a window to ordinary size to
+see its sweater. An isolated `--preview-target` launch decorates only its selected
+lifetimes, not every application; it is separate from normal no-argument launch.
+
+Native knitting, settings, exclusions, and app resolution are connected and have
+desktop evidence in the parity ledger. Physical input/desktop transitions,
+aggregate compositor budgets, and Store-installed execution remain separate
+qualification gates.
 
 ## Safety and scope
 
-Decorations use windows owned by this application. The port must not inject code, change another application's window styles, move its windows, or require administrator privileges. Desktop probes must be opt-in and restricted to test fixtures.
+Decorations use windows owned by this application. The port must not inject code, change another application's window styles, move its windows, or require administrator privileges. Desktop probes must be opt-in and restricted to fixtures or explicitly inspected preview lifetimes.
 
 Startup at sign-in is opt-in. Diagnostics remain local. Window titles, captured application content, telemetry uploads, and arbitrary startup commands are outside the design.
 

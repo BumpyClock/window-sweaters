@@ -44,6 +44,17 @@ struct TrackerStats {
     DWORD lastWin32Error{};
 };
 
+enum class NativeQueryStage {
+    None, Window, DpiContext, WindowProcess, OpenProcess, ProcessTimes, Dpi,
+    Class, Style, ExtendedStyle, FrameBounds, Cloak, WindowBounds, Monitor,
+    EmptyBounds, RevalidateWindow, RevalidateProcess, RevalidateClass
+};
+struct NativeQueryFailure {
+    NativeQueryStage stage{NativeQueryStage::None};
+    DWORD error{};
+    HRESULT result{S_OK};
+};
+
 // Receiver HWND, all calls, hook installation/removal and destruction belong to one UI thread.
 // No overlay ownership and no worker callbacks live here.
 class WindowTracker final {
@@ -63,7 +74,7 @@ public:
     const TrackerStats& Stats() const noexcept { return stats_; }
     const TrackingModel& Model() const noexcept { return model_; }
 
-    static Observation Query(HWND hwnd);
+    static Observation Query(HWND hwnd, NativeQueryFailure* failure = nullptr);
 
 private:
     struct Pending {
