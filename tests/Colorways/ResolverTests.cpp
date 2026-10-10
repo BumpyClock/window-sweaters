@@ -85,6 +85,38 @@ void KnownMappings() {
         copilotAppearance.chart_colors == ChartColorPolicy::LiteralAuthored &&
         copilotAppearance.color_source == ColorSource::AuthoredApplication,
         "local path evidence stays distinct from public installer or publisher verification");
+    const auto steamHelper = Executable(L"C:\\Program Files (x86)\\Steam\\bin\\cef\\cef.win64\\steamwebhelper.exe");
+    const auto steamAppearance = Appearance(ResolveAppearance(&steamHelper, {}, {}, roots));
+    Check(steamAppearance.theme_id == "steam" && steamAppearance.base_argb == 0xff233447 &&
+        steamAppearance.pattern == PatternChoice(AuthoredChart{"atelier-steam"}) &&
+        steamAppearance.mapping && steamAppearance.mapping->provenance.starts_with("Measured 2026-10-10"),
+        "measured Steam main-window owner receives its literal authored design");
+    const auto steamClient = Executable(L"C:\\Program Files (x86)\\Steam\\Steam.exe");
+    Check(Appearance(ResolveAppearance(&steamClient, {}, {}, roots)).theme_id != "steam",
+        "Steam.exe bootstrapper is not the measured window owner");
+    for (const auto path : {L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-126.10.7\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\figma\\APP-1\\figma.EXE"}) {
+        const auto figma = Executable(path);
+        const auto value = Appearance(ResolveAppearance(&figma, {}, {}, roots));
+        Check(value.theme_id == "figma" && value.base_argb == 0xffad7197 &&
+            value.pattern == PatternChoice(AuthoredChart{"atelier-figma"}) &&
+            value.mapping && value.mapping->provenance.starts_with("Measured 2026-10-10"),
+            "Squirrel app-<version> Figma owner receives its literal authored design");
+    }
+    for (const auto path : {L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\Update.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-.1\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-1.0-beta\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-1.0\\x\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-1.0\\Figma.exe.bak",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\FigmaAgent\\app-1.0\\Figma.exe",
+                            L"C:\\Users\\Fixture\\AppData\\Local\\Other\\Figma\\app-1.0\\Figma.exe",
+                            L"C:\\Program Files\\Figma\\app-1.0\\Figma.exe"}) {
+        const auto other = Executable(path);
+        Check(Appearance(ResolveAppearance(&other, {}, {}, roots)).theme_id != "figma",
+            "Squirrel matching admits only <dir>\\app-<digits.dots>\\<exe> under the mapped root");
+    }
     auto teams = Package(L"MSTeams_8wekyb3d8bbwe!MSTeams");
     const auto packaged = Appearance(ResolveAppearance(&teams, {}));
     Check(packaged.base_argb == 0xff9283c1 && packaged.theme_id == "microsoft-teams", "documented new Teams package/publisher");

@@ -71,9 +71,12 @@ bool ReadStyle(HWND hwnd, int index, LONG_PTR& style) noexcept {
     return style != 0 || GetLastError() == ERROR_SUCCESS;
 }
 
-// Single definition of "ordinary" for Query and the Probe prefilter. Packaged app frames use captioned WS_POPUP roots.
+// Single definition of "ordinary" for Query and the Probe prefilter. Packaged app frames and some
+// desktop apps (Steam's SDL_app) use WS_POPUP roots with a full resizable system frame.
 bool OrdinaryTopLevel(HWND hwnd, const wchar_t* className, LONG_PTR style, LONG_PTR extendedStyle) noexcept {
-    const bool supportedPopup = !(style & WS_POPUP) || std::wcscmp(className,L"ApplicationFrameWindow")==0;
+    const bool framedPopup = (style & (WS_SYSMENU | WS_THICKFRAME)) == (WS_SYSMENU | WS_THICKFRAME);
+    const bool supportedPopup = !(style & WS_POPUP) || framedPopup
+        || std::wcscmp(className,L"ApplicationFrameWindow")==0;
     return !(style & WS_CHILD) && supportedPopup && (style & WS_CAPTION) == WS_CAPTION
         && !(extendedStyle & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE))
         && GetAncestor(hwnd, GA_ROOT) == hwnd && !GetWindow(hwnd, GW_OWNER)

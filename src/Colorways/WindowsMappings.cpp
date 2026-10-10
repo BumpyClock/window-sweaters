@@ -42,6 +42,14 @@ constexpr std::string_view github_copilot =
     "Measured 2026-10-10 from the running standalone GitHub Copilot process image; "
     "exact per-user installation only, not publisher attestation; "
     "known-folder root: https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid";
+constexpr std::string_view steam =
+    "Measured 2026-10-10: the running Steam client's main window (class SDL_app) is owned by this "
+    "steamwebhelper.exe, not Steam.exe; exact default installation only, not publisher attestation; "
+    "known-folder root: https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid";
+constexpr std::string_view figma =
+    "Measured 2026-10-10: the running Figma window owner is %LOCALAPPDATA%\\Figma\\app-<version>\\Figma.exe; "
+    "layout: https://github.com/Squirrel/Squirrel.Windows/blob/develop/docs/using/install-process.md ; "
+    "not publisher attestation";
 constexpr std::string_view zed =
     "https://raw.githubusercontent.com/zed-industries/zed/main/crates/zed/resources/windows/zed.iss ; "
     "https://raw.githubusercontent.com/zed-industries/zed/main/script/bundle-windows.ps1 ; "
@@ -90,6 +98,8 @@ constexpr auto mappings = std::to_array<WindowsMapping>({
     {"microsoft-copilot", WindowsRoot::PackageIdentity, L"Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe!Microsoft.MicrosoftOfficeHub", L"copilotapp_proxy.exe", copilot},
     {"github-copilot", WindowsRoot::LocalAppData, L"Programs\\GitHub Copilot\\github.exe", L"github.exe", github_copilot},
     {"zed", WindowsRoot::LocalAppData, L"Programs\\Zed\\Zed.exe", L"Zed.exe", zed},
+    {"figma", WindowsRoot::LocalAppData, L"Figma\\Figma.exe", L"Figma.exe", figma, WindowsLayout::SquirrelVersioned},
+    {"steam", WindowsRoot::ProgramFilesX86, L"Steam\\bin\\cef\\cef.win64\\steamwebhelper.exe", L"steamwebhelper.exe", steam},
     {"file-explorer", WindowsRoot::Windows, L"explorer.exe", L"explorer.exe", explorer},
     {"microsoft-solitaire", WindowsRoot::PackageIdentity, L"Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App", L"Solitaire.exe", provisioned},
     {"microsoft-photos", WindowsRoot::PackageIdentity, L"Microsoft.Windows.Photos_8wekyb3d8bbwe!App", L"Photos.exe", provisioned},
@@ -111,7 +121,7 @@ constexpr auto coverage = std::to_array<ThemeCoverage>({
     {"spotify", WindowsCoverage::Unresolved, "Spotify.exe alone is insufficient; traditional path and Store publisher/AUMID rule not verified."},
     {"notion", WindowsCoverage::Unresolved, "Windows installation/publisher rule not verified."},
     {"whatsapp", WindowsCoverage::Unresolved, "Windows package/AUMID rule not verified."},
-    {"figma", WindowsCoverage::Unresolved, "Windows installation/publisher rule not verified."},
+    {"figma", WindowsCoverage::Mapped, "Per-user Squirrel install (%LOCALAPPDATA%\\Figma\\app-<version>\\Figma.exe) measured locally; machine-wide/custom installs unmapped. No publisher-attestation claim."},
     {"google-chrome", WindowsCoverage::Mapped, "Stable default paths only; beta/dev/canary/Chromium/portable unresolved."},
     {"paper", WindowsCoverage::ManualOnly, "No automatic Windows counterpart assigned."},
     {"chatgpt", WindowsCoverage::Unresolved, "Windows package/AUMID rule not verified."},
@@ -150,7 +160,7 @@ constexpr auto coverage = std::to_array<ThemeCoverage>({
     {"microsoft-solitaire", WindowsCoverage::Mapped, "Documented package family; Application Id App measured locally."},
     {"pale-blue-dot", WindowsCoverage::Unresolved, "Only a sideloaded side-by-side package is known; no published package family or install path."},
     {"get-started", WindowsCoverage::Unresolved, "Current builds host Get Started in the shared MicrosoftWindows.Client.CBS WebExperienceHost, not a unique package."},
-    {"steam", WindowsCoverage::Unresolved, "Main-window owner (steam.exe vs steamwebhelper.exe) and a readable Valve install-path document are unverified."},
+    {"steam", WindowsCoverage::Mapped, "Exact default Program Files (x86) steamwebhelper.exe path measured locally as the main-window owner; custom library/install roots unmapped. No publisher-attestation claim."},
     {"clipchamp", WindowsCoverage::Mapped, "Exact package AUMID measured from the installed manifest; no official document names it."},
     {"microsoft-to-do", WindowsCoverage::Mapped, "Exact package AUMID measured from the installed manifest; no official document names it."},
     {"microsoft-photos", WindowsCoverage::Mapped, "Documented Windows Photos AUMID plus the measured OneDrive Photos AUMID (current Start menu Photos)."},
@@ -175,6 +185,22 @@ bool PathEquals(std::wstring_view left, std::wstring_view right) noexcept {
     return left.size() == right.size() && left.size() <= 32767 &&
         CompareStringOrdinal(left.data(), static_cast<int>(left.size()),
                              right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
+}
+
+bool SquirrelPathEquals(std::wstring_view relative, std::wstring_view identity) noexcept {
+    constexpr std::wstring_view app = L"\\app-";
+    const auto split = identity.rfind(L'\\');
+    if (split == std::wstring_view::npos) return false;
+    const auto directory = identity.substr(0, split), executable = identity.substr(split + 1);
+    if (relative.size() < directory.size() + app.size() + 2 + executable.size()) return false;
+    const auto version = relative.substr(directory.size() + app.size(),
+        relative.size() - directory.size() - app.size() - 1 - executable.size());
+    return PathEquals(relative.substr(0, directory.size()), directory)
+        && PathEquals(relative.substr(directory.size(), app.size()), app)
+        && relative[relative.size() - executable.size() - 1] == L'\\'
+        && PathEquals(relative.substr(relative.size() - executable.size()), executable)
+        && version.front() >= L'0' && version.front() <= L'9'
+        && version.find_first_not_of(L"0123456789.") == std::wstring_view::npos;
 }
 
 std::wstring KnownFolder(REFKNOWNFOLDERID id) {
@@ -207,9 +233,12 @@ const WindowsMapping* MatchWindowsApplication(
         if (application.Kind() != applications::IdentityKind::NormalizedExecutablePath) continue;
         auto root = RootPath(mapping.root, roots);
         if (root.ends_with(L'\\')) root.remove_suffix(1);
-        if (root.empty() || key.size() != root.size() + 1 + mapping.identity.size()) continue;
-        if (key[root.size()] == L'\\' && PathEquals(key.substr(0, root.size()), root) &&
-            PathEquals(key.substr(root.size() + 1), mapping.identity)) return &mapping;
+        if (root.empty() || key.size() <= root.size() + 1 || key[root.size()] != L'\\' ||
+            !PathEquals(key.substr(0, root.size()), root)) continue;
+        const auto relative = key.substr(root.size() + 1);
+        if (mapping.layout == WindowsLayout::SquirrelVersioned ? SquirrelPathEquals(relative, mapping.identity)
+                                                               : PathEquals(relative, mapping.identity))
+            return &mapping;
     }
     return nullptr;
 }

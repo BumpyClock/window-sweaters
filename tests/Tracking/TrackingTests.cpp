@@ -495,7 +495,12 @@ void NativeApplicationFramePolicy() {
         {classes[0],WS_POPUP,0,nullptr,false},
         {classes[0],WS_POPUP|WS_CAPTION,0,owner.value,false},
         {classes[0],WS_CHILD|WS_CAPTION,0,owner.value,false},
-        {classes[1],WS_POPUP|WS_CAPTION,0,nullptr,false}
+        {classes[1],WS_POPUP|WS_CAPTION,0,nullptr,false},
+        {classes[1],WS_POPUP|WS_CAPTION|WS_SYSMENU,0,nullptr,false},
+        {classes[1],WS_POPUP|WS_CAPTION|WS_THICKFRAME,0,nullptr,false},
+        {classes[1],WS_POPUP|WS_OVERLAPPEDWINDOW,0,nullptr,true},
+        {classes[1],WS_POPUP|WS_OVERLAPPEDWINDOW,WS_EX_TOOLWINDOW,nullptr,false},
+        {classes[1],WS_POPUP|WS_OVERLAPPEDWINDOW,0,owner.value,false}
     };
     for (const auto& item:cases) {
         OwnedWindow window{CreateWindowExW(item.extended,item.name,L"",item.style,0,0,240,160,
@@ -521,8 +526,8 @@ void NativeApplicationFramePolicy() {
     Check(SetWindowLongPtrW(changing.value,GWL_EXSTYLE,previous)!=0 || GetLastError()==0,
         "Restore only owned hidden frame extended style");
     verify(changing.value,true);
-    std::cout<<"PASS: "<<assertions<<" native ApplicationFrameWindow style/query/gate assertions; "
-        "captioned ownerless popup exception only, hidden windows, no desktop app mutation\n";
+    std::cout<<"PASS: "<<assertions<<" native popup-frame style/query/gate assertions; "
+        "ApplicationFrameWindow or system-framed ownerless popups only, hidden windows, no desktop app mutation\n";
 }
 
 void NativeProbePrefilter() {

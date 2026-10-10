@@ -15,7 +15,8 @@ CRT-owned C++ allocations across application boundaries.
 `WindowSweaters.Host.exe` without `--target` discovers supported ordinary,
 captioned, unowned application windows. The tracker applies the same conservative
 eligibility policy during discovery, events, work validation, and reconciliation.
-Shell, popup, tool, child, host, fixture-helper and settings windows are excluded.
+Shell, popup, tool, child, host, fixture-helper and settings windows are excluded;
+popup roots with a full resizable system frame count as ordinary (see `src/Tracking/README.md`).
 The tracker excludes the live host PID and known helper classes. Before allocating
 an overlay, an MTA metadata worker validates the full target/process birth and
 supported window-owner properties. Verified executable metadata classifies helper

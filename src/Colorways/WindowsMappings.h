@@ -19,6 +19,9 @@ struct WindowsInstallRoots {
 // OS Known Folder queries only; cache outside the resolver. Failed roots remain empty.
 WindowsInstallRoots QueryWindowsInstallRoots();
 
+// Exact: identity is the full relative path. SquirrelVersioned: identity is <dir>\<exe>, matched as
+// <dir>\app-<digits and dots>\<exe> (Squirrel.Windows per-user layout).
+enum class WindowsLayout { Exact, SquirrelVersioned };
 struct WindowsMapping {
     std::string_view theme_id;
     WindowsRoot root;
@@ -26,9 +29,11 @@ struct WindowsMapping {
     std::wstring_view identity;
     std::wstring_view executable;
     std::string_view provenance; // Public document URL(s), or a dated local package measurement.
+    WindowsLayout layout = WindowsLayout::Exact;
 };
 std::span<const WindowsMapping> WindowsMappings() noexcept;
-// Matches only process-derived AppIdentity and exact documented installation locations.
+// Matches only process-derived AppIdentity and exact documented installation locations,
+// plus the Squirrel version segment for SquirrelVersioned mappings.
 // No basename, display-name, substring, shell AUMID, publisher-name or PID matching.
 // Path recognition is not Authenticode attestation; custom/portable installs are unresolved.
 const WindowsMapping* MatchWindowsApplication(

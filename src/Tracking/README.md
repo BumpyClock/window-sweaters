@@ -119,7 +119,9 @@ The pure reducer accepts either a complete `AliveWindow`, a
 `DestroyedWindow`, or an `UncertainWindow`. Observations are synchronous
 owner-thread samples, not delayed worker query results.
 
-Supported targets are ordinary, captioned, unowned, non-popup top-level windows.
+Supported targets are ordinary, captioned, unowned top-level windows. A `WS_POPUP`
+root qualifies only as an `ApplicationFrameWindow` or with a full system frame
+(`WS_SYSMENU | WS_THICKFRAME`), as Steam's `SDL_app` window has.
 Child, tool, no-activate, owned popup/dialog, menu, tooltip, shell desktop/taskbar,
 host/overlay/settings, excluded-PID/class, and production fixture-helper windows
 are unsupported. Inaccessible or incomplete identity/geometry queries are

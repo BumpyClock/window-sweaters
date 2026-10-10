@@ -112,16 +112,16 @@ void KnownOwners() {
         bool packaged;
         std::wstring_view identity;
         const char* theme;
-        std::uint32_t base, flags = 48, width = 12;
+        std::uint32_t base, flags = 48;
     };
     const Fixture originalFixtures[] = {
         {false, L"C:\\Users\\Fixture\\AppData\\Local\\Microsoft\\Teams\\current\\Teams.exe", "microsoft-teams", 0xff9283c1},
         {false, L"C:\\Program Files\\Microsoft VS Code\\Code.exe", "vs-code", 0xff237caf},
         {false, L"C:\\Program Files (x86)\\Microsoft VS Code\\Code.exe", "vs-code", 0xff237caf},
         {false, L"C:\\Users\\Fixture\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "vs-code", 0xff237caf},
-        {false, L"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "google-chrome", 0xfff4f0e6, 56, 112},
-        {false, L"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe", "google-chrome", 0xfff4f0e6, 56, 112},
-        {false, L"C:\\Users\\Fixture\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe", "google-chrome", 0xfff4f0e6, 56, 112},
+        {false, L"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "google-chrome", 0xfff4f0e6, 56},
+        {false, L"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe", "google-chrome", 0xfff4f0e6, 56},
+        {false, L"C:\\Users\\Fixture\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe", "google-chrome", 0xfff4f0e6, 56},
         {false, L"C:\\Program Files\\Mozilla Firefox\\firefox.exe", "firefox", 0xff643a9a},
         {false, L"C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe", "firefox", 0xff643a9a},
         {false, L"C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "microsoft-word", 0xff2855a1},
@@ -140,6 +140,8 @@ void KnownOwners() {
         {false, L"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "microsoft-edge", 0xff1d5b93},
         {false, L"C:\\Users\\Fixture\\AppData\\Local\\Programs\\Zed\\Zed.exe", "zed", 0xff1d2026},
         {false, L"C:\\Windows\\explorer.exe", "file-explorer", 0xfff5eedc, 56},
+        {false, L"C:\\Program Files (x86)\\Steam\\bin\\cef\\cef.win64\\steamwebhelper.exe", "steam", 0xff233447},
+        {false, L"C:\\Users\\Fixture\\AppData\\Local\\Figma\\app-126.10.7\\Figma.exe", "figma", 0xffad7197},
         {true, L"Microsoft.WindowsStore_8wekyb3d8bbwe!App", "microsoft-store", 0xff1e3b66},
         {true, L"Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe!Microsoft.MicrosoftOfficeHub", "microsoft-copilot", 0xfff3ebdc},
         {true, L"Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App", "microsoft-solitaire", 0xff3f7a58},
@@ -148,7 +150,7 @@ void KnownOwners() {
         {true, L"Microsoft.Todos_8wekyb3d8bbwe!App", "microsoft-to-do", 0xff3b73c8},
         {true, L"Clipchamp.Clipchamp_yxz26nhyzhsrt!App", "clipchamp", 0xff5b3fa0},
         {true, L"Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.App", "xbox", 0xff1c211d},
-        {true, L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "windows-calculator", 0xff3b3f46, 48, 16},
+        {true, L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "windows-calculator", 0xff3b3f46},
         {true, L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!Windows365", "windows-app", 0xff2b5fa8},
         {true, L"Microsoft.BingWeather_8wekyb3d8bbwe!App", "msn-weather", 0xff5b9fd6},
         {true, L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "windows-terminal", 0xff0c0c0c},
@@ -157,7 +159,8 @@ void KnownOwners() {
         const auto tile = host::MakeAppearance(ByAppConfiguration(), identity, roots);
         Check(tile.chart && tile.chart->semanticId == fixture.theme && tile.baseArgb == fixture.base,
             "Exact supported Windows owner uses its authored theme and base yarn");
-        Check(tile.chart->width == fixture.width && tile.chart->height == 6,
+        const auto authored = designs::ws_design_chart_by_name(designs::ws_design_theme_by_id(fixture.theme)->chart_name);
+        Check(tile.chart->width == authored->width && tile.chart->height == authored->height,
             "Authored repeat dimensions retained");
         Check(tile.chart->appearance.flags == fixture.flags && tile.chart->appearance.outsideAnchored &&
               tile.chart->appearance.cornerArgb == 0 && tile.chart->appearance.cuffArgb == 0,
