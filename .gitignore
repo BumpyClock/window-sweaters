@@ -1,9 +1,72 @@
+# Visual Studio and per-user settings
 .vs/
-out/
-**/obj/
-**/bin/
-artifacts/
-tests/**/outputs/
-tests/**/.run-*/
 *.user
 *.suo
+*.VC.db
+*.VC.db-shm
+*.VC.db-wal
+*.VC.opendb
+
+# Build output and intermediates
+out/
+build/
+obj/
+bin/
+Debug/
+Release/
+x64/
+x86/
+ARM64/
+artifacts/
+AppPackages/
+Generated Files/
+ipch/
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.idb
+*.ipch
+*.tlog
+*.lastbuildstate
+*.res
+*.exe
+*.dll
+*.lib
+*.exp
+*.winmd
+
+# Restored dependencies; keep packages.config and other manifests tracked
+/packages/
+.packages/
+*.nupkg
+*.snupkg
+
+# Generated packages and build logs
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+*.appxupload
+*.msixupload
+*.appxsym
+*.binlog
+*.log
+
+# Test and desktop-probe output
+tests/**/outputs/
+tests/**/.run-*/
+probe-results/
+TestResults/
+
+# Local signing material
+*.pfx
+*.p12
+
+# Editor backups and OS metadata
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
