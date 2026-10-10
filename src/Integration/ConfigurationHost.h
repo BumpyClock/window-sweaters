@@ -60,7 +60,10 @@ public:
     // Process status is sampled without waiting; no window/title/path diagnostics.
     HostStatus Status() const;
     contracts::Configuration Snapshot() const;
+    std::uint64_t Revision() const;
+    std::uint64_t EligibilityRevision(applications::AppIdentity const& identity) const;
     std::optional<contracts::Configuration> PollSnapshot(std::uint64_t observed_revision) const;
+    void PublishApplications(std::vector<applications::RunningApplicationWindow> windows);
     std::filesystem::path StorageDirectory() const;
     std::wstring Endpoint() const;
 

@@ -3,9 +3,10 @@
 #include <cstdint>
 #include <string>
 #include "..\Designs\Catalogue.h"
+#include "ApplicationPayload.h"
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint32_t configuration_schema = 2;
+inline constexpr std::uint32_t configuration_schema = 3;
 inline constexpr float minimum_width_dip = 2.0f;
 inline constexpr float maximum_width_dip = 64.0f;
 inline constexpr float default_width_dip = 16.0f;
@@ -28,11 +29,12 @@ struct Configuration {
     MaterialStyle material_style = MaterialStyle::raised;
     float stitch_rows = 6.f;
     std::uint32_t yarn_argb = 0xff4e8098u;
+    applications::EligibilityPreferences eligibility;
     bool operator==(Configuration const&) const = default;
 };
 
 inline bool Valid(Configuration const& value) noexcept {
-    return value.schema == configuration_schema && std::isfinite(value.border_width_dip) &&
+    return value.schema == configuration_schema && BoundedPreferences(value.eligibility) && std::isfinite(value.border_width_dip) &&
         value.border_width_dip >= minimum_width_dip && value.border_width_dip <= maximum_width_dip &&
         value.design_selection <= DesignSelection::by_app && value.stitch_style <= StitchStyle::garter &&
         value.material_style <= MaterialStyle::raised &&

@@ -1,5 +1,6 @@
 #include "Session.h"
 #include "Preview.h"
+#include "AppsPresentation.h"
 #include "..\Configuration\Pipe.h"
 #include "..\Configuration\Storage.h"
 #include <microsoft.ui.xaml.window.h>
@@ -14,6 +15,7 @@
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 #include <winrt/Windows.UI.h>
@@ -181,6 +183,31 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         AutomationProperties::SetName(status_,L"Connection and saved revision status");
         AutomationProperties::SetLiveSetting(status_,Automation::Peers::AutomationLiveSetting::Polite);
         layout.Children().Append(status_);
+        auto apps_heading=TextBlock{}; apps_heading.Text(L"Applications"); apps_heading.FontSize(22);
+        layout.Children().Append(apps_heading);
+        apps_status_=TextBlock{}; apps_status_.Text(L"Loading host-owned application list…");
+        apps_status_.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetName(apps_status_,L"Application choices status");
+        AutomationProperties::SetLiveSetting(apps_status_,Automation::Peers::AutomationLiveSetting::Polite);
+        layout.Children().Append(apps_status_);
+        auto app_actions=StackPanel{}; app_actions.Orientation(Orientation::Horizontal); app_actions.Spacing(12);
+        apps_all_on_=Button{}; apps_all_on_.Content(box_value(L"All apps on"));
+        apps_all_off_=Button{}; apps_all_off_.Content(box_value(L"All apps off"));
+        AutomationProperties::SetName(apps_all_on_,L"All applications on");
+        AutomationProperties::SetName(apps_all_off_,L"All applications off");
+        app_actions.Children().Append(apps_all_on_); app_actions.Children().Append(apps_all_off_);
+        layout.Children().Append(app_actions);
+        apps_default_=ToggleSwitch{}; apps_default_.Header(box_value(L"Default for newly discovered apps"));
+        apps_default_.OnContent(box_value(L"Enabled")); apps_default_.OffContent(box_value(L"Disabled"));
+        AutomationProperties::SetName(apps_default_,L"Default for new applications");
+        layout.Children().Append(apps_default_);
+        auto app_help=TextBlock{};
+        app_help.Text(L"All on/off also clears saved choices. Changing only the default preserves explicit choices. Identity comes from supported Windows properties, not publisher verification.");
+        app_help.TextWrapping(TextWrapping::Wrap); layout.Children().Append(app_help);
+        apps_list_=ListView{}; apps_list_.MaxHeight(340);
+        apps_list_.SelectionMode(ListViewSelectionMode::None);
+        AutomationProperties::SetName(apps_list_,L"Running applications and saved non-running choices");
+        layout.Children().Append(apps_list_);
         pause_=ToggleSwitch{}; pause_.Header(box_value(L"Pause decoration")); pause_.TabIndex(0);
         pause_.OnContent(box_value(L"Paused")); pause_.OffContent(box_value(L"Enabled"));
         AutomationProperties::SetName(pause_,L"Pause decoration");
@@ -236,9 +263,29 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         reset_=Button{}; reset_.Content(box_value(L"Reset preserved configuration…")); reset_.TabIndex(2);
         reset_.Visibility(Visibility::Collapsed); AutomationProperties::SetName(reset_,L"Reset preserved configuration");
         layout.Children().Append(reset_);
-        auto scroll=ScrollViewer{}; scroll.Content(layout); window_.Content(scroll);
+        scroll_=ScrollViewer{}; scroll_.Content(layout); window_.Content(scroll_);
         StartupDiagnostic(L"controls",S_OK,L"All native appearance controls and preview view constructed.");
         auto weak=get_weak();
+        scroll_.Loaded([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->Dispatch(L"apps-loaded",[&]{app->QueuePendingApps();});
+        });
+        scroll_.LayoutUpdated([weak](auto const&,auto const&) {
+            if (auto app=weak.get(); app && app->pending_apps_state_)
+                app->Dispatch(L"apps-layout-ready",[&]{app->QueuePendingApps();});
+        });
+        scroll_.Unloaded([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->presentation_ready_=false;
+        });
+        apps_all_on_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->Dispatch(L"apps-all-on",[&]{app->ChangeApps({true,true,{}});});
+        });
+        apps_all_off_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->Dispatch(L"apps-all-off",[&]{app->ChangeApps({false,true,{}});});
+        });
+        apps_default_.Toggled([weak](auto const&,auto const&) {
+            if (auto app=weak.get(); app && !app->updating_apps_)
+                app->Dispatch(L"apps-default-change",[&]{app->ChangeApps({app->apps_default_.IsOn(),false,{}});});
+        });
         pause_.Toggled([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
         width_.ValueChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
         design_.SelectionChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->DesignChanged(); });
@@ -251,6 +298,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             if (auto app=weak.get()) {
                 app->closed_=true;
                 app->session_->Stop();
+                if (app->apps_session_) app->apps_session_->Stop();
                 app->preview_->Stop();
                 if (app->activation_) { DestroyWindow(app->activation_); app->activation_=nullptr; }
             }
@@ -267,14 +315,22 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         auto dispatcher=make_weak(window_.DispatcherQueue());
         session_=std::make_unique<settings::Session>(options_,[weak,dispatcher](settings::ConnectionState state) {
             if (auto queue=dispatcher.get())
-                queue.TryEnqueue([weak,state=std::move(state)] { if (auto app=weak.get()) app->Render(state); });
+                queue.TryEnqueue([weak,state=std::move(state)] {
+                    if (auto app=weak.get()) app->Dispatch(L"appearance-dispatch",[&]{app->Render(state);});
+                });
+        });
+        apps_session_=std::make_unique<settings::AppsSession>(options_,[weak,dispatcher](settings::AppsConnectionState state) {
+            if (auto queue=dispatcher.get())
+                queue.TryEnqueue([weak,state=std::move(state)] {
+                    if (auto app=weak.get()) app->Dispatch(L"apps-dispatch",[&]{app->RenderApps(state);});
+                });
         });
         preview_=std::make_unique<settings::Preview>([weak,dispatcher](std::shared_ptr<settings::PreviewResult const> result) {
             if (auto queue=dispatcher.get()) queue.TryEnqueue([weak,result=std::move(result)] {
-                if (auto app=weak.get()) app->RenderPreview(*result);
+                if (auto app=weak.get()) app->Dispatch(L"preview-dispatch",[&]{app->RenderPreview(*result);});
             });
         });
-        EnableControls(false); window_.Activate();
+        EnableControls(false); EnableApps(false); window_.Activate();
         StartupDiagnostic(L"window-activated",S_OK,L"Native settings window activated; awaiting host snapshot.");
     }
     void EnableControls(bool enabled) {
@@ -283,6 +339,255 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         bool plain=design_.SelectedIndex()==0;
         material_.IsEnabled(enabled&&plain);
         stitch_.IsEnabled(enabled&&plain&&material_.SelectedIndex()==0);
+    }
+    void EnableApps(bool enabled) {
+        enabled=enabled && presentation_ready_ && !presentation_failed_;
+        apps_all_on_.IsEnabled(enabled); apps_all_off_.IsEnabled(enabled); apps_default_.IsEnabled(enabled);
+        for (auto const& [identity,row]:app_rows_) {
+            (void)identity;
+            row.toggle.IsEnabled(enabled); row.remove.IsEnabled(enabled);
+        }
+    }
+    void ChangeApps(applications::EligibilityMutation mutation) {
+        if (updating_apps_ || !apps_session_ || !presentation_ready_ || presentation_failed_) return;
+        if (!apps_draft_.CanEdit()) {
+            DrawApps(apps_draft_.Controls()); return;
+        }
+        auto generation=apps_session_->Change(apps_draft_.Displayed(),mutation);
+        if (!generation) { DrawApps(apps_draft_.Controls()); return; }
+        apps_draft_.Begin(generation,mutation);
+        DrawApps(apps_draft_.Controls());
+        EnableApps(apps_draft_.CanInteract()); apps_status_.Text(L"Saving application choice…");
+    }
+    struct AppRow {
+        StackPanel panel{nullptr};
+        ToggleSwitch toggle{nullptr};
+        TextBlock presence{nullptr};
+        Button remove{nullptr};
+    };
+    static ScrollViewer FindScrollViewer(DependencyObject const& root) {
+        if (!root) return nullptr;
+        if (auto viewer=root.try_as<ScrollViewer>()) return viewer;
+        auto count=Media::VisualTreeHelper::GetChildrenCount(root);
+        for (int index=0;index<count;++index)
+            if (auto viewer=FindScrollViewer(Media::VisualTreeHelper::GetChild(root,index))) return viewer;
+        return nullptr;
+    }
+    void DrawApps(contracts::ApplicationsSnapshot const& snapshot) {
+        auto root=scroll_.XamlRoot();
+        if (!presentation_ready_ || !root) throw hresult_error(E_ILLEGAL_METHOD_CALL,L"Apps presentation requires an attached loaded XamlRoot.");
+        const bool preserveContext=rendered_apps_.has_value();
+        presentation_stage_=L"apps-focus-capture";
+        Windows::Foundation::IInspectable focused{nullptr};
+        if (preserveContext) focused=Input::FocusManager::GetFocusedElement(root);
+        auto focusState=focused.try_as<Control>()?focused.as<Control>().FocusState():FocusState::Unfocused;
+        std::optional<applications::AppIdentity> focusedOwner;
+        auto focusedPart=settings::AppFocusControl::toggle;
+        for (auto const& [identity,row]:app_rows_) {
+            if (focused==row.toggle || focused==row.remove) {
+                focusedOwner=identity;
+                focusedPart=focused==row.remove?settings::AppFocusControl::remove_choice:settings::AppFocusControl::toggle;
+                break;
+            }
+        }
+        auto outerOffset=preserveContext?scroll_.VerticalOffset():0;
+        presentation_stage_=L"apps-viewport-capture";
+        auto inner=preserveContext?FindScrollViewer(apps_list_):ScrollViewer{nullptr};
+        auto innerOffset=inner?inner.VerticalOffset():0;
+        updating_apps_=true;
+        if (apps_default_.IsOn()!=snapshot.default_enabled) apps_default_.IsOn(snapshot.default_enabled);
+        auto weak=get_weak();
+        presentation_stage_=L"apps-row-construction";
+        for (auto const& row:snapshot.applications) {
+            if (app_rows_.contains(row.identity)) continue;
+            AppRow controls;
+            auto panel=StackPanel{}; panel.Spacing(4); panel.Margin(Thickness{0,8,0,8});
+            auto label=row.display_name.empty()?row.identity.Key():row.display_name;
+            auto toggle=ToggleSwitch{}; toggle.Header(box_value(label));
+            toggle.OnContent(box_value(L"Sweater enabled")); toggle.OffContent(box_value(L"Sweater disabled"));
+            AutomationProperties::SetName(toggle,label+L" sweater enabled");
+            AutomationProperties::SetHelpText(toggle,row.identity.Key());
+            panel.Children().Append(toggle);
+            auto presence=TextBlock{};
+            panel.Children().Append(presence);
+            auto identity=TextBlock{}; identity.Text(row.identity.Key()); identity.TextWrapping(TextWrapping::Wrap);
+            identity.FontSize(12); panel.Children().Append(identity);
+            auto remove=Button{}; remove.Content(box_value(L"Remove saved choice"));
+            AutomationProperties::SetName(remove,L"Remove saved choice for "+label);
+            remove.Visibility(Visibility::Collapsed); panel.Children().Append(remove);
+            remove.Click([weak,key=row.identity](auto const&,auto const&) {
+                if (auto app=weak.get()) {
+                    applications::EligibilityMutation mutation;
+                    mutation.edits.emplace_back(applications::RemoveApplicationPreference{key});
+                    app->Dispatch(L"apps-remove-choice",[&]{app->ChangeApps(std::move(mutation));});
+                }
+            });
+            toggle.Toggled([weak,key=row.identity](auto const& sender,auto const&) {
+                if (auto app=weak.get(); app && !app->updating_apps_) {
+                    applications::EligibilityMutation mutation;
+                    mutation.edits.emplace_back(applications::SetApplicationPreference{
+                        key,sender.template as<ToggleSwitch>().IsOn()});
+                    app->Dispatch(L"apps-toggle-change",[&]{app->ChangeApps(std::move(mutation));});
+                }
+            });
+            controls.panel=panel; controls.toggle=toggle; controls.presence=presence; controls.remove=remove;
+            app_rows_.emplace(row.identity,std::move(controls));
+        }
+        presentation_stage_=L"apps-items-reconcile";
+        for (auto const& edit:settings::ReconcileApplicationItems(app_item_order_,snapshot.applications)) {
+            auto index=static_cast<std::uint32_t>(edit.index);
+            if (edit.change==settings::AppItemChange::remove) {
+                apps_list_.Items().RemoveAt(index);
+                app_item_order_.erase(app_item_order_.begin()+edit.index);
+            } else if (edit.change==settings::AppItemChange::insert) {
+                auto const& key=snapshot.applications[edit.index].identity;
+                apps_list_.Items().InsertAt(index,app_rows_.at(key).panel);
+                app_item_order_.insert(app_item_order_.begin()+edit.index,key);
+            } else {
+                auto item=apps_list_.Items().GetAt(index);
+                auto key=app_item_order_[edit.index];
+                apps_list_.Items().RemoveAt(index); app_item_order_.erase(app_item_order_.begin()+edit.index);
+                apps_list_.Items().InsertAt(static_cast<std::uint32_t>(edit.destination),item);
+                app_item_order_.insert(app_item_order_.begin()+edit.destination,std::move(key));
+            }
+        }
+        std::erase_if(app_rows_,[&](auto const& pair) {
+            return std::find(app_item_order_.begin(),app_item_order_.end(),pair.first)==app_item_order_.end();
+        });
+        presentation_stage_=L"apps-row-properties";
+        for (auto const& row:snapshot.applications) {
+            auto& controls=app_rows_.at(row.identity);
+            auto label=row.display_name.empty()?row.identity.Key():row.display_name;
+            if (unbox_value<hstring>(controls.toggle.Header())!=label) {
+                controls.toggle.Header(box_value(label));
+                AutomationProperties::SetName(controls.toggle,label+L" sweater enabled");
+                AutomationProperties::SetName(controls.remove,L"Remove saved choice for "+label);
+            }
+            if (controls.toggle.IsOn()!=row.enabled) controls.toggle.IsOn(row.enabled);
+            auto presence=row.presence==applications::ApplicationPresence::Running?
+                L"Running · "+to_hstring(row.window_count)+L" windows · "+to_hstring(row.process_count)+L" processes":
+                hstring{L"Saved choice · not running"};
+            if (controls.presence.Text()!=presence) controls.presence.Text(presence);
+            auto visibility=row.explicit_preference?Visibility::Visible:Visibility::Collapsed;
+            if (controls.remove.Visibility()!=visibility) {
+                controls.remove.Visibility(visibility);
+            }
+        }
+        while (app_diagnostics_.size()>snapshot.unavailable.size()) {
+            apps_list_.Items().RemoveAtEnd(); app_diagnostics_.pop_back();
+        }
+        while (app_diagnostics_.size()<snapshot.unavailable.size()) {
+            auto diagnostic=TextBlock{}; diagnostic.TextWrapping(TextWrapping::Wrap);
+            apps_list_.Items().Append(diagnostic); app_diagnostics_.push_back(diagnostic);
+        }
+        for (std::size_t index=0;index<snapshot.unavailable.size();++index) {
+            auto const& row=snapshot.unavailable[index];
+            auto diagnostic=app_diagnostics_[index];
+            diagnostic.Text(L"Owner metadata unavailable · "+to_hstring(row.window_count)+
+                L" windows · reason "+to_hstring(static_cast<unsigned>(row.unavailable.reason))+
+                L" · Win32 "+to_hstring(row.unavailable.nativeError)+L" · no mutable application identity");
+        }
+        rendered_apps_=snapshot; updating_apps_=false;
+        presentation_stage_=L"apps-focus-restore";
+        if (focusedOwner) {
+            auto owner=app_rows_.find(*focusedOwner);
+            auto part=settings::FocusAfterApplicationUpdate(focusedPart,owner!=app_rows_.end(),
+                owner!=app_rows_.end() && owner->second.remove.Visibility()==Visibility::Visible);
+            Control retainedFocus=part==settings::AppFocusControl::defaults?apps_default_.as<Control>():
+                part==settings::AppFocusControl::remove_choice?owner->second.remove.as<Control>():owner->second.toggle.as<Control>();
+            auto currentFocus=Input::FocusManager::GetFocusedElement(root);
+            if (retainedFocus.IsEnabled() && currentFocus!=retainedFocus)
+                retainedFocus.Focus(focusState==FocusState::Unfocused?FocusState::Programmatic:focusState);
+        }
+        presentation_stage_=L"apps-layout-restore";
+        if (preserveContext) scroll_.UpdateLayout();
+        presentation_stage_=L"apps-inner-viewport-restore";
+        if (inner && inner.VerticalOffset()!=innerOffset)
+            inner.ChangeView(nullptr,box_value(settings::PreservedViewportOffset(innerOffset,inner.ScrollableHeight())).as<Windows::Foundation::IReference<double>>(),nullptr,true);
+        presentation_stage_=L"apps-outer-viewport-restore";
+        if (preserveContext && scroll_.VerticalOffset()!=outerOffset)
+            scroll_.ChangeView(nullptr,box_value(settings::PreservedViewportOffset(outerOffset,scroll_.ScrollableHeight())).as<Windows::Foundation::IReference<double>>(),nullptr,true);
+        presentation_stage_=L"apps-presented";
+        if (!presentation_success_logged_) {
+            presentation_success_logged_=true;
+            StartupDiagnostic(presentation_stage_,S_OK,L"First host application snapshot applied to attached native controls.");
+        }
+    }
+    void RenderApps(settings::AppsConnectionState const& state) {
+        if (presentation_failed_ || closed_) return;
+        if (!presentation_ready_) {
+            settings::RetainApplicationPublication(pending_apps_state_,state);
+            QueuePendingApps(); return;
+        }
+        if (closed_ || state.connection.publication_sequence<=apps_draft_.Current().connection.publication_sequence) return;
+        bool changed=apps_draft_.Apply(state);
+        if (changed && (!rendered_apps_ || *rendered_apps_!=apps_draft_.Controls())) DrawApps(apps_draft_.Controls());
+        auto const& connection=apps_draft_.Current().connection;
+        EnableApps(apps_draft_.CanInteract());
+        std::wstring status=connection.detail;
+        if (connection.connected) {
+            if (connection.pending || apps_draft_.Pending()) status=L"Saving application choice…";
+            else if (connection.status==contracts::Status::saved)
+                status=L"Host application list · saved revision "+std::to_wstring(connection.configuration.revision);
+            else if (connection.status==contracts::Status::conflict)
+                status=L"Another change won. Application choice was not saved; list refreshed.";
+            else if (connection.status==contracts::Status::storage_error)
+                status=L"Application save failed. Committed choices remain active (Win32 "+std::to_wstring(connection.error)+L").";
+            else if (connection.status==contracts::Status::recovery_required)
+                status=L"Preserved configuration requires explicit recovery below.";
+        }
+        apps_status_.Text(status);
+    }
+    void ApplyPendingApps() {
+        if (closed_ || presentation_failed_ || !pending_apps_state_) return;
+        auto root=scroll_.XamlRoot();
+        if (!settings::ApplicationPresentationReady(scroll_.IsLoaded(),bool(root),scroll_.ActualWidth(),scroll_.ActualHeight())) return;
+        presentation_ready_=true;
+        auto state=std::move(*pending_apps_state_);
+        pending_apps_state_.reset();
+        if (!presentation_admission_logged_) {
+            presentation_admission_logged_=true;
+            StartupDiagnostic(L"apps-presentation-ready",S_OK,L"Loaded XamlRoot and nonzero native layout accept retained host snapshot.");
+        }
+        RenderApps(state);
+    }
+    void QueuePendingApps() {
+        if (closed_ || presentation_failed_ || apps_presentation_queued_ || !pending_apps_state_) return;
+        auto root=scroll_.XamlRoot();
+        if (!settings::ApplicationPresentationReady(scroll_.IsLoaded(),bool(root),scroll_.ActualWidth(),scroll_.ActualHeight())) return;
+        apps_presentation_queued_=true;
+        auto weak=get_weak();
+        if (!window_.DispatcherQueue().TryEnqueue([weak] {
+            if (auto app=weak.get()) {
+                app->apps_presentation_queued_=false;
+                app->Dispatch(L"apps-post-layout-dispatch",[&]{app->ApplyPendingApps();});
+            }
+        })) {
+            apps_presentation_queued_=false;
+            throw hresult_error(E_ABORT,L"Native dispatcher rejected retained Apps presentation.");
+        }
+    }
+    template<class Callback> void Dispatch(wchar_t const* stage,Callback&& callback) noexcept {
+        if (closed_ || presentation_failed_) return;
+        presentation_stage_=stage;
+        try { callback(); }
+        catch (hresult_error const& error) { PresentationFailure(error.code(),error.message()); }
+        catch (std::exception const& error) { PresentationFailure(E_FAIL,to_hstring(error.what())); }
+    }
+    void PresentationFailure(HRESULT code,std::wstring_view message) noexcept {
+        StartupDiagnostic(presentation_stage_,code,message);
+        presentation_failed_=true; updating_apps_=false;
+        pending_apps_state_.reset();
+        try {
+            EnableApps(false); EnableControls(false);
+            auto text=L"Native UI update failed · HRESULT "+to_hstring(static_cast<std::uint32_t>(code))+
+                L" · see settings-startup.log for the exact stage and error.";
+            apps_status_.Text(text); status_.Text(text);
+        } catch (hresult_error const& error) {
+            StartupDiagnostic(L"ui-error-display-failed",error.code(),error.message());
+        } catch (std::exception const& error) {
+            StartupDiagnostic(L"ui-error-display-failed",E_FAIL,to_hstring(error.what()));
+        }
     }
     contracts::Configuration Inputs() const {
         auto configuration=draft_.Displayed().configuration;
@@ -297,7 +602,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         return configuration;
     }
     void DesignChanged() {
-        if (updating_ || !session_) return;
+        if (updating_ || !session_ || presentation_failed_) return;
         auto tag=to_string(unbox_value<hstring>(design_.SelectedItem().as<ComboBoxItem>().Tag()));
         if (auto theme=designs::ws_design_theme_by_id(tag.c_str())) {
             updating_=true; color_.Color(ToColor(theme->base_argb)); updating_=false;
@@ -305,7 +610,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         Change();
     }
     void Change() {
-        if (updating_ || !session_) return;
+        if (updating_ || !session_ || presentation_failed_) return;
         width_label_.Text(L"Border width: "+to_hstring(width_.Value())+L" DIP");
         rows_label_.Text(L"Stitch size: "+to_hstring(rows_.Value())+L" rows across the border");
         EnableControls(draft_.Current().connected&&draft_.Current().status!=contracts::Status::recovery_required);
@@ -313,6 +618,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         auto generation=session_->Change(draft_.Displayed(),configuration);
         if (!generation) return;
         draft_.Begin(generation,configuration);
+        rendered_appearance_=configuration;
         status_.Text(L"Saving change…");
         preview_configuration_.reset();
         preview_generation_=preview_->Submit(configuration);
@@ -336,9 +642,12 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         auto update=draft_.Apply(state);
         if (!update.accepted) return;
         updating_=true;
-        if (update.controls_changed) {
+        if (update.controls_changed && (!rendered_appearance_ ||
+            !settings::SameAppearance(*rendered_appearance_,draft_.Controls()))) {
             auto const& configuration=draft_.Controls();
-            pause_.IsOn(configuration.paused); width_.Value(configuration.border_width_dip);
+            rendered_appearance_=configuration;
+            if (pause_.IsOn()!=configuration.paused) pause_.IsOn(configuration.paused);
+            if (width_.Value()!=configuration.border_width_dip) width_.Value(configuration.border_width_dip);
             width_label_.Text(L"Border width: "+to_hstring(configuration.border_width_dip)+L" DIP");
             int selected=configuration.design_selection==contracts::DesignSelection::by_app?1:0;
             if (configuration.design_selection==contracts::DesignSelection::original) {
@@ -349,12 +658,15 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                     }
                 }
             }
-            design_.SelectedIndex(selected);
-            stitch_.SelectedIndex(static_cast<int>(configuration.stitch_style));
-            material_.SelectedIndex(static_cast<int>(configuration.material_style));
-            rows_.Value(configuration.stitch_rows); color_.Color(ToColor(configuration.yarn_argb));
+            if (design_.SelectedIndex()!=selected) design_.SelectedIndex(selected);
+            if (stitch_.SelectedIndex()!=static_cast<int>(configuration.stitch_style))
+                stitch_.SelectedIndex(static_cast<int>(configuration.stitch_style));
+            if (material_.SelectedIndex()!=static_cast<int>(configuration.material_style))
+                material_.SelectedIndex(static_cast<int>(configuration.material_style));
+            if (rows_.Value()!=configuration.stitch_rows) rows_.Value(configuration.stitch_rows);
+            if (ToArgb(color_.Color())!=configuration.yarn_argb) color_.Color(ToColor(configuration.yarn_argb));
             rows_label_.Text(L"Stitch size: "+to_hstring(configuration.stitch_rows)+L" rows across the border");
-            if (!preview_configuration_ || *preview_configuration_!=configuration) {
+            if (!preview_configuration_ || !settings::SameAppearance(*preview_configuration_,configuration)) {
                 preview_configuration_=configuration;
                 preview_generation_=preview_->Submit(configuration);
             }
@@ -423,10 +735,27 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     TextBlock preview_status_{nullptr},rows_label_{nullptr};
     TextBlock width_label_{nullptr},status_{nullptr};
     Button reset_{nullptr};
+    Button apps_all_on_{nullptr},apps_all_off_{nullptr};
+    ToggleSwitch apps_default_{nullptr};
+    ListView apps_list_{nullptr};
+    ScrollViewer scroll_{nullptr};
+    TextBlock apps_status_{nullptr};
+    std::map<applications::AppIdentity,AppRow> app_rows_;
+    std::vector<applications::AppIdentity> app_item_order_;
+    std::vector<TextBlock> app_diagnostics_;
+    std::optional<contracts::Configuration> rendered_appearance_;
+    std::optional<contracts::ApplicationsSnapshot> rendered_apps_;
+    settings::AppsDraftState apps_draft_;
+    bool updating_apps_{};
+    bool presentation_ready_{},presentation_failed_{},apps_presentation_queued_{};
+    bool presentation_admission_logged_{},presentation_success_logged_{};
+    wchar_t const* presentation_stage_=L"native-ui";
+    std::optional<settings::AppsConnectionState> pending_apps_state_;
     HWND activation_=nullptr;
     bool updating_=false;
     bool closed_=false;
     std::unique_ptr<settings::Session> session_;
+    std::unique_ptr<settings::AppsSession> apps_session_;
     std::unique_ptr<settings::Preview> preview_;
     std::uint64_t preview_generation_=0;
     std::optional<contracts::Configuration> preview_configuration_;

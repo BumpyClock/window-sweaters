@@ -18,7 +18,7 @@
   <PropertyGroup>
     <TargetName>WindowSweaters.ConfigurationHost.Tests</TargetName>
     <OutDir>$(MSBuildThisFileDirectory)..\..\out\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir>$(MSBuildThisFileDirectory)..\..\out\obj\ConfigurationHostTests\$(Platform)\$(Configuration)\</IntDir>
+    <IntDir Condition="'$(NativeIntermediateRoot)'==''">$(MSBuildThisFileDirectory)..\..\out\obj\ConfigurationHostTests\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -27,7 +27,7 @@
       <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>advapi32.lib;shell32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>advapi32.lib;shell32.lib;ole32.lib;propsys.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ConfigurationHostTests.cpp"/>

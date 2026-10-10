@@ -17,8 +17,9 @@ captioned, unowned application windows. The tracker applies the same conservativ
 eligibility policy during discovery, events, work validation, and reconciliation.
 Shell, popup, tool, child, host, fixture-helper and settings windows are excluded.
 The tracker excludes the live host PID and known helper classes. Before allocating
-an overlay, the host also checks the target PID's process creation time and helper
-executable name, including settings launched later. This excludes every window
+an overlay, an MTA metadata worker validates the full target/process birth and
+supported window-owner properties. Verified executable metadata classifies helper
+names, including settings launched later. This excludes every window
 in a helper process without permanently blacklisting an external PID that could
 be reused. The host does not load the settings runtime.
 
@@ -70,7 +71,55 @@ The host and Settings preview map the same semantic appearance into the same
 production knitting core. By-app selection currently uses the explicitly reported
 saved plain-yarn fallback; the Settings Finder image is only a labelled example,
 not the Host's production selection. Automatic application
-identity resolution is not implemented by this integration.
+theme assignment is not implemented by this integration. Stable application
+identity now supplies eligibility and native Settings snapshots, not theme rules.
+
+## Application eligibility
+
+Ordinary-window discovery is independent of enabledness. Resource-free tracked
+entries remain present while disabled or awaiting metadata. One `EligibleNow`
+predicate gates preparation, movement, visibility reconciliation, retries,
+render completion, and final show. Unknown/unverified owners fail closed and
+remain non-mutable snapshot diagnostics; hosted AUMIDs never collapse into
+ApplicationFrameHost's executable identity.
+
+Metadata requests and completions use the complete `TargetId`, process birth,
+configuration revision and request sequence. Metadata is queried only on the
+worker, not geometry/WinEvent callbacks. Configuration changes retire pending
+metadata admission; accepted owner facts remain target-lifetime scoped. Stop
+joins the worker and retires every returned cancellation on its owner gate.
+Live metadata retention is bounded to 256 KiB, independent of the worker cache.
+Owner-thread metadata polling submits at most eight requests per pass and
+refreshes accepted/failure facts after 30 seconds using the existing worker/cache
+contract. A changed same-lifetime window-owner property retires that target's
+render epoch and re-evaluates the current preference; retained stale metadata is
+not treated as a permanent identity.
+
+The queue's shared revision advances only for global appearance changes.
+Each target has an effective render epoch separate from its tracking appearance
+token. Application-policy changes retire only affected target pending/retry/
+prepared gates and advance those epochs. They do not cancel unrelated queued
+renders or hide/regenerate other owners. A later re-enable submits a new epoch
+on the same lifetime; obsolete completion cannot satisfy its pending gate.
+Destruction still cancels exactly the complete target lifetime. Pure movement
+continues to reuse pixels. Global width/pause/material changes can invalidate
+the shared queue as before.
+The sole configuration writer also retains bounded effective-eligibility
+revisions for currently observed identities. These runtime pins are not saved
+and disappear only when that owner has no running windows. Every durable
+effective change advances only its identity's revision, including a disable/
+re-enable pair between Host polls. The central gate refreshes current
+configuration before publication and checks this per-owner fence; an unrelated
+configuration revision cannot retire another owner's queued result.
+
+The Host publishes accepted target-owner metadata to the configuration binding.
+The server derives current snapshots from committed preferences: disabled
+running apps, saved non-running exceptions and non-mutable unavailable owners
+remain distinguishable. Observation generation tracks metadata and window-count
+changes independently from persisted revision.
+`ConfigurationHost::Revision()` performs a scalar, allocation-free committed
+revision check for final publication. Unchanged polling does not copy the
+variable-size preference map; full snapshots remain available to consumers.
 
 Native geometry supplies physical content dimensions, scale, rounded-corner
 policy, outer bounds, authoritative physical padding, monitor clip, and the

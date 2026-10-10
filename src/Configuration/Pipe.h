@@ -32,8 +32,10 @@ std::wstring EndpointName(std::wstring const& suffix = {});
 std::wstring TestEndpointSuffix(std::filesystem::path const& storage_directory);
 std::wstring PipeSecuritySddl();
 bool VerifyPeer(HANDLE pipe, bool server_peer, std::filesystem::path const& expected_image) noexcept;
-bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write, HANDLE stop = nullptr) noexcept;
+bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write, HANDLE stop = nullptr,
+    DWORD timeout = contracts::io_timeout_ms) noexcept;
 bool Connect(HANDLE pipe, HANDLE stop) noexcept;
+bool ReadFrame(HANDLE pipe, std::vector<std::byte>& bytes, HANDLE stop = nullptr) noexcept;
 contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path const& host_path,
                             contracts::Message const& request);
 std::filesystem::path SiblingExecutable(wchar_t const* name);

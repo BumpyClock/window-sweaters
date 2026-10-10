@@ -37,6 +37,7 @@ if (-not (Test-Path -LiteralPath $trackingExe)) { throw "Tracking test artifact 
 & $trackingExe --native-contract
 if ($LASTEXITCODE -ne 0) { throw "Tracking contracts failed: $LASTEXITCODE" }
 foreach ($path in @("out\x64\$Configuration\WindowSweaters.Configuration.Tests.exe",
+    "tests\Applications\build\x64\$Configuration\ApplicationsTests.exe",
     "out\x64\$Configuration\HostAppearanceTests.exe",
     "out\x64\$Configuration\WindowSweaters.ConfigurationHost.Tests.exe",
     "out\x64\$Configuration\WindowSweaters.Knitting.Tests.exe",

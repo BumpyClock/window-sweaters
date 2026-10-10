@@ -29,7 +29,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>d2d1.lib;d3d11.lib;dxgi.lib;dcomp.lib;dwmapi.lib;shell32.lib;ole32.lib;user32.lib;gdi32.lib;advapi32.lib;windowscodecs.lib;uuid.lib;wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d2d1.lib;d3d11.lib;dxgi.lib;dcomp.lib;dwmapi.lib;shell32.lib;ole32.lib;user32.lib;gdi32.lib;advapi32.lib;windowscodecs.lib;uuid.lib;propsys.lib;wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest><AdditionalManifestFiles>Host.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>

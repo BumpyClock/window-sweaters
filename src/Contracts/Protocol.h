@@ -10,13 +10,18 @@
 #include <objbase.h>
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint16_t protocol_version = 3;
+inline constexpr std::uint16_t protocol_version = 4;
 inline constexpr std::size_t frame_size = 176;
+inline constexpr std::size_t frame_header_size = 12;
 inline constexpr DWORD io_timeout_ms = 3000;
 inline constexpr std::size_t maximum_pending_mutations = 32;
+inline constexpr std::size_t maximum_pending_mutation_bytes = 4 * 1024 * 1024;
 inline constexpr std::size_t maximum_client_leases = 128;
+inline constexpr std::size_t maximum_deduplicated_bytes = 4 * 1024 * 1024;
 using Identity = std::array<std::uint8_t, 16>;
-enum class Operation : std::uint16_t { snapshot = 1, mutate = 2, reset = 3, response = 4 };
+enum class Operation : std::uint16_t {
+    snapshot = 1, mutate = 2, reset = 3, response = 4, eligibility = 5, applications_snapshot = 6
+};
 enum class Status : std::uint32_t {
     saved, conflict, invalid, wrong_instance, storage_error, recovery_required,
     busy, duplicate_expired, shutting_down, disconnected, client_expired
@@ -30,7 +35,15 @@ struct Message {
     std::uint64_t client_lease = 0;
     std::uint32_t error = 0;
     Configuration configuration{};
-    bool operator==(Message const&) const = default;
+    applications::EligibilityMutation eligibility;
+    ApplicationsSnapshot applications;
+    Operation response_to=Operation::snapshot;
+    bool operator==(Message const& other) const {
+        return operation==other.operation && status==other.status && request_id==other.request_id &&
+            client==other.client && server==other.server && client_lease==other.client_lease &&
+            error==other.error && configuration==other.configuration && response_to==other.response_to &&
+            applications==other.applications && EqualMutation(eligibility,other.eligibility);
+    }
 };
 inline Identity NewIdentity() {
     GUID value{};
@@ -38,15 +51,15 @@ inline Identity NewIdentity() {
     return std::bit_cast<Identity>(value);
 }
 inline bool EmptyIdentity(Identity const& value) noexcept { return value == Identity{}; }
-inline std::array<std::byte, frame_size> Encode(Message const& value) {
+inline std::vector<std::byte> Encode(Message const& value) {
     if (value.configuration.design_id.size() > maximum_design_id_bytes)
         throw std::invalid_argument("Design ID exceeds protocol bound");
-    std::array<std::byte, frame_size> bytes{};
+    std::vector<std::byte> bytes(frame_size);
     auto put = [&](std::size_t at, std::uint64_t v, std::size_t count) {
         for (std::size_t i = 0; i < count; ++i) bytes[at + i] = std::byte((v >> (8 * i)) & 255);
     };
     put(0, 0x31535757, 4); put(4, protocol_version, 2);
-    put(6, static_cast<std::uint16_t>(value.operation), 2); put(8, frame_size, 4);
+    put(6, static_cast<std::uint16_t>(value.operation), 2);
     put(12, static_cast<std::uint32_t>(value.status), 4); put(16, value.request_id, 8);
     for (std::size_t i = 0; i < 16; ++i) {
         bytes[24 + i] = std::byte(value.client[i]); bytes[40 + i] = std::byte(value.server[i]);
@@ -64,19 +77,52 @@ inline std::array<std::byte, frame_size> Encode(Message const& value) {
     put(108, value.configuration.design_id.size(), 4);
     for (std::size_t i=0; i<value.configuration.design_id.size(); ++i)
         bytes[112+i]=std::byte(static_cast<unsigned char>(value.configuration.design_id[i]));
-    return bytes;
+    // Tagged sections are the only extension boundary. Unknown tags are rejected,
+    // not interpreted as future rules/imports or silently discarded.
+    auto section=[&](std::uint32_t tag,payload::Writer const& writer) {
+        if (writer.bytes.size()+8>maximum_payload_bytes-bytes.size())
+            throw std::length_error("Frame exceeds aggregate bound");
+        payload::Writer header; header.Number(tag); header.Number(writer.bytes.size());
+        bytes.insert(bytes.end(),header.bytes.begin(),header.bytes.end());
+        bytes.insert(bytes.end(),writer.bytes.begin(),writer.bytes.end());
+    };
+    payload::Writer preferences; payload::Preferences(preferences,value.configuration.eligibility);
+    section(1,preferences);
+    if (value.operation==Operation::eligibility) {
+        payload::Writer mutation; payload::Mutation(mutation,value.eligibility); section(2,mutation);
+    }
+    if (value.operation==Operation::response) {
+        payload::Writer acknowledgement;
+        acknowledgement.Number(static_cast<unsigned>(value.response_to)); section(4,acknowledgement);
+        if (value.response_to==Operation::applications_snapshot) {
+            payload::Writer snapshot; payload::Snapshot(snapshot,value.applications); section(3,snapshot);
+        }
+    }
+    put(8,bytes.size(),4); return bytes;
+}
+inline std::size_t FrameLength(std::span<std::byte const> header) noexcept {
+    if (header.size()!=frame_header_size) return 0;
+    std::uint32_t magic=0,length=0,version=0;
+    for (std::size_t i=0;i<4;++i) {
+        magic|=std::to_integer<std::uint32_t>(header[i])<<(8*i);
+        length|=std::to_integer<std::uint32_t>(header[8+i])<<(8*i);
+    }
+    version=std::to_integer<unsigned>(header[4])|(std::to_integer<unsigned>(header[5])<<8);
+    return magic==0x31535757 && version==protocol_version && length>=frame_size+16 &&
+        length<=maximum_payload_bytes?length:0;
 }
 inline bool Decode(std::span<std::byte const> bytes, Message& value) {
-    if (bytes.size() != frame_size) return false;
+    if (bytes.size()<frame_header_size || FrameLength(bytes.first(frame_header_size))!=bytes.size()) return false;
+    value={};
     auto get = [&](std::size_t at, std::size_t count) {
         std::uint64_t v = 0;
         for (std::size_t i = 0; i < count; ++i) v |= std::uint64_t(std::to_integer<unsigned>(bytes[at+i])) << (8*i);
         return v;
     };
     if (get(0,4) != 0x31535757 || get(4,2) != protocol_version ||
-        get(8,4) != frame_size || get(68,4) > 1) return false;
+        get(8,4) != bytes.size() || get(68,4) > 1) return false;
     auto operation = get(6,2), status = get(12,4);
-    if (operation < 1 || operation > 4 || status > static_cast<unsigned>(Status::client_expired)) return false;
+    if (operation < 1 || operation > 6 || status > static_cast<unsigned>(Status::client_expired)) return false;
     value.operation = static_cast<Operation>(operation); value.status = static_cast<Status>(status);
     value.request_id = get(16,8);
     for (std::size_t i=0; i<16; ++i) {
@@ -106,6 +152,37 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
             value.configuration.design_id+=static_cast<char>(character);
         } else if (character!=0) return false;
     }
-    return Valid(value.configuration);
+    payload::Reader extension(bytes.subspan(frame_size));
+    unsigned seen=0;
+    while (!extension.Done()) {
+        std::uint64_t tag,size;
+        if (!extension.Number(tag) || tag<1 || tag>4 || !extension.Number(size) ||
+            size>extension.bytes.size()-extension.offset || (seen&(1u<<tag))) return false;
+        seen|=1u<<tag;
+        payload::Reader section(extension.bytes.subspan(extension.offset,static_cast<std::size_t>(size)));
+        extension.offset+=static_cast<std::size_t>(size);
+        if (tag==1) {
+            if (size>maximum_preference_bytes || !payload::Preferences(section,value.configuration.eligibility)) return false;
+        } else if (tag==2) {
+            if (value.operation!=Operation::eligibility || !payload::Mutation(section,value.eligibility)) return false;
+        } else if (tag==3) {
+            if (value.operation!=Operation::response || !payload::Snapshot(section,value.applications)) return false;
+        } else {
+            std::uint64_t acknowledgement;
+            if (value.operation!=Operation::response || !section.Number(acknowledgement) ||
+                acknowledgement<1 || acknowledgement>6 || acknowledgement==4) return false;
+            value.response_to=static_cast<Operation>(acknowledgement);
+        }
+        if (!section.Done()) return false;
+    }
+    unsigned required=2u;
+    if (value.operation==Operation::eligibility) required|=4u;
+    if (value.operation==Operation::response) {
+        required|=16u;
+        if (value.response_to==Operation::applications_snapshot) required|=8u;
+    }
+    return seen==required && Valid(value.configuration) &&
+        (value.response_to!=Operation::applications_snapshot || value.operation!=Operation::response ||
+            value.applications.configuration_revision==value.configuration.revision);
 }
 }

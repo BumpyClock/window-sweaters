@@ -9,10 +9,10 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | [#2](https://github.com/BumpyClock/window-sweaters/issues/2) | Native tray host and noninteractive exterior border | Implemented and independently reviewed | Clean-source Debug/Release builds, Computer Use targeted input, caption controls, and graceful shutdown verified; foreground pixel, resize-handle, and taskbar/Alt-Tab qualification pending |
 | [#3](https://github.com/BumpyClock/window-sweaters/issues/3) | Target discovery, lifetime safety, move/resize settlement | Integrated and independently reviewed | Eleven tracker scenarios pass; real Computer Use move/resize/minimize/restore fixture completes with stable lifetime and no pure-move redraw |
 | [#4](https://github.com/BumpyClock/window-sweaters/issues/4) | Below-target stacking, dialogs, topmost bands | Helper and host wiring independently reviewed | 2,296 private-desktop checks pass per configuration; Computer Use captured modal occlusion and band changes; final live-host matrix pending |
-| [#5](https://github.com/BumpyClock/window-sweaters/issues/5) | Faithful stockinette, shading, oriented edges, corners | Source math and native perimeter raster independently reviewed; live upload pending | Debug/Release: 131 checks pass; corrected same-chart texture comparison MAE 3.86/255; complete live parity pending |
-| [#6](https://github.com/BumpyClock/window-sweaters/issues/6) | Native settings, host-owned persistence, secure revisioned IPC | Native WinUI and revisioned IPC/storage independently reviewed; host binding pending | Debug/Release: 412 real Session/IPC/storage assertions pass; integrated UI-host verification pending |
+| [#5](https://github.com/BumpyClock/window-sweaters/issues/5) | Faithful stockinette, shading, oriented edges, corners | Source math, native perimeter raster, and live host publication independently reviewed | Actual knitted border inspected through Computer Use; corrected same-chart texture comparison MAE 3.86/255; complete live parity pending |
+| [#6](https://github.com/BumpyClock/window-sweaters/issues/6) | Native settings, host-owned persistence, secure revisioned IPC | Native WinUI, revisioned IPC/storage, and host binding independently reviewed | Real Session/IPC/storage checks pass; Computer Use verified live width/pause, restart persistence, Settings close with host running, and explicit host quit without automatic restart |
 | [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Catalogue rendering, host appearance wiring, and persisted WinUI controls independently reviewed | 971 renderer checks and 43 production appearance comparisons pass; real Spotify selection, live width/pause, preview, persistence and restart verified through Computer Use |
-| [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Identity, preference, and metadata models independently reviewed; host/UI persistence pending | Debug/Release: 566 checks pass, including completion-pressure retirement |
+| [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Host-owned persistence and native Apps controls integrated and independently reviewed | Computer Use verified per-app changes, default-off overrides, persistence across new PID/HWND, all-off before first rendering, and retained exact-control focus without the former viewport jump |
 | [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Resolver independently reviewed; host integration pending | Debug/Release: 444 checks pass, including Unicode identity stability; installed-app demonstration pending |
 | [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Source palette math and bounded icon preparation independently reviewed; host integration pending | Synthetic and own-executable icon checks pass; cross-feature runtime qualification pending |
 | [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Native import model independently reviewed; host/UI persistence pending | Debug/Release: 1,618 checks pass, including removal/reimport revision safety; real restart qualification pending |
@@ -121,3 +121,35 @@ D3D/DirectComposition resources. The device generation advanced, the old overlay
 was replaced, the full target lifetime stayed unchanged, the current sweater
 returned, and CPU yarn-generation count remained constant. This does not claim
 an actual driver reset.
+
+## Native application exclusions
+
+Schema 3 and protocol 4 carry the host-owned default eligibility and persistent
+application exceptions. Older supported configuration files migrate in memory
+without a startup rewrite. Running owners remain in the Apps list when disabled;
+saved non-running choices remain distinguishable from running owners. Inaccessible
+owner metadata does not admit a provisional border.
+
+Computer Use verified a disabled running application, an explicit enabled
+exception under default-off, and persistence after the fixture acquired a new
+PID and HWND. An approved isolated All-off action cleared exceptions. On the next
+launch, the host created no overlay and accepted no rendering work before an
+explicit enable. Re-enabling reused the CPU yarn tile.
+
+Native checks exposed a viewport jump caused by rebuilding controls and
+reprojecting unchanged appearance. Apps controls now retain their identity and
+exact focused subcontrol. The subsequent first-snapshot candidate crashed after
+window activation. Initial Apps presentation now waits for an attached, measured
+WinUI root, and queued presentation failures report their stage and HRESULT
+rather than escaping the dispatcher. The rebuilt application presented the
+initial snapshot and remained responsive. Off/on changes retained the focused
+Remove saved choice control and unchanged top-of-page coordinates. This proves
+the observed startup and top-of-page flow; it does not identify the old native
+exception's precise cause or establish every nonzero-scroll position.
+
+An archive of the staged source, excluding parallel catalogue/mapping changes
+and the next resolver adapter, built all six native Release projects. It passed
+1,248 configuration assertions, 123 ownership checks, 727 application checks,
+43 original-catalogue appearance comparisons, and the hidden Host integration
+contract. This establishes that the exclusion slice builds and runs against its
+committed 37-design prerequisites. It is not clean-machine or Store qualification.

@@ -2,6 +2,7 @@
 #include <sddl.h>
 #include <vector>
 #include <cwctype>
+#include <algorithm>
 
 namespace window_sweaters::configuration {
 namespace {
@@ -42,9 +43,10 @@ bool SameIdentity(EndpointIdentity const& a, EndpointIdentity const& b) {
         a.integrity==b.integrity && a.authentication.HighPart==b.authentication.HighPart &&
         a.authentication.LowPart==b.authentication.LowPart;
 }
-bool WaitIo(HANDLE pipe, OVERLAPPED& io, HANDLE stop, DWORD& transferred) noexcept {
+bool WaitIo(HANDLE pipe, OVERLAPPED& io, HANDLE stop, DWORD& transferred,
+    DWORD timeout=contracts::io_timeout_ms) noexcept {
     HANDLE events[]={io.hEvent,stop};
-    auto result=WaitForMultipleObjects(stop?2:1,events,FALSE,contracts::io_timeout_ms);
+    auto result=WaitForMultipleObjects(stop?2:1,events,FALSE,timeout);
     if (result!=WAIT_OBJECT_0) {
         CancelIoEx(pipe,&io);
         GetOverlappedResult(pipe,&io,&transferred,TRUE);
@@ -113,14 +115,43 @@ bool VerifyPeer(HANDLE pipe, bool server_peer, std::filesystem::path const& expe
         return CompareStringOrdinal(actual.c_str(),-1,expected.c_str(),-1,TRUE)==CSTR_EQUAL;
     } catch (...) { return false; }
 }
-bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write, HANDLE stop) noexcept {
+bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write, HANDLE stop,DWORD timeout) noexcept {
+    const auto began=GetTickCount64();
     Handle event(CreateEventW(nullptr,TRUE,FALSE,nullptr));
     if (!event) return false;
-    OVERLAPPED io{}; io.hEvent=event.get();
-    DWORD transferred=0;
-    BOOL started=write?WriteFile(pipe,bytes,size,&transferred,&io):ReadFile(pipe,bytes,size,&transferred,&io);
-    if (!started && (GetLastError()!=ERROR_IO_PENDING || !WaitIo(pipe,io,stop,transferred))) return false;
-    return transferred==size;
+    DWORD offset=0;
+    while (offset<size) {
+        auto elapsed=GetTickCount64()-began;
+        if (elapsed>=timeout) return false;
+        ResetEvent(event.get());
+        OVERLAPPED io{}; io.hEvent=event.get();
+        DWORD transferred=0;
+        auto cursor=static_cast<std::byte*>(bytes)+offset;
+        BOOL started=write?WriteFile(pipe,cursor,size-offset,&transferred,&io):
+            ReadFile(pipe,cursor,size-offset,&transferred,&io);
+        if (!started && (GetLastError()!=ERROR_IO_PENDING ||
+            !WaitIo(pipe,io,stop,transferred,static_cast<DWORD>(timeout-elapsed)))) return false;
+        if (!transferred || transferred>size-offset) return false;
+        offset+=transferred;
+    }
+    return true;
+}
+bool ReadFrame(HANDLE pipe,std::vector<std::byte>& bytes,HANDLE stop) noexcept {
+    try {
+        const auto began=GetTickCount64();
+        std::array<std::byte,contracts::frame_header_size> header{};
+        if (!Transfer(pipe,header.data(),static_cast<DWORD>(header.size()),false,stop)) return false;
+        auto size=contracts::FrameLength(header);
+        if (!size) return false;
+        bytes.assign(size,std::byte{});
+        std::copy(header.begin(),header.end(),bytes.begin());
+        auto elapsed=GetTickCount64()-began;
+        if (elapsed>=contracts::io_timeout_ms ||
+            !Transfer(pipe,bytes.data()+header.size(),static_cast<DWORD>(size-header.size()),false,stop,
+                static_cast<DWORD>(contracts::io_timeout_ms-elapsed))) return false;
+        DWORD remaining=0;
+        return PeekNamedPipe(pipe,nullptr,0,nullptr,&remaining,nullptr) && remaining==0;
+    } catch (...) { return false; }
 }
 bool Connect(HANDLE pipe, HANDLE stop) noexcept {
     Handle event(CreateEventW(nullptr,TRUE,FALSE,nullptr));
@@ -138,20 +169,21 @@ contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path 
     Handle pipe(CreateFileW(endpoint.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,
         FILE_FLAG_OVERLAPPED|SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,nullptr));
     if (!pipe || !VerifyPeer(pipe.get(),true,host_path)) throw std::runtime_error("Host identity verification failed");
-    DWORD mode=PIPE_READMODE_MESSAGE;
+    DWORD mode=PIPE_READMODE_BYTE;
     if (!SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr)) throw std::runtime_error("Cannot configure settings pipe");
     auto bytes=contracts::Encode(request);
     if (!Transfer(pipe.get(),bytes.data(),static_cast<DWORD>(bytes.size()),true))
         throw std::runtime_error("Settings request write failed");
-    if (!Transfer(pipe.get(),bytes.data(),static_cast<DWORD>(bytes.size()),false))
+    if (!ReadFrame(pipe.get(),bytes))
         throw std::runtime_error("Settings response timed out or was truncated");
     contracts::Message response;
     if (!contracts::Decode(bytes,response) || response.operation!=contracts::Operation::response ||
         response.request_id!=request.request_id || response.client!=request.client ||
         contracts::EmptyIdentity(response.server) ||
-        (request.operation!=contracts::Operation::snapshot && response.server!=request.server &&
+        response.response_to!=request.operation ||
+        (request.operation!=contracts::Operation::snapshot && request.operation!=contracts::Operation::applications_snapshot && response.server!=request.server &&
          response.status!=contracts::Status::wrong_instance) ||
-        (request.operation!=contracts::Operation::snapshot && response.client_lease!=request.client_lease) ||
+        (request.operation!=contracts::Operation::snapshot && request.operation!=contracts::Operation::applications_snapshot && response.client_lease!=request.client_lease) ||
         (request.operation==contracts::Operation::snapshot && response.status==contracts::Status::saved &&
          response.client_lease==0))
         throw std::runtime_error("Invalid host response");

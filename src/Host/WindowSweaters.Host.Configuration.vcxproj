@@ -32,6 +32,11 @@
     <ClCompile Include="..\Configuration\Storage.cpp" />
     <ClCompile Include="..\Configuration\Pipe.cpp" />
     <ClCompile Include="..\Configuration\ConfigurationServer.cpp" />
+    <ClCompile Include="..\Applications\AppIdentity.cpp" />
+    <ClCompile Include="..\Applications\EligibilityPreferences.cpp" />
+    <ClCompile Include="..\Applications\WindowOwnerMetadata.cpp" />
+    <ClCompile Include="..\Applications\ProcessMetadata.cpp" />
+    <ClCompile Include="..\Applications\MetadataWorker.cpp" />
     <ClCompile Include="..\Designs\Catalogue.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -58,6 +58,45 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+struct AppsConnectionState {
+    ConnectionState connection;
+    contracts::ApplicationsSnapshot snapshot;
+};
+class AppsDraftState {
+public:
+    bool Apply(AppsConnectionState const& state);
+    void Begin(std::uint64_t generation,applications::EligibilityMutation const& mutation);
+    bool Pending() const noexcept { return generation_>current_.connection.settled_edit_generation; }
+    bool CanEdit() const noexcept {
+        auto const& connection=current_.connection;
+        return connection.connected && connection.configuration_authoritative &&
+            connection.status!=contracts::Status::recovery_required && !connection.pending && !Pending();
+    }
+    bool CanInteract() const noexcept {
+        auto const& connection=current_.connection;
+        return connection.connected && connection.configuration_authoritative &&
+            connection.status!=contracts::Status::recovery_required;
+    }
+    AppsConnectionState const& Current() const noexcept { return current_; }
+    AppsConnectionState const& Displayed() const noexcept { return displayed_; }
+    contracts::ApplicationsSnapshot const& Controls() const noexcept { return controls_; }
+private:
+    AppsConnectionState current_,displayed_;
+    contracts::ApplicationsSnapshot controls_;
+    std::uint64_t generation_{};
+};
+// Application observation polling has its own lease/worker, never an appearance
+// debounce or own-chain rebase. Every command uses the exact displayed CAS base.
+class AppsSession {
+public:
+    AppsSession(Options options,std::function<void(AppsConnectionState)> publish,SessionTransport transport={});
+    ~AppsSession();
+    std::uint64_t Change(AppsConnectionState const& displayed,applications::EligibilityMutation mutation);
+    void Stop() noexcept;
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 Options ParseOptions();
 bool StartHost(Options const& options);
 }

@@ -46,7 +46,7 @@ Configuration Original(char const* id) {
     return value;
 }
 void DomainAndFrames() {
-    Check(configuration_schema==2 && protocol_version==3 && frame_size==176,"Appearance has genuine bounded schema and protocol versions");
+    Check(configuration_schema==3 && protocol_version==4 && frame_size==176,"Appearance and eligibility use bounded schema3/protocol4");
     auto defaults=settings::MakeAppearance(Configuration{});
     Check(Configuration{}.material_style==MaterialStyle::raised &&
           defaults.material==knitting::Material::Raised && defaults.stitch==knitting::Stitch::Stockinette,
@@ -140,15 +140,15 @@ void Migration(std::filesystem::path const& root) {
     }
     auto saved=server.SubmitLocal(false,31,41).get();
     Check(saved.status==Status::saved && saved.configuration.revision==42 && !saved.configuration.paused &&
-          Bytes(storage.File()).size()==120,"First acknowledged mutation atomically upgrades to schema2");
+          Bytes(storage.File()).size()>120,"First acknowledged mutation atomically upgrades to length-framed schema3");
     server.Stop();
     ConfigurationServer restarted({storage.Directory(),suffix,Self()});
-    Check(restarted.Snapshot()==saved.configuration,"Restart sees the acknowledged schema2 migration");
+    Check(restarted.Snapshot()==saved.configuration,"Restart sees the acknowledged schema3 migration");
     auto invalid=legacy; Put(invalid,20,std::bit_cast<std::uint32_t>(65.f),4); Checksum(invalid);
     Write(storage.File(),invalid);
     Check(storage.Load().state==StorageState::corrupt && Bytes(storage.File())==invalid &&
           storage.Save({})!=0,"Invalid old values are preserved, not blanket-upgraded");
-    auto future=legacy; Put(future,4,3,4); Write(storage.File(),future);
+    auto future=legacy; Put(future,4,4,4); Write(storage.File(),future);
     Check(storage.Load().state==StorageState::newer_schema && storage.Save({})!=0 &&
           Bytes(storage.File())==future,"Newer settings remain preserved and require explicit reset");
 }
@@ -164,7 +164,7 @@ void Transactions(std::filesystem::path const& root) {
     auto expected=command.configuration; expected.revision=1;
     Check(saved.status==Status::saved && saved.configuration==expected,"Full appearance IPC acknowledgment follows durable semantic save");
     Storage storage(directory);
-    Check(storage.Load().configuration==expected && Bytes(storage.File()).size()==120,"All appearance values persist in bounded schema2 disk format");
+    Check(storage.Load().configuration==expected && Bytes(storage.File()).size()>120,"All appearance values persist in bounded schema3 disk format");
     Check(Exchange(server.Endpoint(),Self(),command)==saved,"Full appearance retry remains idempotent");
     auto reused=command; reused.configuration.yarn_argb=0xff001122;
     Check(Exchange(server.Endpoint(),Self(),reused).status==Status::invalid,"Request dedup includes color and entire appearance");
@@ -192,11 +192,11 @@ void Transactions(std::filesystem::path const& root) {
     Check(replacement.Snapshot()==next,"Restart retains complete original design, style, gauge and yarn color");
     Check(Exchange(replacement.Endpoint(),Self(),command).status==Status::wrong_instance,
           "Appearance retry cannot cross server-instance restart");
-    auto malformed=Bytes(storage.File()); Put(malformed,44,64,4); Checksum(malformed);
+    auto malformed=Bytes(storage.File()); Put(malformed,12+108,64,4); Checksum(malformed);
     Write(storage.File(),malformed);
     Check(storage.Load().state==StorageState::corrupt && storage.Load().configuration==Configuration{},
-          "Malformed schema2 ID is rejected to valid recovery defaults, not leaked into IPC");
-    malformed=Bytes(storage.File()); Put(malformed,44,5,4); malformed[48]='x'; Checksum(malformed);
+          "Malformed schema3 appearance ID is rejected to valid recovery defaults, not leaked into IPC");
+    malformed=Bytes(storage.File()); Put(malformed,12+108,5,4); malformed[12+112]='x'; Checksum(malformed);
     Write(storage.File(),malformed);
     Check(storage.Load().state==StorageState::corrupt,"Unknown or noncanonical disk ID is rejected even with a correct CRC");
     replacement.Stop();

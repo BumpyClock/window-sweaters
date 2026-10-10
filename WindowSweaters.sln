@@ -26,6 +26,10 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConfigurationTests", "tests
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConfigurationHostTests", "tests\Integration\ConfigurationHostTests.vcxproj", "{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Applications", "src\Applications\Applications.vcxproj", "{E214BF75-A526-4B2B-A4E6-50D8173914F9}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ApplicationsTests", "tests\Applications\ApplicationsTests.vcxproj", "{C3A49CFB-F074-4BDD-9862-95E13D623557}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KnittingTests", "tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj", "{B5165810-80B9-4390-A1A4-A7FD5731B3D2}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RenderQueueTests", "tests\Rendering\RenderQueueTests.vcxproj", "{156DB83C-1A93-4AD1-AD5C-F306A678D64E}"
@@ -86,6 +90,14 @@ Global
 		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Debug|x64.Build.0 = Debug|x64
 		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Release|x64.ActiveCfg = Release|x64
 		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Release|x64.Build.0 = Release|x64
+		{E214BF75-A526-4B2B-A4E6-50D8173914F9}.Debug|x64.ActiveCfg = Debug|x64
+		{E214BF75-A526-4B2B-A4E6-50D8173914F9}.Debug|x64.Build.0 = Debug|x64
+		{E214BF75-A526-4B2B-A4E6-50D8173914F9}.Release|x64.ActiveCfg = Release|x64
+		{E214BF75-A526-4B2B-A4E6-50D8173914F9}.Release|x64.Build.0 = Release|x64
+		{C3A49CFB-F074-4BDD-9862-95E13D623557}.Debug|x64.ActiveCfg = Debug|x64
+		{C3A49CFB-F074-4BDD-9862-95E13D623557}.Debug|x64.Build.0 = Debug|x64
+		{C3A49CFB-F074-4BDD-9862-95E13D623557}.Release|x64.ActiveCfg = Release|x64
+		{C3A49CFB-F074-4BDD-9862-95E13D623557}.Release|x64.Build.0 = Release|x64
 		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Debug|x64.ActiveCfg = Debug|x64
 		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Debug|x64.Build.0 = Debug|x64
 		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Release|x64.ActiveCfg = Release|x64

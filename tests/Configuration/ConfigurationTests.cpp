@@ -14,6 +14,8 @@ using namespace window_sweaters::contracts;
 using namespace window_sweaters::configuration;
 int RunSessionTests(std::filesystem::path const& directory);
 int RunAppearanceTests(std::filesystem::path const& directory);
+int RunApplicationConfigurationTests(std::filesystem::path const& directory);
+int RunAppsSessionTests(std::filesystem::path const& directory);
 namespace {
 int checks=0;
 void Require(bool value,char const* label) {
@@ -39,8 +41,8 @@ Handle OpenPipe(std::wstring const& endpoint) {
     Handle pipe(CreateFileW(endpoint.c_str(),GENERIC_READ|GENERIC_WRITE|READ_CONTROL,0,nullptr,OPEN_EXISTING,
         FILE_FLAG_OVERLAPPED|SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION,nullptr));
     Require(bool(pipe),"Open real local pipe");
-    DWORD mode=PIPE_READMODE_MESSAGE;
-    Require(SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr)!=FALSE,"Message read mode");
+    DWORD mode=PIPE_READMODE_BYTE;
+    Require(SetNamedPipeHandleState(pipe.get(),&mode,nullptr,nullptr)!=FALSE,"Length-framed byte read mode");
     return pipe;
 }
 void Malformed(std::wstring const& endpoint,std::vector<std::byte> bytes) {
@@ -309,9 +311,13 @@ int wmain(int argc,wchar_t** argv) {
             checks+=RunSessionTests(directory);
         else if (argc==2 && std::wstring_view(argv[1])==L"--appearance-only")
             checks+=RunAppearanceTests(directory);
+        else if (argc==2 && std::wstring_view(argv[1])==L"--apps-only")
+            checks+=RunApplicationConfigurationTests(directory)+RunAppsSessionTests(directory);
         else {
             StorageCases(directory); IpcCases(directory); RecoveryIpc(directory); ClientLeaseCases(directory);
             checks+=RunSessionTests(directory); checks+=RunAppearanceTests(directory);
+            checks+=RunApplicationConfigurationTests(directory);
+            checks+=RunAppsSessionTests(directory);
         }
         std::filesystem::remove_all(directory);
         std::cout<<"PASS "<<checks<<" configuration/storage/real-pipe assertions\n"; return 0;

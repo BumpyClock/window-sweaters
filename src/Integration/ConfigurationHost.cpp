@@ -263,11 +263,24 @@ contracts::Configuration ConfigurationHost::Snapshot() const {
     std::lock_guard guard(impl_->mutex);
     return impl_->Snapshot();
 }
+std::uint64_t ConfigurationHost::Revision() const {
+    std::lock_guard guard(impl_->mutex);
+    return impl_->server?impl_->server->Revision():impl_->stopped_snapshot.revision;
+}
+std::uint64_t ConfigurationHost::EligibilityRevision(applications::AppIdentity const& identity) const {
+    std::lock_guard guard(impl_->mutex);
+    return impl_->server?impl_->server->EligibilityRevision(identity):impl_->stopped_snapshot.revision;
+}
 std::optional<contracts::Configuration> ConfigurationHost::PollSnapshot(std::uint64_t observed_revision) const {
     std::lock_guard guard(impl_->mutex);
+    if (impl_->server && impl_->server->Revision()==observed_revision) return std::nullopt;
     auto current = impl_->Snapshot();
     return current.revision == observed_revision ? std::nullopt :
                                                   std::optional<contracts::Configuration>(current);
+}
+void ConfigurationHost::PublishApplications(std::vector<applications::RunningApplicationWindow> windows) {
+    std::lock_guard guard(impl_->mutex);
+    if (impl_->server) impl_->server->PublishApplications(std::move(windows));
 }
 std::filesystem::path ConfigurationHost::StorageDirectory() const {
     std::lock_guard guard(impl_->mutex);

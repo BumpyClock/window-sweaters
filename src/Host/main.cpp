@@ -13,6 +13,8 @@
 #include <sddl.h>
 #include <aclapi.h>
 #include <cerrno>
+#include <atomic>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
@@ -22,6 +24,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -212,7 +215,8 @@ public:
     Host(HINSTANCE instance, const Options& options,
         window_sweaters::integration::ConfigurationHost& configuration)
         : instance_(instance), options_(options), configuration_(configuration), committed_(configuration.Snapshot()),
-          appearance_(window_sweaters::host::MakeAppearance(committed_)) {}
+          appearance_(window_sweaters::host::MakeAppearance(committed_)), renderRevision_(committed_.revision),
+          metadataGate_(committed_.revision) {}
     ~Host() { Shutdown(); }
 
     HRESULT Initialize() {
@@ -236,6 +240,7 @@ public:
         if (SUCCEEDED(result)) result = queue_->Start(committed_.revision, recovery_.Generation());
         if (FAILED(result)) return result;
         if (!SetTimer(window_, ConfigurationTimer, 100, nullptr)) return LastError();
+        metadataWorker_=std::make_unique<window_sweaters::applications::MetadataWorker>();
         tracker_ = std::make_unique<WindowTracker>(window_, MakeTrackerConfig(options_));
         ActionBatch actions;
         if (!tracker_->Start(actions))
@@ -367,6 +372,9 @@ private:
         std::optional<WindowHandle> offDesktop;
         bool uncertainDesktop{};
         bool recreateOverlay{};
+        bool requireMetadata{};
+        std::optional<window_sweaters::contracts::Configuration> pendingConfiguration;
+        std::map<window_sweaters::applications::AppIdentity,std::uint64_t> eligibilityRevisions;
         std::function<void()> duringVisibilityProbe;
         unsigned failDeviceInitializations{};
         std::optional<HRESULT> nextOverlayCreateFailure;
@@ -381,6 +389,12 @@ private:
         window_sweaters::host::RenderState render;
         Overlay overlay;
         bool placementPending{};
+        window_sweaters::applications::ImmutableMetadata metadata;
+        bool metadataPending{};
+        std::uint64_t nextMetadataQuery{};
+        std::uint64_t renderEpoch{};
+        std::uint64_t eligibilityRevision{};
+        bool eligibilityObserved{};
     };
     struct Counters {
         std::uint64_t creates{}, removes{}, geometryUpdates{}, draws{}, pureMoves{};
@@ -435,6 +449,7 @@ private:
                     }
                     if (wparam == ConfigurationTimer) {
                         host->PollConfiguration();
+                        host->PollMetadata();
                         host->CheckQueue();
                         host->PollVisibility();
                         return 0;
@@ -518,32 +533,65 @@ private:
                 LogError(L"trusted Settings process exited with nonzero status",
                     static_cast<HRESULT>(launch.last_launch_exit));
         }
-        const auto drain = configuration_.DrainLocalCompletions();
-        for (const auto& completion : drain.completions)
-            if (completion.result.status != window_sweaters::contracts::Status::saved)
-                LogError(L"tray save rejected; committed appearance unchanged",
-                    HRESULT_FROM_WIN32(ERROR_WRITE_FAULT));
+        if (launch.pending_local) {
+            const auto drain = configuration_.DrainLocalCompletions();
+            for (const auto& completion : drain.completions)
+                if (completion.result.status != window_sweaters::contracts::Status::saved)
+                    LogError(L"tray save rejected; committed appearance unchanged",
+                        HRESULT_FROM_WIN32(ERROR_WRITE_FAULT));
+        }
         const auto snapshot = configuration_.PollSnapshot(committed_.revision);
         if (!snapshot) return;
         ApplyConfiguration(*snapshot);
     }
 
     void ApplyConfiguration(const window_sweaters::contracts::Configuration& snapshot) {
+        auto appearanceOnly=snapshot;
+        appearanceOnly.revision=committed_.revision;
+        appearanceOnly.eligibility=committed_.eligibility;
+        if (appearanceOnly==committed_) {
+            const auto previous=committed_.eligibility;
+            committed_=snapshot;
+            metadataGate_.SetConfigurationRevision(committed_.revision);
+            for (auto& [hwnd,entry]:entries_) {
+                (void)hwnd;
+                entry->metadataPending=false;
+                if (!entry->metadata) continue;
+                auto known=std::get_if<window_sweaters::applications::AppMetadata>(entry->metadata.get());
+                if (!known) continue;
+                const bool allowedChanged=previous.Allows(*entry->metadata)!=committed_.eligibility.Allows(*entry->metadata);
+                if (contract_ && allowedChanged)
+                    contract_->eligibilityRevisions.insert_or_assign(known->Identity(),snapshot.revision);
+                auto revision=EligibilityRevision(known->Identity());
+                const bool epochChanged=entry->eligibilityObserved && entry->eligibilityRevision!=revision;
+                entry->eligibilityRevision=revision; entry->eligibilityObserved=true;
+                if (!allowedChanged && !epochChanged) continue;
+                AdvanceRenderEpoch(*entry);
+                if (!committed_.eligibility.Allows(*entry->metadata)) Hide(*entry);
+                else entry->placementPending=entry->state.requestedVisible;
+            }
+            PublishApplications(); probeDirty_=true; return;
+        }
         auto appearance = window_sweaters::host::MakeAppearance(snapshot);
         renderRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
             Hide(*entry);
             entry->render.Invalidate();
+            AdvanceRenderEpoch(*entry);
             entry->placementPending = false;
         }
         committed_ = snapshot;
+        renderRevision_=snapshot.revision;
+        metadataGate_.SetConfigurationRevision(committed_.revision);
+        for (auto& [hwnd,entry]:entries_) { (void)hwnd; entry->metadataPending=false; }
         appearance_ = std::move(appearance);
         if (visibility_) ApplyVisibilityPolicy(visibility_->SetPaused(committed_.paused).snapshot);
         else if (contract_) ApplyVisibilityPolicy(contract_->policy.SetPaused(committed_.paused).snapshot);
-        const HRESULT result = queue_->Invalidate(committed_.revision, recovery_.Generation());
+        const HRESULT result = queue_->Invalidate(renderRevision_, recovery_.Generation());
         if (FAILED(result)) { QueueFailure(L"configuration render invalidation", result); return; }
         if (tracker_) tracker_->InvalidateAppearance();
+        PublishApplications();
         probeDirty_ = true;
     }
 
@@ -621,7 +669,7 @@ private:
             if (action == RecoveryAction::HideCurrent) {
                 ReleaseOverlayDevices();
                 if (queue_) {
-                    const auto result = queue_->Invalidate(committed_.revision, update.generation);
+                    const auto result = queue_->Invalidate(renderRevision_, update.generation);
                     if (FAILED(result)) QueueFailure(L"graphics-generation queue retirement", result);
                 }
             } else if (action == RecoveryAction::InitDevice && update.initialization) {
@@ -704,7 +752,7 @@ private:
         if (stopped_ || !recovery_.CanRender(recovery_.Generation())) return false;
         auto entry = Find(target);
         if (!entry) return false;
-        if (entry->state.excluded || !entry->state.requestedVisible) {
+        if (!EligibleNow(*entry)) {
             Hide(*entry);
             RetireRenderRetry(*entry);
             return false;
@@ -736,6 +784,7 @@ private:
         // Public desktop COM may pump WM_CLOSE and remove this entry. Neither the
         // Entry reference nor native authority may survive that reentrancy.
         if (stopped_ || !(entry = Find(target))) return false;
+        if (!EligibleNow(*entry)) { Hide(*entry); RetireRenderRetry(*entry); return false; }
         policy = VisibilityPolicy();
         auto transition = entry->visibility.Reconcile(policy, observation);
         if (!transition.accepted) return false;
@@ -834,6 +883,7 @@ private:
                     Dirty::Lifecycle, GetTickCount64());
                 if (FAILED(ApplyBatch(hidden))) return false;
             }
+
             const auto entry = Find(token.target);
             return entry && entry->state.ApplyValidated(Model(), token, Model().Accepts(token));
         }
@@ -845,23 +895,135 @@ private:
         return !stopped_ && entry && entry->state.ApplyValidated(tracker_->Model(), token, accepted);
     }
 
-    HRESULT ClassifyHelper(Entry& entry) {
-        const Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.state.target.pid));
-        if (!process.Get()) return LastError();
-        FILETIME creation{}, exit{}, kernel{}, user{};
-        if (!GetProcessTimes(process.Get(), &creation, &exit, &kernel, &user)) return LastError();
-        const auto processStart = (std::uint64_t{creation.dwHighDateTime} << 32) | creation.dwLowDateTime;
-        if (processStart != entry.state.target.processStart) return HRESULT_FROM_WIN32(ERROR_RETRY);
-        std::wstring image(32768, L'\0');
-        DWORD length = static_cast<DWORD>(image.size());
-        if (!QueryFullProcessImageNameW(process.Get(), 0, image.data(), &length)) return LastError();
-        image.resize(length);
-        const auto separator = image.find_last_of(L"\\");
-        const auto name = image.c_str() + (separator == std::wstring::npos ? 0 : separator + 1);
-        entry.state.excluded = HelperImage(name, options_.target != nullptr);
-        return S_OK;
+    bool ConfigurationCurrent() {
+        if (stopped_) return false;
+        if (contract_) {
+            if (contract_->pendingConfiguration) {
+                auto snapshot=std::move(*contract_->pendingConfiguration);
+                contract_->pendingConfiguration.reset();
+                ApplyConfiguration(snapshot);
+            }
+            return true;
+        }
+        for (unsigned attempt=0;attempt<2;++attempt) {
+            if (configuration_.Revision()==committed_.revision) return true;
+            if (auto snapshot=configuration_.PollSnapshot(committed_.revision)) ApplyConfiguration(*snapshot);
+        }
+        return configuration_.Revision()==committed_.revision;
     }
 
+    std::uint64_t EligibilityRevision(window_sweaters::applications::AppIdentity const& identity) const {
+        if (!contract_) return configuration_.EligibilityRevision(identity);
+        auto found=contract_->eligibilityRevisions.find(identity);
+        return found==contract_->eligibilityRevisions.end()?0:found->second;
+    }
+
+    bool EligibleNow(Entry& entry) {
+        if (!ConfigurationCurrent()) return false;
+        if (entry.state.excluded || !entry.state.requestedVisible || committed_.paused) return false;
+        if (contract_ && !contract_->requireMetadata) return true;
+        auto known=entry.metadata?std::get_if<window_sweaters::applications::AppMetadata>(entry.metadata.get()):nullptr;
+        if (!known) return false;
+        const auto revision=EligibilityRevision(known->Identity());
+        if (entry.eligibilityObserved && revision!=entry.eligibilityRevision) {
+            AdvanceRenderEpoch(entry);
+            Hide(entry);
+            entry.placementPending=entry.state.requestedVisible;
+        }
+        entry.eligibilityObserved=true; entry.eligibilityRevision=revision;
+        return ConfigurationCurrent() && committed_.eligibility.Allows(known->Identity());
+    }
+
+    void AdvanceRenderEpoch(Entry& entry) {
+        if (entry.renderEpoch==UINT64_MAX) throw std::overflow_error("Target render epoch exhausted");
+        ++entry.renderEpoch;
+        entry.render.Invalidate(); RetireRenderRetry(entry);
+        entry.placementPending=false;
+    }
+
+    bool Synchronize(Entry& entry,WorkToken const& token) {
+        auto previous=entry.state.appearanceRevision;
+        if (!entry.state.Synchronize(Model(),token)) return false;
+        if (!entry.renderEpoch) entry.renderEpoch=entry.state.appearanceRevision;
+        else if (previous!=entry.state.appearanceRevision) AdvanceRenderEpoch(entry);
+        return true;
+    }
+
+    void PublishApplications() {
+        if (contract_ || stopped_) return;
+        std::vector<window_sweaters::applications::RunningApplicationWindow> windows;
+        windows.reserve(entries_.size());
+        for (auto const& [hwnd,entry]:entries_) {
+            (void)hwnd;
+            if (entry->state.excluded) continue;
+            auto token=window_sweaters::applications::TargetToken::FromTarget(entry->state.target,committed_.revision);
+            if (!token) throw std::runtime_error("Invalid application lifetime");
+            auto metadata=entry->metadata;
+            if (!metadata) metadata=std::make_shared<window_sweaters::applications::MetadataResult>(
+                window_sweaters::applications::MetadataUnavailable{
+                    window_sweaters::applications::UnavailableReason::QueryFailed,
+                    window_sweaters::applications::QueryStage::Worker,ERROR_IO_PENDING});
+            windows.push_back({*token,std::move(metadata)});
+        }
+        configuration_.PublishApplications(std::move(windows));
+    }
+
+    void PollMetadata() {
+        using namespace window_sweaters::applications;
+        if (!metadataWorker_ || stopped_) return;
+        bool changed=false;
+        for (auto const& completion:metadataWorker_->DrainCompletions()) {
+            auto entry=Find(completion.request.Token().Target());
+            auto current=entry && Model().Current(entry->state.target.hwnd)==entry->state.target?
+                TargetToken::FromTarget(entry->state.target,committed_.revision):std::nullopt;
+            if (!metadataGate_.Accept(completion,current)) continue;
+            entry->metadataPending=false;
+            auto previousMetadata=entry->metadata;
+            std::size_t retained=0;
+            for (auto const& [hwnd,owner]:entries_) {
+                (void)hwnd;
+                if (owner.get()==entry || !owner->metadata) continue;
+                if (auto known=std::get_if<AppMetadata>(owner->metadata.get())) retained+=known->RetainedBytes();
+            }
+            auto incoming=std::get_if<AppMetadata>(completion.metadata.get());
+            if (incoming && incoming->RetainedBytes()>window_sweaters::contracts::maximum_running_metadata_bytes-retained)
+                entry->metadata=std::make_shared<MetadataResult const>(
+                    MetadataUnavailable{UnavailableReason::ResourceLimit,QueryStage::Worker,ERROR_NOT_ENOUGH_QUOTA});
+            else entry->metadata=completion.metadata;
+            entry->nextMetadataQuery=GetTickCount64()+30000;
+            if (previousMetadata) {
+                auto previous=std::get_if<AppMetadata>(previousMetadata.get());
+                auto refreshed=std::get_if<AppMetadata>(entry->metadata.get());
+                if ((previous!=nullptr)!=(refreshed!=nullptr) ||
+                    (previous && refreshed && previous->Identity()!=refreshed->Identity())) {
+                    AdvanceRenderEpoch(*entry); Hide(*entry); entry->eligibilityObserved=false;
+                }
+            }
+            if (auto known=std::get_if<AppMetadata>(entry->metadata.get()))
+                entry->state.excluded=known->ExecutableAlias() &&
+                    HelperImage(known->ExecutableAlias()->c_str(),options_.target!=nullptr);
+            if (EligibleNow(*entry)) entry->placementPending=true;
+            else Hide(*entry);
+            changed=true;
+        }
+        std::size_t budget=8;
+        for (auto& [hwnd,entry]:entries_) {
+            (void)hwnd;
+            if (!budget || (entry->metadata && GetTickCount64()<entry->nextMetadataQuery) ||
+                entry->metadataPending || entry->state.excluded) continue;
+            auto token=TargetToken::FromTarget(entry->state.target,committed_.revision);
+            if (!token) continue;
+            auto request=metadataGate_.Begin(*token);
+            if (!request) continue;
+            auto submitted=metadataWorker_->Submit(*request);
+            if (submitted==SubmitResult::Accepted || submitted==SubmitResult::Coalesced)
+                entry->metadataPending=true;
+            else metadataGate_.Retire(*request);
+            --budget;
+        }
+        if (changed) { PublishApplications(); probeDirty_=true; }
+        RetryPlacement();
+    }
     void Hide(Entry& entry) noexcept {
         entry.presentationVisible = false;
         if (entry.overlay.Window() && IsWindowVisible(entry.overlay.Window())) {
@@ -902,7 +1064,7 @@ private:
     bool Matches(const window_sweaters::rendering::RenderRequest& request, Entry& entry,
         const window_sweaters::geometry::RenderInput& input) const noexcept {
         return window_sweaters::host::MatchesRenderInput(request,
-            {entry.state.target, entry.state.appearanceRevision}, committed_.revision, recovery_.Generation(), input)
+            {entry.state.target, entry.renderEpoch}, renderRevision_, recovery_.Generation(), input)
             && recovery_.CanRender(request.deviceGeneration);
     }
 
@@ -916,9 +1078,8 @@ private:
         current = Find(target);
         if (stopped_ || !current) return S_FALSE;
         const auto fresh = CurrentGeometry(*current);
-        if (!fresh || !current->visibilityToken ||
-            !current->visibility.CanPublish(VisibilityPolicy(), *current->visibilityToken) ||
-            (!contract_ && configuration_.Snapshot().revision != committed_.revision)) {
+        if (!EligibleNow(*current) || !fresh || !current->visibilityToken ||
+            !current->visibility.CanPublish(VisibilityPolicy(), *current->visibilityToken)) {
             Hide(*current);
             return S_FALSE;
         }
@@ -949,15 +1110,8 @@ private:
         auto current = Find(target);
         if (stopped_ || !current || !recovery_.CanRender(recovery_.Generation())) return S_FALSE;
         auto& entry = *current;
-        if (entry.state.excluded) { Hide(entry); return S_OK; }
+        if (!EligibleNow(entry)) { Hide(entry); return S_FALSE; }
         if (!entry.overlay.Window()) {
-            const HRESULT classification = contract_ ? S_OK : ClassifyHelper(entry);
-            if (FAILED(classification)) {
-                LogError(L"target helper identity query; decoration deferred", classification);
-                entry.placementPending = true;
-                return S_FALSE;
-            }
-            if (entry.state.excluded) return S_OK;
             const HRESULT creation = CreateOverlay(entry);
             if (FAILED(creation)) {
                 if (window_sweaters::rendering::GraphicsRecovery::IsRecoverable(creation))
@@ -989,9 +1143,8 @@ private:
     }
 
     HRESULT PrepareCurrent(Entry& entry) {
-        if (!recovery_.CanRender(recovery_.Generation()) || !entry.visibilityToken ||
-            !entry.visibility.CanPublish(VisibilityPolicy(), *entry.visibilityToken) ||
-            (!contract_ && configuration_.Snapshot().revision != committed_.revision)) {
+        if (!EligibleNow(entry) || !recovery_.CanRender(recovery_.Generation()) || !entry.visibilityToken ||
+            !entry.visibility.CanPublish(VisibilityPolicy(), *entry.visibilityToken)) {
             Hide(entry);
             return S_FALSE;
         }
@@ -1004,7 +1157,7 @@ private:
         if (entry.render.failed && Matches(*entry.render.failed, entry, *input)) return S_FALSE;
         if (entry.render.retry && Matches(*entry.render.retry, entry, *input)) return S_FALSE;
         const auto request = window_sweaters::host::MakeRenderRequest(
-            {entry.state.target, entry.state.appearanceRevision}, committed_.revision, recovery_.Generation(), *input, appearance_);
+            {entry.state.target, entry.renderEpoch}, renderRevision_, recovery_.Generation(), *input, appearance_);
         const HRESULT result = queue_->Submit(request);
         if (result == S_OK) {
             entry.render.pending = request;
@@ -1039,6 +1192,7 @@ private:
     }
 
     void DrainRendered(WPARAM cookie, LPARAM reserved) {
+        ConfigurationCurrent();
         std::vector<window_sweaters::rendering::RenderReady> results;
         const HRESULT drained = queue_->Drain(cookie, reserved, results);
         if (FAILED(drained)) { QueueFailure(L"render result drain", drained); return; }
@@ -1052,7 +1206,7 @@ private:
                 continue;
             }
             const Action action{ActionKind::Show, request.token.target, request.targetBounds, 0,
-                request.token.appearanceRevision};
+                entry->state.appearanceRevision};
             if (!Validate(action)) {
                 if (auto current = Find(request.token.target); current && current->render.pending &&
                     window_sweaters::host::SamePreparation(*current->render.pending, request))
@@ -1065,8 +1219,7 @@ private:
             const auto input = CurrentGeometry(*entry);
             if (entry->render.pending && window_sweaters::host::SamePreparation(*entry->render.pending, request))
                 entry->render.pending.reset();
-            if (!input || !Matches(request, *entry, *input) || committed_.paused ||
-                (!contract_ && configuration_.Snapshot().revision != committed_.revision)) {
+            if (!EligibleNow(*entry) || !input || !Matches(request, *entry, *input)) {
                 Hide(*entry);
                 ++counters_.staleResults;
                 continue;
@@ -1084,9 +1237,8 @@ private:
             entry = Find(request.token.target);
             if (!entry) continue;
             const auto publication = CurrentGeometry(*entry);
-            if (!publication || !Matches(request, *entry, *publication) || !entry->visibilityToken ||
-                !entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken) ||
-                (!contract_ && configuration_.Snapshot().revision != committed_.revision)) {
+            if (!EligibleNow(*entry) || !publication || !Matches(request, *entry, *publication) || !entry->visibilityToken ||
+                !entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken)) {
                 Hide(*entry);
                 ++counters_.staleResults;
                 continue;
@@ -1128,7 +1280,8 @@ private:
     }
 
     void RetryRenders() {
-        if (committed_.paused || queueFaulted_ || stopped_ || !recovery_.CanRender(recovery_.Generation())) return;
+        if (!ConfigurationCurrent() || committed_.paused || queueFaulted_ ||
+            !recovery_.CanRender(recovery_.Generation())) return;
         const auto status = queue_->Status();
         if (status.pending >= queueLimits_.maxPending) return;
         constexpr std::size_t retryBudget = 8;
@@ -1140,7 +1293,8 @@ private:
             if (!entry) continue;
             entry->render.retryQueued = false;
             if (!entry->render.retry) continue;
-            if (entry->state.excluded || !entry->state.requestedVisible) {
+            if (!EligibleNow(*entry)) {
+                Hide(*entry);
                 RetireRenderRetry(*entry);
                 continue;
             }
@@ -1148,7 +1302,7 @@ private:
                 entry->state.dpi, entry->state.appearanceRevision};
             if (!Validate(action)) {
                 if (auto current = Find(target); current && current->render.retry) {
-                    if (!current->state.requestedVisible || current->state.excluded) RetireRenderRetry(*current);
+                    if (!EligibleNow(*current)) RetireRenderRetry(*current);
                     else if (!current->render.retryQueued) {
                         renderRetries_.push_back(target);
                         current->render.retryQueued = true;
@@ -1171,7 +1325,7 @@ private:
     HRESULT PlaceAndShow(TargetId identity) {
         auto current = Find(identity);
         if (stopped_ || !current) return S_FALSE;
-        if (current->state.excluded || !current->state.requestedVisible || committed_.paused || queueFaulted_) {
+        if (!EligibleNow(*current) || queueFaulted_) {
             Hide(*current);
             return S_OK;
         }
@@ -1180,7 +1334,7 @@ private:
         result = MovePrepared(identity);
         if (result != S_OK) return result;
         current = Find(identity);
-        if (stopped_ || !current || !current->render.prepared) return S_FALSE;
+        if (stopped_ || !current || !EligibleNow(*current) || !current->render.prepared) return S_FALSE;
         auto& entry = *current;
         if (contract_) {
             entry.presentationVisible = true;
@@ -1198,6 +1352,7 @@ private:
         }
         ++counters_.reorders;
         if (!IsWindowVisible(entry.overlay.Window())) {
+            if (!EligibleNow(entry) || !entry.render.prepared) { Hide(entry); return S_FALSE; }
             result = entry.overlay.Show();
             if (FAILED(result)) { Hide(entry); return result; }
             ++counters_.shows;
@@ -1220,6 +1375,7 @@ private:
 
     HRESULT ApplyBatch(const ActionBatch& actions) {
         bool capacityFreed{};
+        bool lifecycleChanged{};
         for (auto action : actions) {
             if (stopped_ && action.kind != ActionKind::Remove) continue;
             Entry* entry = Find(action.target);
@@ -1236,7 +1392,7 @@ private:
                     visibilityOrder_.push_back(action.target);
                 }
                 const WorkToken token{action.target, action.appearanceRevision};
-                if (!entry->state.Synchronize(Model(), token)) {
+                if (!Synchronize(*entry, token)) {
                     ++counters_.staleActions;
                     continue;
                 }
@@ -1247,6 +1403,7 @@ private:
                 if (!entry) { ++counters_.staleActions; continue; }
                 const HRESULT result = Prepare(action.target);
                 if (FAILED(result)) return result;
+                PublishApplications();
             } else if (!entry) {
                 ++counters_.staleActions;
                 continue;
@@ -1258,10 +1415,13 @@ private:
                 std::erase(visibilityOrder_, action.target);
                 if (visibility_ && entry->visibilityRegistered) visibility_->UnregisterOverlay(entry->overlay.Window());
                 entries_.erase(action.target.hwnd);
+                metadataGate_.Forget(action.target.hwnd);
+                PublishApplications();
                 capacityFreed = true;
             } else if (action.kind == ActionKind::Hide) {
+                lifecycleChanged=true;
                 const WorkToken token{action.target, action.appearanceRevision};
-                if (!entry->state.Synchronize(Model(), token)) {
+                if (!Synchronize(*entry, token)) {
                     ++counters_.staleActions;
                     continue;
                 }
@@ -1271,7 +1431,7 @@ private:
                 }
             } else if (action.kind == ActionKind::Move) {
                 const WorkToken token{action.target, action.appearanceRevision};
-                if (!entry->state.Synchronize(Model(), token)) {
+                if (!Synchronize(*entry, token)) {
                     ++counters_.staleActions;
                     continue;
                 }
@@ -1294,6 +1454,7 @@ private:
                     }
                 }
             } else {
+                if (action.kind==ActionKind::Show) lifecycleChanged=true;
                 if (!Validate(action)) {
                     // The old work token is rejected. Retry current immutable input, not its result.
                     if (auto pending = Find(action.target)) pending->placementPending = true;
@@ -1307,6 +1468,7 @@ private:
             }
             probeDirty_ = true;
         }
+        if (lifecycleChanged) PublishApplications();
         if (capacityFreed && !stopped_) RetryRenders();
         return S_OK;
     }
@@ -1317,7 +1479,7 @@ private:
         for (const auto& [hwnd, entry] : entries_) {
             (void)hwnd;
             if (entry->placementPending && entry->state.requestedVisible
-                && !entry->state.excluded) {
+                && EligibleNow(*entry)) {
                 retry.push_back({ActionKind::Reorder, entry->state.target, entry->state.pendingRect,
                     entry->state.dpi, entry->state.appearanceRevision, false, entry->state.topmost});
                 if (retry.size() == TrackerReconcileBudget) break;
@@ -1351,8 +1513,12 @@ private:
             entry->placementPending = false;
         }
         configuration_.Quit();
+        if (metadataWorker_) {
+            for (auto const& retirement:metadataWorker_->Stop()) metadataGate_.Retire(retirement);
+            metadataWorker_.reset();
+        }
         if (queue_) {
-            queue_->Invalidate(committed_.revision, recoveryStop.generation);
+            queue_->Invalidate(renderRevision_, recoveryStop.generation);
             const HRESULT result = queue_->Stop();
             if (FAILED(result)) LogError(L"render queue shutdown", result);
             finalQueueStats_ = queue_->Status();
@@ -1387,6 +1553,11 @@ private:
     window_sweaters::integration::ConfigurationHost& configuration_;
     window_sweaters::contracts::Configuration committed_;
     window_sweaters::knitting::TileSpec appearance_;
+    // Queue revision advances only for shared appearance changes. Target epochs
+    // retire app-policy work without canceling another application's preparation.
+    std::uint64_t renderRevision_{};
+    window_sweaters::applications::CompletionGate metadataGate_;
+    std::unique_ptr<window_sweaters::applications::MetadataWorker> metadataWorker_;
     ContractState* contract_{};
     HWND window_{};
     GraphicsDevice graphics_;
@@ -1438,7 +1609,9 @@ void Host::RunConsumerContracts() {
         unsigned moves{};
         std::function<void()> reenter;
     } desktopManager;
-    auto require = [](bool condition, const char* message) {
+    std::size_t consumerChecks=0;
+    auto require = [&](bool condition, const char* message) {
+        ++consumerChecks;
         if (!condition) throw std::runtime_error(message);
     };
     ComApartment apartment;
@@ -1501,7 +1674,7 @@ void Host::RunConsumerContracts() {
         for (const auto& [handle, entry] : host.entries_) {
             (void)handle;
             if (!entry->render.prepared || entry->render.pending || entry->render.retry ||
-                entry->render.failed || entry->render.prepared->configRevision != host.committed_.revision ||
+                entry->render.failed || entry->render.prepared->configRevision != host.renderRevision_ ||
                 entry->render.prepared->deviceGeneration != host.recovery_.Generation())
                 return false;
         }
@@ -1624,7 +1797,7 @@ void Host::RunConsumerContracts() {
             ? knitting::Material::Raised : knitting::Material::Plain;
         require(tile.chart && tile.chart->semanticId == theme->id && tile.baseArgb == theme->base_argb &&
             tile.material == sourceMaterial && tile.gauge.rows == 4.5f,
-            "Each of 37 committed semantic designs reaches actual native worker publication");
+            "Each committed semantic catalogue design reaches actual native worker publication");
     }
     for (const auto stitch : {contracts::StitchStyle::stockinette, contracts::StitchStyle::rib,
         contracts::StitchStyle::garter}) {
@@ -1650,6 +1823,195 @@ void Host::RunConsumerContracts() {
     require(!host.entries_.at(10001)->render.prepared->tile.chart &&
         host.entries_.at(10001)->render.prepared->tile.baseArgb == byApp.yarn_argb,
         "ByApp actual Host publication is honest saved plain-yarn fallback, not Finder");
+    contract.requireMetadata=true;
+    auto appMetadata=[](wchar_t const* path) {
+        return std::make_shared<applications::MetadataResult const>(
+            applications::ResolveMetadata(applications::NoPackagedIdentity{},applications::ExecutablePath{path}));
+    };
+    auto appA=appMetadata(L"C:\\PrivateFixtures\\One\\app.exe");
+    auto appB=appMetadata(L"C:\\PrivateFixtures\\Two\\app.exe");
+    host.entries_.at(10001)->metadata=appA;
+    add(20001); add(20002);
+    require(!host.entries_.at(20001)->overlay.Window() && !host.entries_.at(20002)->render.pending,
+        "Pending owner metadata never allocates a visible default border");
+    host.entries_.at(20001)->metadata=appA; host.entries_.at(20002)->metadata=appB;
+    require(SUCCEEDED(host.PlaceAndShow(host.entries_.at(20002)->state.target)),
+        "Known eligible second application submits real rendering");
+    pump([&]{return host.entries_.at(20002)->render.prepared.has_value();});
+    auto unrelated=*host.entries_.at(20002)->render.prepared;
+    auto unrelatedOverlay=host.entries_.at(20002)->overlay.Window();
+    auto unrelatedEpoch=host.entries_.at(20002)->renderEpoch;
+    auto uploadsBeforeDisable=host.counters_.uploads;
+    require(SUCCEEDED(host.PlaceAndShow(host.entries_.at(20001)->state.target)) &&
+        host.entries_.at(20001)->render.pending.has_value(),"First application has actual in-flight production preparation");
+    auto oldRequest=*host.entries_.at(20001)->render.pending;
+    applications::EligibilityMutation disable;
+    disable.edits.emplace_back(applications::SetApplicationPreference{std::get<applications::AppMetadata>(*appA).Identity(),false});
+    auto disabled=host.committed_;
+    disabled.eligibility=std::get<applications::EligibilityPreferences>(disabled.eligibility.Apply(disable));
+    ++disabled.revision; host.ApplyConfiguration(disabled);
+    require(!host.EligibleNow(*host.entries_.at(10001)) && !host.entries_.at(20001)->render.pending &&
+        !host.entries_.at(20001)->render.prepared &&
+        host.entries_.at(20001)->renderEpoch!=oldRequest.token.appearanceRevision,
+        "One identity disables every matching window and retires exact pending epoch");
+    require(host.entries_.at(20002)->render.prepared.has_value() &&
+        window_sweaters::host::SamePreparation(*host.entries_.at(20002)->render.prepared,unrelated) &&
+        host.entries_.at(20002)->overlay.Window()==unrelatedOverlay &&
+        host.entries_.at(20002)->renderEpoch==unrelatedEpoch,
+        "Application-only mutation retains unrelated GPU pixels, pending contracts and target epoch");
+    pump([&]{auto stats=host.queue_->Status(); return !stats.pending && !stats.active && !stats.ready;});
+    require(host.counters_.uploads==uploadsBeforeDisable && host.counters_.staleResults>0,
+        "Late real render completion after disable cannot upload or show");
+    auto off=host.committed_; ++off.revision;
+    off.eligibility=std::get<applications::EligibilityPreferences>(off.eligibility.Apply({false,true,{}}));
+    host.ApplyConfiguration(off);
+    add(20003); host.entries_.at(20003)->metadata=appMetadata(L"C:\\PrivateFixtures\\Future\\app.exe");
+    require(host.PlaceAndShow(host.entries_.at(20003)->state.target)==S_OK &&
+        !host.entries_.at(20003)->overlay.Window() && !host.entries_.at(20003)->render.pending,
+        "All-off denies later-new owners before overlay creation or rendering");
+    auto on=host.committed_; ++on.revision;
+    on.eligibility=std::get<applications::EligibilityPreferences>(on.eligibility.Apply({true,true,{}}));
+    host.ApplyConfiguration(on); host.RetryPlacement(); pump(prepared);
+    require(host.entries_.at(20001)->render.prepared->token.appearanceRevision!=oldRequest.token.appearanceRevision,
+        "Re-enable uses a fresh per-target epoch without ending its tracking lifetime");
+    add(20007); add(20008);
+    host.entries_.at(20007)->metadata=appA; host.entries_.at(20008)->metadata=appB;
+    require(SUCCEEDED(host.PlaceAndShow(host.entries_.at(20007)->state.target)) &&
+        SUCCEEDED(host.PlaceAndShow(host.entries_.at(20008)->state.target)) &&
+        host.entries_.at(20007)->render.pending && host.entries_.at(20008)->render.pending,
+        "Actual owner-not-yet-polled fixture has queued work for both applications");
+    const auto pendingOther=*host.entries_.at(20008)->render.pending;
+    const auto preparedOther=*host.entries_.at(20002)->render.prepared;
+    const auto beforeUnpolled=host.counters_.uploads;
+    auto missedDisabled=host.committed_; ++missedDisabled.revision;
+    missedDisabled.eligibility=std::get<applications::EligibilityPreferences>(missedDisabled.eligibility.Apply(disable));
+    applications::EligibilityMutation enableA;
+    enableA.edits.emplace_back(applications::SetApplicationPreference{std::get<applications::AppMetadata>(*appA).Identity(),true});
+    auto missedEnabled=missedDisabled; ++missedEnabled.revision;
+    missedEnabled.eligibility=std::get<applications::EligibilityPreferences>(missedEnabled.eligibility.Apply(enableA));
+    contract.eligibilityRevisions.insert_or_assign(std::get<applications::AppMetadata>(*appA).Identity(),missedEnabled.revision);
+    contract.pendingConfiguration=missedEnabled;
+    pump([&] {
+        auto status=host.queue_->Status();
+        return !status.pending && !status.active && !status.ready && host.entries_.at(20008)->render.prepared;
+    });
+    require(host.counters_.uploads==beforeUnpolled+1 && !host.entries_.at(20007)->render.prepared &&
+        !host.entries_.at(20007)->render.pending &&
+        window_sweaters::host::SamePreparation(*host.entries_.at(20008)->render.prepared,pendingOther) &&
+        window_sweaters::host::SamePreparation(*host.entries_.at(20002)->render.prepared,preparedOther),
+        "Unpolled disable/re-enable fences old own work while preserving unrelated queued and prepared pixels");
+    host.RetryPlacement(); pump(prepared);
+    for (auto handle:{WindowHandle{20001},WindowHandle{20002},WindowHandle{20003},WindowHandle{20007},WindowHandle{20008}}) {
+        require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()))),
+            "Retire private eligibility fixture lifetime");
+        windows.erase(handle);
+    }
+    {
+        struct MetadataBarrier {
+            std::mutex mutex;
+            std::condition_variable wake;
+            bool entered{},released{};
+            void Block() {
+                std::unique_lock lock(mutex);
+                entered=true; wake.notify_all();
+                if (!wake.wait_for(lock,std::chrono::seconds(10),[&]{return released;}))
+                    throw std::runtime_error("Private metadata contract barrier timed out");
+            }
+            bool Wait() {
+                std::unique_lock lock(mutex);
+                return wake.wait_for(lock,std::chrono::seconds(10),[&]{return entered;});
+            }
+            void Release() { std::lock_guard lock(mutex); released=true; wake.notify_all(); }
+            ~MetadataBarrier() { Release(); }
+        } disabling,reusing;
+        std::atomic<bool> firstDisable=true,firstReuse=true;
+        std::atomic<unsigned> changingOwnerQueries{};
+        const auto ownerThread=GetCurrentThreadId();
+        std::atomic<bool> queriedOffOwner=true;
+        host.metadataWorker_=std::make_unique<applications::MetadataWorker>(applications::WorkerLimits{},
+            [&](applications::TargetToken const& token) {
+                if (GetCurrentThreadId()==ownerThread) queriedOffOwner=false;
+                if (token.Target().hwnd==20004 && firstDisable.exchange(false)) disabling.Block();
+                if (token.Target().hwnd==20005 && firstReuse.exchange(false)) reusing.Block();
+                if (token.Target().hwnd==20006)
+                    return applications::ResolveMetadata(
+                        applications::PackagedAumid{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"},
+                        applications::ExecutablePath{L"C:\\PrivateFixtures\\WindowSweaters.Settings.exe"});
+                if (token.Target().hwnd==20009 && ++changingOwnerQueries>1) return *appB;
+                return *appA;
+            });
+        struct MetadataCleanup {
+            std::function<void()> stop;
+            ~MetadataCleanup() { stop(); }
+        } cleanup{[&] {
+            disabling.Release(); reusing.Release();
+            if (host.metadataWorker_) {
+                for (auto const& retirement:host.metadataWorker_->Stop()) host.metadataGate_.Retire(retirement);
+                host.metadataWorker_.reset();
+            }
+        }};
+        add(20004);
+        host.PollMetadata();
+        require(disabling.Wait() && host.entries_.at(20004)->metadataPending &&
+            !host.entries_.at(20004)->overlay.Window(),"Host metadata is queried off discovery and opens no default border while pending");
+        auto allOff=host.committed_; ++allOff.revision;
+        allOff.eligibility=std::get<applications::EligibilityPreferences>(allOff.eligibility.Apply({false,true,{}}));
+        host.ApplyConfiguration(allOff); host.PollMetadata(); disabling.Release();
+        auto waitMetadata=[&](WindowHandle handle) {
+            const auto deadline=GetTickCount64()+10000;
+            while (!host.entries_.at(handle)->metadata && GetTickCount64()<deadline) {
+                Sleep(5); host.PollMetadata();
+            }
+            require(host.entries_.at(handle)->metadata!=nullptr,"Current Host metadata request settles within bounded fixture deadline");
+        };
+        waitMetadata(20004);
+        require(!host.entries_.at(20004)->overlay.Window() && !host.entries_.at(20004)->render.pending &&
+            !host.EligibleNow(*host.entries_.at(20004)),"Late pre-disable metadata cannot bypass current all-off; renewed metadata also remains disabled");
+        add(20005); host.PollMetadata();
+        require(reusing.Wait(),"Private metadata lookup reaches gated old HWND/process lifetime");
+        const auto oldTarget=host.entries_.at(20005)->state.target;
+        require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{20005},Dirty::Lifecycle,GetTickCount64()))),
+            "Destroy pending metadata target retires exact owner admission");
+        windows.at(20005).identity.processStart=5678;
+        require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(windows.at(20005),Dirty::Lifecycle,GetTickCount64()))),
+            "Rediscover same HWND/PID with changed process birth");
+        host.PollMetadata(); reusing.Release(); waitMetadata(20005);
+        const auto replacementTarget=host.entries_.at(20005)->state.target;
+        require(replacementTarget.processStart==5678 && replacementTarget.generation!=oldTarget.generation &&
+            !host.entries_.at(20005)->overlay.Window() && !host.entries_.at(20005)->render.pending &&
+            queriedOffOwner && host.metadataWorker_->Statistics().queries>=4,
+            "Old metadata completion is rejected across HWND/PID reuse; only current renewed owner settles off UI thread");
+        add(20006); host.PollMetadata(); waitMetadata(20006);
+        require(host.entries_.at(20006)->state.excluded && !host.entries_.at(20006)->overlay.Window(),
+            "Verified packaged Settings process alias remains excluded without reducing its persistent identity to a basename");
+        auto ownerEnabled=host.committed_; ++ownerEnabled.revision;
+        ownerEnabled.eligibility=std::get<applications::EligibilityPreferences>(ownerEnabled.eligibility.Apply(enableA));
+        host.ApplyConfiguration(ownerEnabled);
+        add(20009); host.PollMetadata(); waitMetadata(20009);
+        pump([&]{return host.entries_.at(20009)->render.prepared.has_value();});
+        const auto ownerEpoch=host.entries_.at(20009)->renderEpoch;
+        host.entries_.at(20009)->nextMetadataQuery=0;
+        host.PollMetadata();
+        const auto ownerDeadline=GetTickCount64()+10000;
+        while (changingOwnerQueries<2 && GetTickCount64()<ownerDeadline) { Sleep(5); host.PollMetadata(); }
+        while (host.entries_.at(20009)->metadataPending && GetTickCount64()<ownerDeadline) { Sleep(5); host.PollMetadata(); }
+        require(changingOwnerQueries>=2 && !host.entries_.at(20009)->metadataPending &&
+            host.entries_.at(20009)->renderEpoch>ownerEpoch && !host.entries_.at(20009)->render.prepared &&
+            !host.EligibleNow(*host.entries_.at(20009)) &&
+            std::get<applications::AppMetadata>(*host.entries_.at(20009)->metadata).Identity()==std::get<applications::AppMetadata>(*appB).Identity(),
+            "Bounded metadata refresh retires only the target whose same-lifetime supported owner property changes");
+        for (auto const& retirement:host.metadataWorker_->Stop()) host.metadataGate_.Retire(retirement);
+        host.metadataWorker_.reset();
+        for (auto handle:{WindowHandle{20004},WindowHandle{20005},WindowHandle{20006},WindowHandle{20009}}) {
+            require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()))),
+                "Retire private metadata-worker fixture lifetime");
+            windows.erase(handle);
+        }
+        auto allOn=host.committed_; ++allOn.revision;
+        allOn.eligibility=std::get<applications::EligibilityPreferences>(allOn.eligibility.Apply({true,true,{}}));
+        host.ApplyConfiguration(allOn); host.RetryPlacement(); pump(prepared);
+    }
+    contract.requireMetadata=false;
     const auto visibleTarget = host.entries_.at(10001)->state.target;
     const auto visibleToken = *host.entries_.at(10001)->visibilityToken;
     using namespace window_sweaters::visibility;
@@ -1938,7 +2300,9 @@ void Host::RunConsumerContracts() {
     require(SUCCEEDED(host.graphics_.Composition()->WaitForCommitCompletion()),
         "Consumer contract native publications commit");
     std::puts("PASS: actual Host stationary width/Pause/Resume rebuilding-Move flow and pending32 burst capacity recovery (hidden native receiver)");
-    std::puts("PASS: quota suppression/restore including recursive last retry; 37 chart selections and six stitch/material combinations reach actual native publication");
+    std::puts("PASS: actual Host app-only epochs preserve unrelated pixels; pending metadata, all-off future owners, multi-window toggle and late production completion gates");
+    std::printf("PASS: quota suppression/restore including recursive last retry; %zu chart selections and six stitch/material combinations reach actual native publication\n",
+        window_sweaters::designs::ws_design_theme_count());
     std::puts("PASS: actual Host visibility gate rejects lock/off-desktop/uncertain/resume-stale tokens and reuses pixels after current-desktop recovery (synthetic facts; no OS desktop/session mutation)");
     std::puts("PASS: actual pumping Prepare/Move/Show/Retry consumers reject removed lifetimes, shutdown, obsolete configuration/size and stale placement");
     std::puts("PASS: injected shared GPU recovery recreates actual D3D/DComp, rejects late generations, preserves target/config/CPU cache, and bounds failure/Stop (injection, not a driver reset)");
@@ -1961,6 +2325,8 @@ void Host::RunConsumerContracts() {
     auto nativeEntry = std::make_unique<Entry>(nativeTarget);
     nativeEntry->state.requestedVisible = true;
     nativeEntry->state.appearanceRevision = 1;
+    nativeEntry->renderEpoch=1;
+    nativeEntry->metadata=appMetadata(L"C:\\PrivateFixtures\\Native\\app.exe");
     require(SUCCEEDED(nativeEntry->overlay.Create(host.instance_, host.window_, host.graphics_)) &&
         SUCCEEDED(host.visibility_->RegisterOverlay(nativeEntry->overlay.Window())),
         "Register only actual own hidden overlay with native owner epoch");
@@ -1969,6 +2335,7 @@ void Host::RunConsumerContracts() {
     struct DisplayMessage { GUID id; DWORD length; DWORD value; } display{GUID_SESSION_DISPLAY_STATUS, sizeof(DWORD), 1};
     host.visibility_->HandleMessage(WM_POWERBROADCAST, PBT_POWERSETTINGCHANGE, reinterpret_cast<LPARAM>(&display));
     host.contract_ = nullptr;
+    host.committed_=configuration.Snapshot();
     if (host.visibility_->Snapshot().MayWork()) {
         desktopManager.reenter = [&] {
             auto* const adapter = host.visibility_.get();
@@ -1982,6 +2349,7 @@ void Host::RunConsumerContracts() {
     }
     DestroyWindow(targetWindow);
     std::puts("PASS: actual native Host receiver/overlay ownership and Stop object-lifetime contract; no shell desktop manager or OS state mutation");
+    std::printf("PASS: %zu actual Host consumer assertions, including app eligibility and metadata-worker races\n",consumerChecks);
 }
 }
 

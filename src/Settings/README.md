@@ -45,7 +45,76 @@ A fresh admitted snapshot after host restart or client-lease expiry clears the
 transient expiry status and confirms its complete configuration. A later
 disconnect therefore retains the renewed host's latest appearance, not a
 previous instance's values. Publication/edit/confirmation metadata is local to
-Settings; the wire protocol and persisted schema are unchanged.
+Settings; protocol 4 preserves this local ordering contract while schema 3 adds
+persisted eligibility.
+
+## Applications
+
+The native Applications list uses host-owned metadata, never displayed names as
+mutation keys. It includes running disabled owners, window/process counts,
+supported identity keys, saved non-running choices, and non-mutable unavailable
+owner diagnostics. All on/off changes the default and clears exceptions in one
+host transaction. Default for new applications preserves explicit choices.
+Remove saved choice restores the current default.
+
+`AppsSession` has an independent lease and 750 ms observation worker. It does
+not share the 150 ms appearance debounce or rebase commands onto refreshed
+snapshots. Application commands carry the exact displayed revision and require
+a typed eligibility acknowledgment. `AppsDraftState`, used by the actual GUI,
+preserves a new toggle against older observations and settles only on terminal
+acknowledgment/discard. Controls are disabled while an app command is pending.
+No application worker launches or restarts Host. Closing Settings stops only its
+two sessions and preview; Host remains running.
+An authoritative Apps snapshot clears obsolete `recovery_required` after the
+appearance session's explicit Preserve and reset action. The same open Apps
+session and native controls become editable again; no close/reopen is required.
+Relevant application conflict/storage-error status and native error codes remain
+visible across successful observation polls. `AppsDraftState::CanEdit()` is the
+edit gate used by the native UI and recovery regressions.
+
+Application rows retain their native controls by stable `AppIdentity`.
+Preference/metadata/acknowledgment updates change properties in place; only
+membership or order changes modify the items collection. Remove saved choice
+has one retained button whose visibility changes without reconstructing the
+toggle. Pending commands keep those controls focusable while `CanEdit()` rejects
+additional mutations and restores any rejected toggle to the current draft.
+Disconnect/recovery still disables unavailable controls; saves and accessibility
+remain active.
+
+The native update captures Apps focus and the outer/inner scroll offsets,
+restores the retained identity's control if an item move displaces focus, and
+restores offsets after layout (clamped only to the available scroll extent).
+The focus anchor records the exact toggle or Remove saved choice subcontrol.
+A retained visible Remove button keeps its purpose and focus after a row move;
+only a collapsed Remove button falls back to that owner's toggle.
+Removing the focused saved-only row moves focus to the Apps default control,
+not to an unrelated appearance selector.
+It never activates a window or changes foreground ownership. Appearance
+refreshes still advance the production draft's displayed CAS base, but
+eligibility-only revisions do not reset selection/color/width controls or submit
+another appearance preview. Genuine appearance edits update only changed
+native values.
+
+Apps presentation now owns an explicit native-layout boundary: worker snapshots
+received before `Loaded`, an attached `XamlRoot`, and nonzero layout are retained
+by publication sequence. A post-layout dispatcher turn applies the latest
+snapshot; the Loaded/LayoutUpdated event never directly runs focus restoration
+or forces another layout inside that event. Initial row population has no
+existing Apps context, so it does not call FocusManager or restore viewport
+offsets. Subsequent attached updates preserve the established context.
+
+Dispatcher and Apps event callbacks record the exact operation/stage and
+`hresult_error` HRESULT/message before entering a terminal, visibly reported
+native-UI failure state. This is not a successful fallback: mutations are
+disabled and the error remains on screen and in `settings-startup.log`.
+Diagnostics distinguish focus capture, viewport lookup, row construction,
+items reconciliation, property updates, focus restore and both scroll restores.
+Stage tracking is allocation-free state on ordinary observations. Successful
+admission and first presentation log once per App lifetime; unchanged 750 ms
+Apps polls do not perform diagnostic file I/O. Typed failure logging remains
+unconditional and independent of both success flags.
+These records address the previously unlogged CoreMessaging callback failure;
+native first-snapshot startup remains a CU check, not a reducer/build claim.
 
 ## Production preview
 
@@ -78,10 +147,68 @@ foreach ($configuration in 'Debug','Release') {
 }
 ```
 
-The test executable also accepts `--session-only` and `--appearance-only` for
+The test executable also accepts `--session-only`, `--appearance-only` and `--apps-only` for
 focused checks. Tests exercise real authenticated IPC, failed atomic writes,
 read-only migration, restart/reconnection, full appearance deduplication,
 70-change chains/coalescing, and every original chart's production preview.
+The apps selector covers legacy migration, typed real IPC, aggregate bounds,
+durable all-off, stable identity persistence, hosted owners, saved/non-running
+rows, independent observation changes, lost acknowledgments, conflicts and the
+actual `AppsDraftState` reducer. Host `--integration-contract` separately runs
+the real MTA metadata worker and production-render completion races in private
+hidden fixtures; it does not change desktop/session/startup state.
+
+For build-only qualification while another Host/Settings binary is active, use
+isolated artifacts and per-project intermediate paths:
+
+```powershell
+$root = (Get-Location).Path
+& $msbuild src\Settings\WindowSweaters.Settings.vcxproj /nologo /m /v:quiet /p:Platform=x64 /p:Configuration=Release "/p:OutDir=$root\out\issue8\x64\Release\" "/p:NativeIntermediateRoot=$root\out\issue8\obj"
+```
+
+The same properties apply to Host and configuration/integration test projects.
+They keep the active application's executable and canonical `resources.pri`
+unchanged. Native Apps-list CU, keyboard/accessibility and live window/identity
+qualification remain separate acceptance checks; build/hidden tests do not
+substitute for that gate.
+
+### Issue #8 qualification
+
+Independent review covers application persistence, recovery, keyed controls,
+exact subcontrol focus, deferred initial presentation, and dispatcher error
+reporting. Final Debug and Release Configuration and hidden Host gates pass.
+Focused results in each configuration are:
+
+| Executed artifact / selector | Result in each configuration |
+| --- | --- |
+| `WindowSweaters.Configuration.Tests.exe --apps-only` | 335 application persistence, protocol, observation and production Apps reducer assertions |
+| `WindowSweaters.Configuration.Tests.exe --session-only` | 87 preserved appearance coalescing, own-chain, reconnect and production draft assertions |
+| `WindowSweaters.ConfigurationHost.Tests.exe` | 123 ownership/binding checks |
+| `WindowSweaters.Host.exe --integration-contract` | 469 actual Host consumer assertions plus the existing scripted and four-surface GPU-readback contracts |
+
+The apps/session selectors are subsets of the full configuration suite, not
+additional independent coverage. Host gates exercise app-only in-flight
+retirement, unrelated queued/prepared retention, missed disable/re-enable
+epochs, metadata arriving after disable/reuse, packaged helper exclusion,
+same-lifetime owner-property refresh, future apps after all-off and exact Stop
+retirements. Recovery regressions preserve corrupt/newer bytes during explicit
+reset and restore the same open Apps session without hiding conflicts or storage
+errors.
+
+Computer Use verified the actual Settings window, per-app off/on, default-off
+with an explicit enabled exception, persistence after a new PID/HWND, and no
+initial overlay or render request after All-off. Subsequent off/on changes
+retained the exact Remove saved choice focus and unchanged top-of-page
+coordinates. Native wheel input did not establish a nonzero-viewport test.
+The first-snapshot correction was checked against the actual application after
+a previous candidate failed immediately after activation; passing reducer/build
+checks alone had not established native startup safety.
+
+The isolated outputs are `out\issue8\x64\Debug` and
+`out\issue8\x64\Release`, with generated canonical `resources.pri` retained.
+No OS startup, package installation, Store publication, or production-user
+configuration was changed. See `docs\parity.md` for the native evidence and
+remaining platform qualification.
 
 App SDK 2.5.1, C++/WinRT 2.0.240405.15, and self-contained App SDK settings remain
 pinned. Release retains `NDEBUG`, `WINRT_NO_SOURCE_LOCATION`, and portable

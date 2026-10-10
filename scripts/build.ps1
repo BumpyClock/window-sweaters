@@ -26,6 +26,7 @@ if ($IncludeFixture) {
 }
 if ($IncludeContractTests) {
     foreach ($path in @('tests\Configuration\WindowSweaters.Configuration.Tests.vcxproj',
+        'tests\Applications\ApplicationsTests.vcxproj',
         'tests\Integration\ConfigurationHostTests.vcxproj',
         'src\Host\HostAppearanceTests.vcxproj',
         'tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj',
