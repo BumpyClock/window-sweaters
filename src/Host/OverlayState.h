@@ -40,7 +40,7 @@ struct OverlayState {
     }
 
     std::optional<tracking::PhysicalRect> GeometryUpdate(bool settled) const noexcept {
-        if (excluded || topmost || (!settled && NeedsDraw())
+        if (excluded || (!settled && NeedsDraw())
             || (appliedRect && *appliedRect == pendingRect)) return std::nullopt;
         return pendingRect;
     }

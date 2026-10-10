@@ -390,24 +390,47 @@ HRESULT NativeVisibility::ValidateTarget(const TargetId& target) const noexcept 
 }
 
 HRESULT NativeVisibility::QueryDesktop(const DesktopOperation& operation, const ProbeToken& token,
-                                      HWND window, DesktopId& desktop, bool& current) noexcept {
-    if (!operation.Authorized(token)) return E_PENDING;
+                                      HWND window, DesktopId& desktop, bool& current,
+                                      HWND overlay, std::optional<std::uint64_t> epoch) noexcept {
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
     auto* const manager = operation.Manager();
     if (!manager) return FAILED(stats_.desktopStatus) ? stats_.desktopStatus : E_NOINTERFACE;
     GUID first{}, second{};
     BOOL before{}, after{};
     HRESULT result = manager->GetWindowDesktopId(window, &first);
-    if (!operation.Authorized(token)) return E_PENDING;
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
     if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(window, &before);
-    if (!operation.Authorized(token)) return E_PENDING;
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
     if (SUCCEEDED(result)) result = manager->GetWindowDesktopId(window, &second);
-    if (!operation.Authorized(token)) return E_PENDING;
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
     if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(window, &after);
-    if (!operation.Authorized(token)) return E_PENDING;
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
     if (FAILED(result)) return result;
     if (!IsEqualGUID(first, second) || before != after || IsEqualGUID(first, GUID_NULL))
         return E_PENDING;
     std::memcpy(desktop.bytes.data(), &first, sizeof(first));
+    current = before != FALSE;
+    return S_OK;
+}
+
+bool NativeVisibility::QueryAuthorized(const DesktopOperation& operation, const ProbeToken& token,
+                                      HWND overlay, std::optional<std::uint64_t> epoch) const noexcept {
+    return operation.Authorized(token) && (!overlay || (epoch && CurrentOverlay(overlay, *epoch)));
+}
+
+HRESULT NativeVisibility::QueryCurrentDesktop(const DesktopOperation& operation, const ProbeToken& token,
+                                             HWND window, bool& current, HWND overlay,
+                                             std::optional<std::uint64_t> epoch) noexcept {
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
+    auto* const manager = operation.Manager();
+    if (!manager) return FAILED(stats_.desktopStatus) ? stats_.desktopStatus : E_NOINTERFACE;
+    BOOL before{}, after{};
+    HRESULT result = manager->IsWindowOnCurrentVirtualDesktop(window, &before);
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
+    if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(window, &after);
+    if (!QueryAuthorized(operation, token, overlay, epoch)) return E_PENDING;
+    if (FAILED(result)) return result;
+    if (before != after) return E_PENDING;
     current = before != FALSE;
     return S_OK;
 }
@@ -463,27 +486,52 @@ Observation NativeVisibility::Observe(const ProbeToken& token, HWND overlay) noe
     const auto target = reinterpret_cast<HWND>(token.target.hwnd);
     if (target == overlay || overlays_.contains(target)) return failure(E_ACCESSDENIED);
     WindowSnapshot window;
-    result = QueryDesktop(operation, token, target, window.desktop, window.onCurrentDesktop);
+    result = QueryDesktop(operation, token, target, window.desktop, window.onCurrentDesktop,
+                          overlay, overlayEpoch);
     if (SUCCEEDED(result)) result = QueryFacts(target, window);
     if (FAILED(result)) return failure(result);
+    bool overlayCurrent{};
     if (!overlay) window.overlay = OverlayAssociation::Missing;
     else {
         if (!CurrentOverlay(overlay, *overlayEpoch)) return failure(E_PENDING);
-        DesktopId overlayDesktop;
-        bool overlayCurrent{};
-        result = QueryDesktop(operation, token, overlay, overlayDesktop, overlayCurrent);
+        result = QueryCurrentDesktop(operation, token, overlay, overlayCurrent, overlay, overlayEpoch);
         if (FAILED(result)) return failure(result);
-        if (!CurrentOverlay(overlay, *overlayEpoch)) return failure(E_PENDING);
-        window.overlay = overlayDesktop == window.desktop && overlayCurrent == window.onCurrentDesktop
-            ? OverlayAssociation::Matching : OverlayAssociation::Mismatched;
+        if (window.onCurrentDesktop && overlayCurrent) {
+            window.overlay = OverlayAssociation::CurrentDesktopVerified;
+        } else if (window.onCurrentDesktop) {
+            DesktopId overlayDesktop;
+            bool guidCurrent{};
+            result = QueryDesktop(operation, token, overlay, overlayDesktop, guidCurrent, overlay, overlayEpoch);
+            if (result == TYPE_E_ELEMENTNOTFOUND) {
+                window.overlayDesktopCapability = OverlayDesktopCapability::Unsupported;
+                window.overlay = OverlayAssociation::RecreateRequired;
+            } else if (FAILED(result)) return failure(result);
+            else {
+                if (guidCurrent != overlayCurrent) return failure(E_PENDING);
+                window.overlayDesktop = overlayDesktop;
+                window.overlayDesktopCapability = OverlayDesktopCapability::Available;
+                // Contradictory same-GUID/off-current results cannot authorize a move.
+                if (overlayDesktop == window.desktop) return failure(E_PENDING);
+                window.overlay = OverlayAssociation::Mismatched;
+            }
+        }
     }
     DesktopId confirmed;
     bool confirmedCurrent{};
-    result = QueryDesktop(operation, token, target, confirmed, confirmedCurrent);
+    result = QueryDesktop(operation, token, target, confirmed, confirmedCurrent, overlay, overlayEpoch);
     if (SUCCEEDED(result)) result = ValidateTarget(token.target);
     if (FAILED(result)) return failure(result);
     if (confirmed != window.desktop || confirmedCurrent != window.onCurrentDesktop)
         return failure(E_PENDING);
+    if (overlay) {
+        bool confirmedOverlayCurrent{};
+        result = QueryCurrentDesktop(operation, token, overlay, confirmedOverlayCurrent, overlay, overlayEpoch);
+        if (FAILED(result)) return failure(result);
+        if (confirmedOverlayCurrent != overlayCurrent) return failure(E_PENDING);
+    }
+    result = QueryFacts(target, window);
+    if (SUCCEEDED(result)) result = ValidateTarget(token.target);
+    if (FAILED(result)) return failure(result);
     if (!operation.Authorized(token)) return failure(E_PENDING);
     if (overlay && !CurrentOverlay(overlay, *overlayEpoch)) return failure(E_PENDING);
     stats_.lastQueryError = S_OK;
@@ -503,28 +551,25 @@ HRESULT NativeVisibility::AssociateOverlay(HWND overlay, const ProbeToken& token
     if (FAILED(result)) return result;
     const auto target = reinterpret_cast<HWND>(token.target.hwnd);
     if (overlays_.contains(target)) return E_ACCESSDENIED;
-    WindowSnapshot facts;
-    result = QueryFacts(target, facts);
-    if (FAILED(result)) return result;
-    if (!facts.visible || facts.minimized || facts.cloaked || facts.maximized || facts.fullscreen)
+    const auto initial = Observe(token, overlay);
+    if (!initial.window) return initial.nativeError;
+    const auto& window = *initial.window;
+    if (window.desktop != desktop || !window.onCurrentDesktop || !window.visible || window.minimized
+        || window.cloaked || window.maximized || window.fullscreen)
         return E_PENDING;
-    DesktopId targetDesktop, overlayDesktop;
-    bool targetCurrent{}, overlayCurrent{};
-    result = QueryDesktop(operation, token, target, targetDesktop, targetCurrent);
-    if (FAILED(result)) return result;
-    if (!CurrentOverlay(overlay, *overlayEpoch)) return E_PENDING;
-    if (targetDesktop != desktop || !targetCurrent) return E_PENDING;
-    result = QueryDesktop(operation, token, overlay, overlayDesktop, overlayCurrent);
-    if (FAILED(result)) return result;
-    if (!CurrentOverlay(overlay, *overlayEpoch)) return E_PENDING;
-    if (overlayDesktop != desktop) {
+    if (!QueryAuthorized(operation, token, overlay, overlayEpoch)) return E_PENDING;
+    if (window.overlay == OverlayAssociation::RecreateRequired) return TYPE_E_ELEMENTNOTFOUND;
+    if (window.overlay == OverlayAssociation::CurrentDesktopVerified) return S_OK;
+    if (window.overlay == OverlayAssociation::Mismatched && window.overlayDesktop
+        && window.overlayDesktopCapability == OverlayDesktopCapability::Available) {
         result = ValidateTarget(token.target);
         if (FAILED(result)) return result;
         DesktopId beforeMove;
         bool beforeMoveCurrent{};
-        result = QueryDesktop(operation, token, target, beforeMove, beforeMoveCurrent);
+        result = QueryDesktop(operation, token, target, beforeMove, beforeMoveCurrent, overlay, overlayEpoch);
         if (FAILED(result)) return result;
         if (beforeMove != desktop || !beforeMoveCurrent) return E_PENDING;
+        WindowSnapshot facts;
         result = QueryFacts(target, facts);
         if (FAILED(result)) return result;
         if (!facts.visible || facts.minimized || facts.cloaked || facts.maximized || facts.fullscreen)
@@ -533,7 +578,7 @@ HRESULT NativeVisibility::AssociateOverlay(HWND overlay, const ProbeToken& token
         if (IsWindowVisible(overlay)) return E_ACCESSDENIED;
         // No foreign HWND is passed to the sole mutating virtual-desktop API.
         const GUID id = NativeDesktopId(desktop);
-        if (!operation.Authorized(token)) return E_PENDING;
+        if (!QueryAuthorized(operation, token, overlay, overlayEpoch)) return E_PENDING;
         result = operation.Manager()->MoveWindowToDesktop(overlay, id);
         if (SUCCEEDED(result)) ++stats_.overlayMoves;
         if (!operation.Authorized(token)) return E_PENDING;
@@ -542,13 +587,13 @@ HRESULT NativeVisibility::AssociateOverlay(HWND overlay, const ProbeToken& token
             RecordFailure(result);
             return result;
         }
-    }
+    } else return E_PENDING;
     const auto confirmed = Observe(token, overlay);
     if (!confirmed.window) return confirmed.nativeError;
-    const auto& window = *confirmed.window;
-    if (window.desktop != desktop || !window.onCurrentDesktop
-        || window.overlay != OverlayAssociation::Matching || !window.visible || window.minimized
-        || window.cloaked || window.maximized || window.fullscreen)
+    const auto& finalWindow = *confirmed.window;
+    if (finalWindow.desktop != desktop || !finalWindow.onCurrentDesktop
+        || finalWindow.overlay != OverlayAssociation::CurrentDesktopVerified || !finalWindow.visible
+        || finalWindow.minimized || finalWindow.cloaked || finalWindow.maximized || finalWindow.fullscreen)
         return E_PENDING;
     if (!operation.Authorized(token)) return E_PENDING;
     if (!CurrentOverlay(overlay, *overlayEpoch)) return E_PENDING;

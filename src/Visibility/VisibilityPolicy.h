@@ -86,7 +86,8 @@ struct ProbeToken {
     bool operator==(const ProbeToken&) const = default;
 };
 
-enum class OverlayAssociation { Matching, Missing, Mismatched, Uncertain };
+enum class OverlayAssociation { Matching, CurrentDesktopVerified, Missing, Mismatched, RecreateRequired, Uncertain };
+enum class OverlayDesktopCapability { NotQueried, Available, Unsupported };
 
 struct WindowSnapshot {
     DesktopId desktop;
@@ -97,6 +98,8 @@ struct WindowSnapshot {
     bool maximized{};
     bool fullscreen{};
     OverlayAssociation overlay{OverlayAssociation::Uncertain};
+    std::optional<DesktopId> overlayDesktop;
+    OverlayDesktopCapability overlayDesktopCapability{OverlayDesktopCapability::NotQueried};
 };
 
 struct Observation {
@@ -113,6 +116,7 @@ struct Transition {
     Suppression reason{Suppression::QueryUncertain};
     ProbeToken token;
     std::optional<DesktopId> desktop;
+    bool recreate{};
 };
 
 // One instance per tracking lifetime; the host still owns overlay creation/destruction.

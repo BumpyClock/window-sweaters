@@ -27,7 +27,9 @@ constexpr int kStartHostControl = 101;
 constexpr int kStopHostControl = 102;
 constexpr int kRunLifecycleControl = 103;
 constexpr int kOpenSettingsControl = 104;
+constexpr int kGraphicsFailureControl = 105;
 constexpr UINT kHostSettingsCommand = 1002;
+constexpr UINT kHostGraphicsFailureCommand = 1005;
 constexpr COLORREF kTargetColor = RGB(37, 59, 79);
 constexpr COLORREF kReceiverColor = RGB(34, 42, 54);
 constexpr int kBorderWidth = 12;
@@ -121,6 +123,7 @@ struct Fixture
     HWND stopHostButton = nullptr;
     HWND runLifecycleButton = nullptr;
     HWND openSettingsButton = nullptr;
+    HWND graphicsFailureButton = nullptr;
     HWND statusText = nullptr;
     HWND evidenceText = nullptr;
     HWND settingsStatusText = nullptr;
@@ -349,6 +352,10 @@ std::wstring_view ControlName(Fixture& fixture, HWND window)
     if (window == fixture.openSettingsButton)
     {
         return L"open-native-settings";
+    }
+    if (window == fixture.graphicsFailureButton)
+    {
+        return L"simulate-graphics-failure";
     }
     if (window == fixture.keyboardEdit)
     {
@@ -778,13 +785,14 @@ HWND GetOwnedHostWindow(Fixture& fixture)
     return fixture.hostWindow;
 }
 
-bool RequestOwnedHostSettings(Fixture& fixture)
+bool RequestOwnedHostCommand(Fixture& fixture, UINT command, const char* eventName)
 {
+    auto& status = command == kHostSettingsCommand ? fixture.settingsStatus : fixture.hostStatusDetail;
     if (fixture.hostProcess == nullptr ||
         WaitForSingleObject(fixture.hostProcess, 0) != WAIT_TIMEOUT ||
         GetProcessId(fixture.hostProcess) != fixture.hostProcessId)
     {
-        fixture.settingsStatus = L"host unavailable";
+        status = L"host unavailable";
         UpdateStatus(fixture);
         return false;
     }
@@ -811,13 +819,13 @@ bool RequestOwnedHostSettings(Fixture& fixture)
     const bool posted = ownedHost && PostMessageW(
         host,
         WM_COMMAND,
-        MAKEWPARAM(kHostSettingsCommand, 0),
+        MAKEWPARAM(command, 0),
         0);
-    fixture.settingsStatus = posted ? L"request posted to owned host" :
-        ownedHost ? L"host rejected settings request" : L"host ownership check failed";
+    status = posted ? L"request posted to owned host" :
+        ownedHost ? L"host rejected command" : L"host ownership check failed";
 
     std::ostringstream json;
-    json << "{\"type\":\"fixture.settings_request\",\"command_id\":" << kHostSettingsCommand
+    json << "{\"type\":\"" << eventName << "\",\"command_id\":" << command
          << ",\"host_hwnd\":" << HwndHex(host)
          << ",\"host_pid\":" << ownerProcessId
          << ",\"tracked_host_pid\":" << fixture.hostProcessId
@@ -1657,19 +1665,24 @@ bool CreateFixtureControls(Fixture& fixture, HWND parent, HINSTANCE instance)
         0,
         L"STATIC",
         L"Test only this fixture window.\r\n"
-        L"Start the host, then use Run lifecycle checks or Open native settings.\r\n"
-        L"Move, resize, minimize, and restore operate only on this fixture.\r\n"
-        L"Settings opens only through the fixture-owned test host.\r\n"
-        L"Host snapshots record target identity, bounds, counters, and visibility.",
+        L"Use lifecycle checks, Settings, or graphics injection.\r\n"
+        L"Window actions affect only this fixture.\r\n"
+        L"Graphics injection recreates app devices, not the driver.\r\n"
+        L"Native snapshots retain identity and rendering counters.",
         WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
         408, 110, 456, 150, parent, nullptr, instance, nullptr);
+    fixture.graphicsFailureButton = CreateWindowExW(
+        0, L"BUTTON", L"Simulate graphics failure",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        408, 280, 200, 34, parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGraphicsFailureControl)), instance, nullptr);
     if (fixture.startHostButton == nullptr || fixture.stopHostButton == nullptr ||
         fixture.runLifecycleButton == nullptr || fixture.openSettingsButton == nullptr ||
         fixture.statusText == nullptr || fixture.evidenceText == nullptr ||
         fixture.settingsStatusText == nullptr || fixture.lifecycleText == nullptr ||
         fixture.keyboardLabel == nullptr || fixture.keyboardEdit == nullptr ||
         fixture.scrollLabel == nullptr || fixture.scrollList == nullptr ||
-        fixture.interactionHelp == nullptr)
+        fixture.interactionHelp == nullptr || fixture.graphicsFailureButton == nullptr)
     {
         return false;
     }
@@ -1725,6 +1738,7 @@ bool ExposeFixtureControls(Fixture& fixture)
         { "stop_host", fixture.stopHostButton, L"Button", L"Stop test host" },
         { "run_lifecycle", fixture.runLifecycleButton, L"Button", L"Run lifecycle checks" },
         { "open_settings", fixture.openSettingsButton, L"Button", L"Open native settings" },
+        { "graphics_failure", fixture.graphicsFailureButton, L"Button", L"Simulate graphics failure" },
         { "keyboard_label", fixture.keyboardLabel, L"Static", L"Keyboard input" },
         { "keyboard_input", fixture.keyboardEdit, L"Edit", L"Click here, then type a short test string." },
         { "scroll_label", fixture.scrollLabel, L"Static", L"Scrollable fixture list" },
@@ -2060,7 +2074,8 @@ LRESULT CALLBACK FixtureWindowProc(HWND window, UINT message, WPARAM wParam, LPA
             const char* controlName = controlId == kStartHostControl ? "start-test-host" :
                 controlId == kStopHostControl ? "stop-test-host" :
                 controlId == kRunLifecycleControl ? "run-lifecycle-checks" :
-                controlId == kOpenSettingsControl ? "open-native-settings" : "unknown";
+                controlId == kOpenSettingsControl ? "open-native-settings" :
+                controlId == kGraphicsFailureControl ? "simulate-graphics-failure" : "unknown";
             std::ostringstream json;
             json << "{\"type\":\"control.command\",\"control\":\"" << controlName
                  << "\",\"notification\":\"BN_CLICKED\",\"pid\":" << GetCurrentProcessId() << '}';
@@ -2094,7 +2109,11 @@ LRESULT CALLBACK FixtureWindowProc(HWND window, UINT message, WPARAM wParam, LPA
             }
             else if (controlId == kOpenSettingsControl)
             {
-                RequestOwnedHostSettings(*fixture);
+                RequestOwnedHostCommand(*fixture, kHostSettingsCommand, "fixture.settings_request");
+            }
+            else if (controlId == kGraphicsFailureControl)
+            {
+                RequestOwnedHostCommand(*fixture, kHostGraphicsFailureCommand, "fixture.graphics_failure_request");
             }
             UpdateStatus(*fixture);
             return 0;

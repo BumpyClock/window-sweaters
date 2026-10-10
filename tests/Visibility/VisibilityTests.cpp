@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <cwchar>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -253,18 +254,22 @@ public:
         if (insideQuery) releasedInsideQuery = true;
         return --references;
     }
-    HRESULT STDMETHODCALLTYPE IsWindowOnCurrentVirtualDesktop(HWND, BOOL* current) override {
+    HRESULT STDMETHODCALLTYPE IsWindowOnCurrentVirtualDesktop(HWND window, BOOL* current) override {
         ++membershipQueries;
         Reenter();
         if (FAILED(membershipError)) return membershipError;
-        *current = onCurrent;
+        const auto found = currentByWindow.find(window);
+        *current = found == currentByWindow.end() ? onCurrent : found->second;
         if (changeMembership) onCurrent = !onCurrent;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetWindowDesktopId(HWND window, GUID* id) override {
         ++desktopQueries;
+        ++desktopQueriesByWindow[window];
         Reenter();
         if (FAILED(desktopError)) return desktopError;
+        const auto error = desktopErrorsByWindow.find(window);
+        if (error != desktopErrorsByWindow.end()) return error->second;
         if (nullDesktop) *id = GUID_NULL;
         else {
             auto found = desktopByWindow.find(window);
@@ -278,6 +283,7 @@ public:
         lastMoved = window;
         if (onMove) onMove();
         desktopByWindow[window] = id;
+        currentByWindow[window] = TRUE;
         return S_OK;
     }
     std::atomic<ULONG> references{1};
@@ -292,6 +298,9 @@ public:
     std::uint32_t moves{};
     HWND lastMoved{};
     std::unordered_map<HWND, GUID> desktopByWindow;
+    std::unordered_map<HWND, BOOL> currentByWindow;
+    std::unordered_map<HWND, HRESULT> desktopErrorsByWindow;
+    std::unordered_map<HWND, std::uint32_t> desktopQueriesByWindow;
     std::function<void()> onQuery;
     std::function<void()> onMove;
     bool insideQuery{};
@@ -522,7 +531,8 @@ void ReentrantNativeDesktopOperations() {
     Check(ProcessIdToSessionId(GetCurrentProcessId(), &sessionId) != FALSE, "Reentrancy session ID");
     for (const bool association : {false, true}) {
         for (const auto mutation : mutations) {
-            for (std::uint32_t query = 1; query <= 12; ++query) {
+            const std::uint32_t lastQuery = association ? 32 : 12;
+            for (std::uint32_t query = 1; query <= lastQuery; ++query) {
                 HiddenWindow receiver;
                 HiddenWindow targetWindow;
                 HiddenWindow overlay{L"WindowSweaters.Overlay",
@@ -537,7 +547,10 @@ void ReentrantNativeDesktopOperations() {
                 }
                 Check(SUCCEEDED(native.RegisterOverlay(overlay.window)), "Reentrant overlay registration");
                 const ProbeToken token{NativeTarget(targetWindow.window), native.Snapshot().Revision(), 1};
-                if (association) manager.desktopByWindow[overlay.window] = GUID{2, 0, 0, {}};
+                if (association) {
+                    manager.desktopByWindow[overlay.window] = GUID{2, 0, 0, {}};
+                    manager.currentByWindow[overlay.window] = FALSE;
+                }
                 bool invoked{};
                 bool immediateSuppression{};
                 bool restartRejected{};
@@ -576,11 +589,18 @@ void ReentrantNativeDesktopOperations() {
                     Check(!result.window && result.nativeError == E_PENDING,
                           "Reentrant invalidation drops native observation");
                 }
+                if (!invoked || !immediateSuppression) {
+                    std::cerr << "Reentrancy case association=" << association
+                              << " mutation=" << static_cast<int>(mutation)
+                              << " query=" << query << " reached=" << manager.queries << '\n';
+                }
                 Check(invoked && immediateSuppression, "Query callback immediately invalidates authority");
-                Check(manager.moves == 0, "Reentrant query cannot authorize a stale desktop move");
+                Check(manager.moves == (association && query > 20 ? 1u : 0u),
+                      "Reentrant query cannot authorize a stale desktop move");
                 Check(!manager.releasedInsideQuery, "Stop does not release COM while a query is on the stack");
                 if (mutation == Mutation::Stop) {
-                    Check(referencesAtStop == 4 && manager.references == 2,
+                    const ULONG expectedReferences = association && (query <= 16 || query > 20) ? 5u : 4u;
+                    Check(referencesAtStop == expectedReferences && manager.references == 2,
                           "Stop retains operation COM reference and releases manager only after unwind");
                     Check(restartRejected, "Reentrant restart cannot resurrect active-operation authority");
                     Check(SUCCEEDED(native.Start().notifications), "Restart allowed after old operation unwinds");
@@ -600,6 +620,7 @@ void ReentrantNativeDesktopOperations() {
     SetDisplayOn(native);
     Check(SUCCEEDED(native.RegisterOverlay(overlay.window)), "Reentrant move overlay registration");
     manager.desktopByWindow[overlay.window] = GUID{2, 0, 0, {}};
+    manager.currentByWindow[overlay.window] = FALSE;
     const ProbeToken token{NativeTarget(targetWindow.window), native.Snapshot().Revision(), 1};
     manager.onMove = [&] { native.Stop(); };
     Check(native.AssociateOverlay(overlay.window, token, Desktop()) == E_PENDING,
@@ -612,7 +633,7 @@ void ReentrantOverlayRegistrationLifetime() {
     enum class Mutation { Unregister, Reregister, Destroy };
     for (const bool association : {false, true}) {
         for (const auto mutation : {Mutation::Unregister, Mutation::Reregister, Mutation::Destroy}) {
-            const std::uint32_t lastQuery = association ? 24 : 12;
+            const std::uint32_t lastQuery = association ? 32 : 12;
             for (std::uint32_t query = 1; query <= lastQuery; ++query) {
                 HiddenWindow receiver;
                 HiddenWindow targetWindow;
@@ -630,7 +651,10 @@ void ReentrantOverlayRegistrationLifetime() {
                 const auto hwnd = overlay.window;
                 const auto revision = native.Snapshot().Revision();
                 const ProbeToken token{NativeTarget(targetWindow.window), revision, 1};
-                if (association) manager.desktopByWindow[hwnd] = GUID{2, 0, 0, {}};
+                if (association) {
+                    manager.desktopByWindow[hwnd] = GUID{2, 0, 0, {}};
+                    manager.currentByWindow[hwnd] = FALSE;
+                }
                 bool invoked{};
                 HRESULT replacement{E_UNEXPECTED};
                 manager.onQuery = [&] {
@@ -654,7 +678,7 @@ void ReentrantOverlayRegistrationLifetime() {
                 }
                 Check(invoked && native.Snapshot().Revision() == revision,
                       "Overlay teardown alone invalidates registration, not global policy");
-                Check(manager.moves == (association && query > 12 ? 1u : 0u),
+                Check(manager.moves == (association && query > 20 ? 1u : 0u),
                       "Only an association authorized before teardown may call fake movement");
                 if (mutation == Mutation::Reregister || mutation == Mutation::Destroy)
                     Check(SUCCEEDED(replacement), "Reentrant overlay teardown/replacement succeeded");
@@ -669,9 +693,116 @@ void ReentrantOverlayRegistrationLifetime() {
     }
 }
 
+void CurrentDesktopToolOverlayWithoutGuid() {
+    HiddenWindow receiver;
+    HiddenWindow targetWindow;
+    HiddenWindow overlay{L"WindowSweaters.Overlay",
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT};
+    FakeDesktopManager manager;
+    manager.desktopErrorsByWindow[overlay.window] = TYPE_E_ELEMENTNOTFOUND;
+    NativeVisibility native{receiver.window, manager, SyntheticVisibleFacts};
+    Check(SUCCEEDED(native.Start().notifications), "Current pair fixture registration");
+    SetDisplayOn(native);
+    if (!native.Snapshot().MayWork()) {
+        std::cout << "SKIP current pair checks: session not observed interactive\n";
+        return;
+    }
+    Check(SUCCEEDED(native.RegisterOverlay(overlay.window)), "Current pair overlay registration");
+    const auto snapshot = native.Snapshot();
+    TargetVisibility visibility{NativeTarget(targetWindow.window)};
+    visibility.ApplyPolicy(snapshot);
+    auto token = visibility.BeginProbe(snapshot);
+    auto observed = native.Observe(token, overlay.window);
+    Check(observed.window && observed.window->overlay == OverlayAssociation::CurrentDesktopVerified
+          && !observed.window->overlayDesktop
+          && observed.window->overlayDesktopCapability == OverlayDesktopCapability::NotQueried,
+          "Current membership verified explicitly without invented overlay GUID");
+    Check(manager.desktopQueriesByWindow[overlay.window] == 0, "Current tool overlay GUID never queried");
+    Check(visibility.Reconcile(snapshot, observed).show, "Current tool pair renders despite missing AppView GUID");
+    Check(SUCCEEDED(native.AssociateOverlay(overlay.window, token, Desktop())) && manager.moves == 0,
+          "Current pair association needs verification, not GUID or movement");
+    Check(manager.desktopQueriesByWindow[overlay.window] == 0, "Current association avoids unsupported GUID too");
+
+    manager.currentByWindow[overlay.window] = FALSE;
+    token = visibility.BeginProbe(snapshot);
+    observed = native.Observe(token, overlay.window);
+    Check(observed.window && observed.window->overlay == OverlayAssociation::RecreateRequired
+          && !observed.window->overlayDesktop
+          && observed.window->overlayDesktopCapability == OverlayDesktopCapability::Unsupported,
+          "Off-current tool without GUID requires own recreation, not fabricated matching");
+    const auto transition = visibility.Reconcile(snapshot, observed);
+    Check(transition.hide && transition.recreate && !transition.show && !transition.associate,
+          "Hide before recreating only unsupported own overlay");
+    Check(native.AssociateOverlay(overlay.window, token, Desktop()) == TYPE_E_ELEMENTNOTFOUND
+          && manager.moves == 0, "Unsupported overlay cannot be moved through a fallback");
+    manager.currentByWindow[targetWindow.window] = FALSE;
+    token = visibility.BeginProbe(snapshot);
+    observed = native.Observe(token, overlay.window);
+    Check(observed.window && !observed.window->onCurrentDesktop,
+          "Off-desktop target can be observed without overlay GUID requirement");
+    const auto off = visibility.Reconcile(snapshot, observed);
+    Check(off.reason == Suppression::OffDesktop && !off.show && !off.associate && !off.recreate,
+          "Off-desktop target stays suppressed and never moved");
+    manager.currentByWindow[targetWindow.window] = TRUE;
+    manager.currentByWindow[overlay.window] = TRUE;
+    token = visibility.BeginProbe(snapshot);
+    manager.membershipError = E_FAIL;
+    observed = native.Observe(token, overlay.window);
+    Check(!observed.window && !visibility.Reconcile(snapshot, observed).show,
+          "Public membership failure cannot pass current verification");
+    manager.membershipError = S_OK;
+    native.SetPaused(true);
+    Check(!native.Observe(token, overlay.window).window, "Pause rejects current pair");
+    native.SetPaused(false);
+    DWORD session{};
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    native.HandleMessage(WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK, session);
+    Check(!native.Observe(token, overlay.window).window, "Lock rejects current pair");
+    Check(manager.moves == 0, "No fake or real desktop movement in current unsupported-GUID regressions");
 }
 
-int main() {
+int ReadOnlyWindowPairProbe(HWND target, HWND overlay) {
+    if (!IsWindow(target) || !IsWindow(overlay)) {
+        std::cerr << "FAIL probe: invalid window pair\n";
+        return 2;
+    }
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(apartment)) return 3;
+    Microsoft::WRL::ComPtr<IVirtualDesktopManager> manager;
+    HRESULT result = CoCreateInstance(CLSID_VirtualDesktopManager, nullptr, CLSCTX_INPROC_SERVER,
+                                     IID_PPV_ARGS(manager.GetAddressOf()));
+    BOOL targetBefore{}, targetAfter{}, overlayBefore{}, overlayAfter{};
+    GUID targetIdBefore{}, targetIdAfter{}, diagnosticOverlayId{};
+    HRESULT overlayGuidResult = E_PENDING;
+    if (SUCCEEDED(result)) result = manager->GetWindowDesktopId(target, &targetIdBefore);
+    if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(target, &targetBefore);
+    if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(overlay, &overlayBefore);
+    if (SUCCEEDED(result)) result = manager->GetWindowDesktopId(target, &targetIdAfter);
+    if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(target, &targetAfter);
+    if (SUCCEEDED(result)) result = manager->IsWindowOnCurrentVirtualDesktop(overlay, &overlayAfter);
+    if (manager) overlayGuidResult = manager->GetWindowDesktopId(overlay, &diagnosticOverlayId);
+    const bool verified = SUCCEEDED(result) && targetBefore && targetAfter && overlayBefore && overlayAfter
+        && IsEqualGUID(targetIdBefore, targetIdAfter) && !IsEqualGUID(targetIdBefore, GUID_NULL);
+    std::cout << "READONLY pair target=" << reinterpret_cast<std::uintptr_t>(target)
+              << " overlay=" << reinterpret_cast<std::uintptr_t>(overlay)
+              << " query_hr=0x" << std::hex << static_cast<unsigned long>(result)
+              << " overlay_guid_diagnostic_hr=0x" << static_cast<unsigned long>(overlayGuidResult)
+              << std::dec << " target_current=" << targetAfter << " overlay_current=" << overlayAfter
+              << " CurrentDesktopVerified=" << verified << '\n';
+    manager.Reset();
+    CoUninitialize();
+    return verified ? 0 : 1;
+}
+
+}
+
+int wmain(int count, wchar_t** arguments) {
+    if (count == 4 && std::wcscmp(arguments[1], L"--probe-window-pair") == 0) {
+        return ReadOnlyWindowPairProbe(
+            reinterpret_cast<HWND>(std::wcstoull(arguments[2], nullptr, 10)),
+            reinterpret_cast<HWND>(std::wcstoull(arguments[3], nullptr, 10)));
+    }
+    if (count != 1) return 2;
     try {
         StartupIsNotAssumedUnlocked();
         DesktopAndAssociationTransitions();
@@ -682,7 +813,8 @@ int main() {
         NativeFakeQueriesNeverMoveUserDesktops();
         ReentrantNativeDesktopOperations();
         ReentrantOverlayRegistrationLifetime();
-        std::cout << "PASS visibility: 9 groups (pure transitions and hidden native/fake-COM checks)\n";
+        CurrentDesktopToolOverlayWithoutGuid();
+        std::cout << "PASS visibility: 10 groups (pure transitions and hidden native/fake-COM checks)\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL visibility: " << error.what() << '\n';

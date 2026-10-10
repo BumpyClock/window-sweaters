@@ -126,7 +126,13 @@ Transition TargetVisibility::Reconcile(const PolicySnapshot& policy,
     if (window.fullscreen) return Suppress(Suppression::Fullscreen);
     if (window.overlay == OverlayAssociation::Uncertain)
         return Suppress(Suppression::QueryUncertain);
-    if (window.overlay != OverlayAssociation::Matching) {
+    if (window.overlay == OverlayAssociation::RecreateRequired) {
+        auto transition = Suppress(Suppression::OverlayUnassociated);
+        transition.recreate = true;
+        return transition;
+    }
+    if (window.overlay != OverlayAssociation::Matching
+        && window.overlay != OverlayAssociation::CurrentDesktopVerified) {
         auto transition = Suppress(Suppression::OverlayUnassociated);
         pendingAssociation_ = window.desktop;
         transition.associate = true;

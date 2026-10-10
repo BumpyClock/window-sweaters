@@ -92,7 +92,13 @@ private:
     bool CurrentOverlay(HWND overlay, std::uint64_t epoch) const noexcept;
     HRESULT ValidateTarget(const TargetId& target) const noexcept;
     HRESULT QueryDesktop(const DesktopOperation& operation, const ProbeToken& token,
-                         HWND window, DesktopId& desktop, bool& current) noexcept;
+                         HWND window, DesktopId& desktop, bool& current,
+                         HWND overlay = nullptr, std::optional<std::uint64_t> epoch = std::nullopt) noexcept;
+    HRESULT QueryCurrentDesktop(const DesktopOperation& operation, const ProbeToken& token,
+                                HWND window, bool& current, HWND overlay,
+                                std::optional<std::uint64_t> epoch) noexcept;
+    bool QueryAuthorized(const DesktopOperation& operation, const ProbeToken& token,
+                         HWND overlay, std::optional<std::uint64_t> epoch) const noexcept;
     HRESULT QueryFacts(HWND target, WindowSnapshot& facts) const noexcept;
     HRESULT ActivateDesktopManager() noexcept;
     void RecordFailure(HRESULT error) noexcept;

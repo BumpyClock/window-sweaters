@@ -29,7 +29,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>d2d1.lib;d3d11.lib;dxgi.lib;dcomp.lib;dwmapi.lib;shell32.lib;ole32.lib;user32.lib;gdi32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d2d1.lib;d3d11.lib;dxgi.lib;dcomp.lib;dwmapi.lib;shell32.lib;ole32.lib;user32.lib;gdi32.lib;advapi32.lib;windowscodecs.lib;uuid.lib;wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest><AdditionalManifestFiles>Host.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>
@@ -37,13 +37,33 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="HostContractTests.cpp" />
     <ClCompile Include="..\Rendering\Overlay.cpp" />
+    <ClCompile Include="..\Rendering\Stacking.cpp" />
+    <ClCompile Include="..\Rendering\RenderQueue.cpp" />
+    <ClCompile Include="..\Rendering\GraphicsRecovery.cpp" />
+    <ClCompile Include="..\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\Knitting\KnitTile.cpp" />
+    <ClCompile Include="..\Knitting\Chart.cpp" />
+    <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
+    <ClCompile Include="..\Geometry\Geometry.cpp" />
+    <ClCompile Include="..\Geometry\NativeGeometry.cpp" />
+    <ClCompile Include="..\Integration\ConfigurationHost.cpp" />
+    <ClCompile Include="..\Visibility\VisibilityPolicy.cpp" />
+    <ClCompile Include="..\Visibility\NativeVisibility.cpp" />
     <ClCompile Include="..\Tracking\TrackingModel.cpp" />
     <ClCompile Include="..\Tracking\WindowTracker.cpp" />
     <ClInclude Include="OverlayState.h" />
+    <ClInclude Include="RenderState.h" />
+    <ClInclude Include="Appearance.h" />
     <ClInclude Include="..\Rendering\Overlay.h" />
+    <ClInclude Include="..\Rendering\Stacking.h" />
     <ClInclude Include="..\Tracking\TrackingModel.h" />
     <ClInclude Include="..\Tracking\WindowTracker.h" />
     <Manifest Include="Host.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="WindowSweaters.Host.Configuration.vcxproj">
+      <Project>{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -350,9 +350,89 @@ void BindingCases(std::filesystem::path const& root) {
     host.Quit();
     Require(host.SettingsLaunch().error == ERROR_INVALID_STATE, "A quit host cannot relaunch Settings");
 }
+int NativeSettingsHelper(std::filesystem::path const& directory) {
+    auto image = configuration::SiblingExecutable(L"WindowSweaters.Settings.exe");
+    Require(std::filesystem::weakly_canonical(directory.parent_path()) ==
+            std::filesystem::weakly_canonical(image.parent_path()) && directory.filename() == L"storage",
+        "Native Settings stand-in is confined to its isolated sibling storage");
+    auto deadline = GetTickCount64() + 12000;
+    while (!std::filesystem::exists(directory / L"exit-native-helper") && GetTickCount64() < deadline) Sleep(5);
+    return STILL_ACTIVE;
+}
+int LaunchDiagnosticsHelper(std::filesystem::path const& directory) {
+    auto image = configuration::SiblingExecutable(L"NativeHost.exe");
+    Require(std::filesystem::weakly_canonical(directory.parent_path()) ==
+            std::filesystem::weakly_canonical(image.parent_path()) && directory.filename() == L"storage",
+        "Launch diagnostics helper uses only isolated sibling storage");
+    auto options = Options(directory, L"launch-diagnostics");
+    options.test_settings_path.clear();
+    ConfigurationHost host(options);
+    Require(host.Start().state == HostState::running, "Native launch diagnostics host starts");
+    Require(host.Status().last_launch_pid == 0 && !host.Status().last_launch_exited,
+        "No process diagnostics are fabricated before a successful launch");
+    Require(host.LaunchSettings() == ERROR_SUCCESS, "CreateProcess launches the verified native sibling stand-in");
+    auto live = host.Status();
+    Require(live.last_launch_pid != 0 && !live.last_launch_exited && live.last_launch_error == ERROR_SUCCESS,
+        "Launch status exposes the real child PID while it is still running");
+    Handle child(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+        FALSE, live.last_launch_pid));
+    Require(bool(child), "Diagnostics PID identifies the actual native child process");
+    try {
+        host.Quit();
+        Require(WaitForSingleObject(child.get(), 0) == WAIT_TIMEOUT &&
+                host.Status().last_launch_pid == live.last_launch_pid && !host.Status().last_launch_exited,
+            "Quit disconnects without killing the launched application or forgetting its PID");
+        Require(host.LaunchSettings() == ERROR_INVALID_STATE &&
+                host.Status().last_launch_error == ERROR_INVALID_STATE &&
+                host.Status().last_launch_pid == live.last_launch_pid,
+            "A failed later launch retains diagnostics for the last successful process");
+        {
+            std::ofstream release(directory / L"exit-native-helper");
+            release << "native test exit";
+        }
+        Require(WaitForSingleObject(child.get(), 5000) == WAIT_OBJECT_0, "Native sibling exits after the test releases it");
+        auto exited = host.Status();
+        Require(exited.last_launch_pid == live.last_launch_pid && exited.last_launch_exited &&
+                exited.last_launch_exit == STILL_ACTIVE,
+            "A signaled process with real exit code 259 is reported as exited, not running");
+        Require(host.Start().state == HostState::running && host.Status().last_launch_exited &&
+                host.Status().last_launch_pid == live.last_launch_pid,
+            "Explicit restart preserves the last launch diagnostic handle");
+        Require(host.LaunchSettings() == ERROR_SUCCESS, "A later successful launch replaces the one retained process");
+        auto next = host.Status();
+        Require(next.last_launch_pid != 0 && next.last_launch_pid != live.last_launch_pid,
+            "A replacement launch reports its own PID, not the earlier child");
+        Handle replacement(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            FALSE, next.last_launch_pid));
+        Require(bool(replacement) && WaitForSingleObject(replacement.get(), 5000) == WAIT_OBJECT_0,
+            "Replacement native process also exits without UI or host termination");
+        Require(host.Status().last_launch_exited && host.Status().last_launch_exit == STILL_ACTIVE,
+            "Replacement exit diagnostics come from the currently retained process");
+    } catch (...) {
+        if (WaitForSingleObject(child.get(), 0) == WAIT_TIMEOUT) {
+            TerminateProcess(child.get(), 99);
+            WaitForSingleObject(child.get(), 5000);
+        }
+        throw;
+    }
+    return 0;
+}
+void LaunchDiagnosticsCases(std::filesystem::path const& root) {
+    auto fixture = root / L"native-launch";
+    std::filesystem::create_directory(fixture);
+    Require(CopyFileW(Self().c_str(), (fixture / L"NativeHost.exe").c_str(), TRUE) &&
+            CopyFileW(Self().c_str(), (fixture / L"WindowSweaters.Settings.exe").c_str(), TRUE),
+        "Launch diagnostics use only native test binaries, not Settings UI");
+    RunChild(L"--launch-diagnostics", fixture / L"storage", 0, fixture / L"NativeHost.exe");
+}
 }
 int wmain(int argc, wchar_t** argv) {
     try {
+        if (argc == 6 && std::wstring(argv[1]) == L"--test-mode" &&
+            std::wstring(argv[2]) == L"--storage-dir" && std::wstring(argv[4]) == L"--endpoint-suffix")
+            return NativeSettingsHelper(std::filesystem::weakly_canonical(argv[3]));
+        if (argc == 3 && std::wstring(argv[1]) == L"--launch-diagnostics")
+            return LaunchDiagnosticsHelper(std::filesystem::weakly_canonical(argv[2]));
         if (argc == 3) {
             auto directory = std::filesystem::weakly_canonical(argv[2]);
             auto scratch = std::filesystem::weakly_canonical(ScratchRoot()).native() + L"\\";
@@ -377,6 +457,7 @@ int wmain(int argc, wchar_t** argv) {
             FailureCases(root);
             LocalCases(root);
             BindingCases(root);
+            LaunchDiagnosticsCases(root);
         } catch (...) {
             std::filesystem::remove_all(root);
             throw;

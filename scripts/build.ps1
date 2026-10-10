@@ -5,7 +5,8 @@ param(
     [string]$MSBuild = 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe',
     [switch]$Rebuild,
     [switch]$IncludeFixture,
-    [switch]$IncludeTrackingTests
+    [switch]$IncludeTrackingTests,
+    [switch]$IncludeContractTests
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -14,11 +15,26 @@ $target = if ($Rebuild) { 'Rebuild' } else { 'Build' }
 $project = Join-Path $root 'src\Host\WindowSweaters.Host.vcxproj'
 & $MSBuild $project /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
 if ($LASTEXITCODE -ne 0) { throw "Host build failed: $LASTEXITCODE" }
+$settings = Join-Path $root 'src\Settings\WindowSweaters.Settings.vcxproj'
+& $MSBuild $settings /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
+if ($LASTEXITCODE -ne 0) { throw "Settings build failed: $LASTEXITCODE" }
 if ($IncludeFixture) {
     $fixture = Join-Path $root 'tests\Fixture\Fixture.vcxproj'
     if (-not (Test-Path -LiteralPath $fixture)) { throw "Fixture project not found: $fixture" }
     & $MSBuild $fixture /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw "Fixture build failed: $LASTEXITCODE" }
+}
+if ($IncludeContractTests) {
+    foreach ($path in @('tests\Configuration\WindowSweaters.Configuration.Tests.vcxproj',
+        'tests\Integration\ConfigurationHostTests.vcxproj',
+        'src\Host\HostAppearanceTests.vcxproj',
+        'tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj',
+        'tests\Rendering\RenderQueueTests.vcxproj',
+        'tests\Rendering\GraphicsRecoveryTests.vcxproj',
+        'tests\Visibility\VisibilityTests.vcxproj')) {
+        & $MSBuild (Join-Path $root $path) /nologo /m /verbosity:minimal "/t:$target" "/p:Configuration=$Configuration" /p:Platform=x64
+        if ($LASTEXITCODE -ne 0) { throw "Contract project '$path' build failed: $LASTEXITCODE" }
+    }
 }
 if ($IncludeTrackingTests) {
     $tracking = Join-Path $root 'tests\Tracking\TrackingTests.vcxproj'

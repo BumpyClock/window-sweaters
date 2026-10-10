@@ -4,9 +4,35 @@ VisualStudioVersion = 18.0.0.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Host", "src\Host\WindowSweaters.Host.vcxproj", "{A4910D43-DFB1-4575-81BA-712E17D064E6}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Host.Configuration", "src\Host\WindowSweaters.Host.Configuration.vcxproj", "{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "HostAppearanceTests", "src\Host\HostAppearanceTests.vcxproj", "{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}"
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Fixture", "tests\Fixture\Fixture.vcxproj", "{7A061F2D-0D4F-4A74-AB62-1711BC2F65E1}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TrackingTests", "tests\Tracking\TrackingTests.vcxproj", "{B76D8596-88C1-423E-958A-05D3F06BE709}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Configuration", "src\Configuration\WindowSweaters.Configuration.vcxproj", "{2D727CBB-89D4-47D2-A630-0212AF370E26}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Settings", "src\Settings\WindowSweaters.Settings.vcxproj", "{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Settings.Core", "src\Settings\WindowSweaters.Settings.Core.vcxproj", "{78D7C86B-22BD-4E54-8C2A-62D180D83711}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Knitting", "src\Knitting\WindowSweaters.Knitting.vcxproj", "{8AF6ED34-F768-46D9-AB18-CA04FF28555C}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Designs", "src\Designs\WindowSweaters.Designs.vcxproj", "{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConfigurationTests", "tests\Configuration\WindowSweaters.Configuration.Tests.vcxproj", "{C2E0DB90-F77E-491B-B314-360CE1BD1952}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConfigurationHostTests", "tests\Integration\ConfigurationHostTests.vcxproj", "{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "KnittingTests", "tests\Knitting\WindowSweaters.Knitting.Tests.vcxproj", "{B5165810-80B9-4390-A1A4-A7FD5731B3D2}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RenderQueueTests", "tests\Rendering\RenderQueueTests.vcxproj", "{156DB83C-1A93-4AD1-AD5C-F306A678D64E}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GraphicsRecoveryTests", "tests\Rendering\GraphicsRecoveryTests.vcxproj", "{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}"
+EndProject
+Project("{C7167F0D-BC9F-4E6E-A544-4CDB81DD3EEB}") = "WindowSweaters.Package", "packaging\WindowSweaters.Package.wapproj", "{3BF239C2-7D56-456A-973C-40DAB1CC4B51}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -18,11 +44,61 @@ Global
 		{A4910D43-DFB1-4575-81BA-712E17D064E6}.Debug|x64.Build.0 = Debug|x64
 		{A4910D43-DFB1-4575-81BA-712E17D064E6}.Release|x64.ActiveCfg = Release|x64
 		{A4910D43-DFB1-4575-81BA-712E17D064E6}.Release|x64.Build.0 = Release|x64
+		{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}.Debug|x64.ActiveCfg = Debug|x64
+		{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}.Debug|x64.Build.0 = Debug|x64
+		{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}.Release|x64.ActiveCfg = Release|x64
+		{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}.Release|x64.Build.0 = Release|x64
+		{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}.Debug|x64.ActiveCfg = Debug|x64
+		{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}.Debug|x64.Build.0 = Debug|x64
+		{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}.Release|x64.ActiveCfg = Release|x64
+		{BACB43E0-EC9F-4219-B0FD-98D2F93AE837}.Release|x64.Build.0 = Release|x64
 		{7A061F2D-0D4F-4A74-AB62-1711BC2F65E1}.Debug|x64.ActiveCfg = Debug|x64
 		{7A061F2D-0D4F-4A74-AB62-1711BC2F65E1}.Release|x64.ActiveCfg = Release|x64
 		{B76D8596-88C1-423E-958A-05D3F06BE709}.Debug|x64.ActiveCfg = Debug|x64
 		{B76D8596-88C1-423E-958A-05D3F06BE709}.Debug|x64.Build.0 = Debug|x64
 		{B76D8596-88C1-423E-958A-05D3F06BE709}.Release|x64.ActiveCfg = Release|x64
 		{B76D8596-88C1-423E-958A-05D3F06BE709}.Release|x64.Build.0 = Release|x64
+		{2D727CBB-89D4-47D2-A630-0212AF370E26}.Debug|x64.ActiveCfg = Debug|x64
+		{2D727CBB-89D4-47D2-A630-0212AF370E26}.Debug|x64.Build.0 = Debug|x64
+		{2D727CBB-89D4-47D2-A630-0212AF370E26}.Release|x64.ActiveCfg = Release|x64
+		{2D727CBB-89D4-47D2-A630-0212AF370E26}.Release|x64.Build.0 = Release|x64
+		{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}.Debug|x64.ActiveCfg = Debug|x64
+		{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}.Debug|x64.Build.0 = Debug|x64
+		{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}.Release|x64.ActiveCfg = Release|x64
+		{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}.Release|x64.Build.0 = Release|x64
+		{78D7C86B-22BD-4E54-8C2A-62D180D83711}.Debug|x64.ActiveCfg = Debug|x64
+		{78D7C86B-22BD-4E54-8C2A-62D180D83711}.Debug|x64.Build.0 = Debug|x64
+		{78D7C86B-22BD-4E54-8C2A-62D180D83711}.Release|x64.ActiveCfg = Release|x64
+		{78D7C86B-22BD-4E54-8C2A-62D180D83711}.Release|x64.Build.0 = Release|x64
+		{8AF6ED34-F768-46D9-AB18-CA04FF28555C}.Debug|x64.ActiveCfg = Debug|x64
+		{8AF6ED34-F768-46D9-AB18-CA04FF28555C}.Debug|x64.Build.0 = Debug|x64
+		{8AF6ED34-F768-46D9-AB18-CA04FF28555C}.Release|x64.ActiveCfg = Release|x64
+		{8AF6ED34-F768-46D9-AB18-CA04FF28555C}.Release|x64.Build.0 = Release|x64
+		{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}.Debug|x64.ActiveCfg = Debug|x64
+		{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}.Debug|x64.Build.0 = Debug|x64
+		{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}.Release|x64.ActiveCfg = Release|x64
+		{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}.Release|x64.Build.0 = Release|x64
+		{C2E0DB90-F77E-491B-B314-360CE1BD1952}.Debug|x64.ActiveCfg = Debug|x64
+		{C2E0DB90-F77E-491B-B314-360CE1BD1952}.Debug|x64.Build.0 = Debug|x64
+		{C2E0DB90-F77E-491B-B314-360CE1BD1952}.Release|x64.ActiveCfg = Release|x64
+		{C2E0DB90-F77E-491B-B314-360CE1BD1952}.Release|x64.Build.0 = Release|x64
+		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Debug|x64.ActiveCfg = Debug|x64
+		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Debug|x64.Build.0 = Debug|x64
+		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Release|x64.ActiveCfg = Release|x64
+		{F02D9CE5-0586-4E4D-8C81-EF989C1E5CED}.Release|x64.Build.0 = Release|x64
+		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Debug|x64.ActiveCfg = Debug|x64
+		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Debug|x64.Build.0 = Debug|x64
+		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Release|x64.ActiveCfg = Release|x64
+		{B5165810-80B9-4390-A1A4-A7FD5731B3D2}.Release|x64.Build.0 = Release|x64
+		{156DB83C-1A93-4AD1-AD5C-F306A678D64E}.Debug|x64.ActiveCfg = Debug|x64
+		{156DB83C-1A93-4AD1-AD5C-F306A678D64E}.Debug|x64.Build.0 = Debug|x64
+		{156DB83C-1A93-4AD1-AD5C-F306A678D64E}.Release|x64.ActiveCfg = Release|x64
+		{156DB83C-1A93-4AD1-AD5C-F306A678D64E}.Release|x64.Build.0 = Release|x64
+		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Debug|x64.ActiveCfg = Debug|x64
+		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Debug|x64.Build.0 = Debug|x64
+		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|x64.ActiveCfg = Release|x64
+		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|x64.Build.0 = Release|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|x64.ActiveCfg = Debug|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|x64.ActiveCfg = Release|x64
 	EndGlobalSection
 EndGlobal

@@ -5,6 +5,7 @@
 #include <d3d11.h>
 #include <dcomp.h>
 #include <wrl/client.h>
+#include "KnitRaster.h"
 
 namespace window_sweaters::rendering {
 
@@ -40,7 +41,10 @@ public:
     Overlay& operator=(const Overlay&) = delete;
 
     HRESULT Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& graphics) noexcept;
-    HRESULT UpdateGeometry(const RECT& targetBounds) noexcept;
+    HRESULT Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RECT& physicalOuterBounds,
+        const RECT& clipRelativeToOuter, const RECT& contentExclusion, float radiusPixels = 0,
+        float tuckPixels = 0, std::array<knitting::RasterImage, 4>* uploadedPixels = nullptr) noexcept;
+    HRESULT UpdatePlacement(const RECT& physicalOuterBounds, const RECT& clipRelativeToOuter) noexcept;
     HRESULT ReorderBelow(HWND target) noexcept;
     HRESULT Show() noexcept;
     void Hide() noexcept;
@@ -51,7 +55,8 @@ public:
 
 private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
-    HRESULT Draw(int width, int height) noexcept;
+    HRESULT UploadPiece(const KnitRasterPiece& piece, const RECT& contentExclusion, float radiusPixels, float tuckPixels,
+        Microsoft::WRL::ComPtr<IDCompositionSurface>& surface, knitting::RasterImage* uploadedPixels) noexcept;
 
     HWND window_{};
     RECT bounds_{};
@@ -59,7 +64,8 @@ private:
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> context_;
     Microsoft::WRL::ComPtr<IDCompositionTarget> target_;
     Microsoft::WRL::ComPtr<IDCompositionVisual> visual_;
-    Microsoft::WRL::ComPtr<IDCompositionSurface> surface_;
+    std::array<Microsoft::WRL::ComPtr<IDCompositionSurface>, 4> surfaces_;
+    std::shared_ptr<const KnitPerimeter> perimeter_;
 };
 
 }

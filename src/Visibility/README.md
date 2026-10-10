@@ -61,8 +61,10 @@ Suppression alone never ends a target or deletes its saved settings.
    `native.Observe(token, overlayHwnd)`. A missing overlay may be represented by
    `nullptr`; overlay creation remains the host's responsibility.
 4. Pass the result to `state.Reconcile(currentSnapshot, observation)`.
-   Reject `accepted == false`. Consume `hide` before `associate`. A normal,
-   current-desktop target can show only after overlay desktop membership matches.
+   Reject `accepted == false`. Consume `hide` before `associate` or `recreate`.
+   `CurrentDesktopVerified` explicitly means repeated public membership queries
+   put both windows on the current desktop while the target GUID remains stable.
+   It does not claim that the overlay has an AppView or a queryable GUID.
 5. Before executing an association, revalidate the host's current target lifetime
    and `state.CanAssociate(currentSnapshot, token, desktop)`. Ensure the overlay is
    created, registered, and hidden. Call
@@ -70,6 +72,9 @@ Suppression alone never ends a target or deletes its saved settings.
    `state.CompleteAssociation(currentSnapshot, token, desktop, SUCCEEDED(hr))`.
    Consume a resulting `show` only after the host's other eligibility, geometry,
    graphics, and stacking gates also pass.
+   If `transition.recreate` is set, unregister and destroy only the host's old
+   hidden overlay, create/register a new hidden overlay on the current desktop,
+   and perform a fresh probe. A recreate request never authorizes target movement.
 6. Before publishing asynchronous rendering work, revalidate the current tracking
    lifetime and `state.CanPublish(currentSnapshot, token)`. Newer probes,
    policy changes, association failures, and generation changes reject old work.
@@ -101,6 +106,29 @@ memberships again. Failure leaves the overlay suppressed; it is not a safe
 fallback. The host must use its current lifetime registry before calling native
 operations because HWND/PID/process-time queries cannot identify same-process
 HWND reuse by themselves.
+
+## Current-desktop topology
+
+The native current-pair path does not call `GetWindowDesktopId` for the overlay.
+It checks stable target GUID/current membership and repeated overlay current
+membership, plus current policy, target identity, and overlay registration epoch.
+It returns `OverlayAssociation::CurrentDesktopVerified`,
+`overlayDesktopCapability == NotQueried`, and an empty `overlayDesktop`.
+
+For a current target with an off-current overlay, the native adapter queries the
+overlay GUID only because association might require a move. A supported GUID is
+returned explicitly with capability `Available`. `TYPE_E_ELEMENTNOTFOUND` means
+that this GUID lookup is unsupported for that window; capability `Unsupported`
+and `RecreateRequired` request host-owned overlay replacement. Other failures
+remain uncertain. Off-desktop targets are always suppressed. No failed lookup
+becomes a fabricated GUID or `Matching`.
+
+Measured on the root-owned Windows fixture pair during this change: target
+HWND `102370986` and overlay HWND `50595416` both returned current membership with
+`S_OK`; the target GUID was stable, but the tool overlay GUID lookup returned
+`TYPE_E_ELEMENTNOTFOUND` (`0x8002802B`). This observation disproves mandatory
+overlay-GUID equality for that pair. It does not establish that every tool window
+has the same shell capability or that desktop-transition animation is atomic.
 
 ## Bounded reconciliation
 
@@ -137,18 +165,32 @@ fullscreen and other suppression gates, pause, sleep/resume, duplicate and late
 work, generation reuse, and bounded polling. Native tests create only invisible
 in-process receiver/overlay fixtures, register/unregister notifications, query
 public current-session state, and use a fake documented desktop COM interface.
-They never activate the shell manager, move a real window between desktops, show
-desktop UI, or change OS session/display/power state. Active native query checks
-report a skip if the test runner's session is not observed interactive.
+The ordinary test run never activates the shell manager, moves a real window
+between desktops, shows desktop UI, or changes OS session/display/power state.
+Active native query checks report a skip if the test runner's session is not
+observed interactive.
 
 The focused project alone defines `WINDOW_SWEATERS_VISIBILITY_TESTING` to inject
 synthetic target facts for invisible fixtures. Production builds have no facts
 override. Reentrancy tests inject stop, pause, session lock, and pause/unpause at
-each of the 12 query boundaries in observation and association. They verify
+each query boundary in observation (12) and supported off-current association
+(32). They verify
 immediate suppression, deferred COM release, rejection of stale results and
 pre-move authorization, and restart only after operations unwind. A separate fake
 move reenters shutdown after an authorized invocation and verifies its completion
 is discarded. No test calls the shell's `MoveWindowToDesktop`.
-An additional 108 query-boundary cases inject overlay unregistration, same-HWND
+An additional 132 query-boundary cases inject overlay unregistration, same-HWND
 re-registration, and direct destruction, including association's final confirming
 observation. Stale registration incarnations cannot return matching/show authority.
+
+The explicit read-only diagnostic mode queries an existing root-owned window
+pair without launching, moving, restyling, or focusing either window:
+
+```powershell
+& '.\out\x64\Debug\VisibilityTests.exe' --probe-window-pair 102370986 50595416
+```
+
+It reports repeated public membership/target-GUID observations as
+`CurrentDesktopVerified`, plus a separate overlay-GUID diagnostic that does not
+decide the current-pair verdict. Pass current HWNDs from the fixture owner; this
+diagnostic does not establish production registration ownership or session policy.
