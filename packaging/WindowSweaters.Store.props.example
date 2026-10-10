@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copy to WindowSweaters.Store.props.user (git-ignored). Replace every value
+     with the exact values in Partner Center > Product identity. No credentials. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PackageName>REPLACE_WITH_PARTNER_CENTER_PACKAGE_IDENTITY_NAME</PackageName>
+    <PackagePublisher>REPLACE_WITH_PARTNER_CENTER_PACKAGE_IDENTITY_PUBLISHER</PackagePublisher>
+    <PackagePublisherDisplayName>REPLACE_WITH_PARTNER_CENTER_PUBLISHER_DISPLAY_NAME</PackagePublisherDisplayName>
+  </PropertyGroup>
+</Project>

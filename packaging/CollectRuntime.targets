@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="CollectWindowSweatersRuntime" DependsOnTargets="AddMicrosoftWindowsAppSDKPayloadFilesFromComponents">
+    <Error Condition="'$(WindowsAppSDKSelfContained)' != 'true'" Text="Settings must use WindowsAppSDKSelfContained=true." />
+    <Error Condition="!Exists('$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec') or !Exists('$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec')" Text="Restore the Settings project's pinned native packages first." />
+    <XmlPeek XmlInputPath="$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='version']/text()">
+      <Output TaskParameter="Result" PropertyName="CollectedAppSDKVersion" />
+    </XmlPeek>
+    <XmlPeek XmlInputPath="$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='version']/text()">
+      <Output TaskParameter="Result" PropertyName="CollectedCppWinRTVersion" />
+    </XmlPeek>
+    <Error Condition="'$(CollectedAppSDKVersion)' != '2.5.1' or '$(CollectedCppWinRTVersion)' != '2.0.240405.15'" Text="Package runtime collection requires Windows App SDK 2.5.1 and C++/WinRT 2.0.240405.15." />
+    <ItemGroup>
+      <WindowSweatersRuntime Include="@(MicrosoftWindowsAppSDKFiles);@(MicrosoftWindowsAppSDKFilesRes)">
+        <PackagePath>%(RecursiveDir)%(Filename)%(Extension)</PackagePath>
+      </WindowSweatersRuntime>
+      <WindowSweatersRuntime Include="$(FoundationDir)runtimes\win-x64\native\Microsoft.WindowsAppRuntime.Bootstrap.dll">
+        <PackagePath>Microsoft.WindowsAppRuntime.Bootstrap.dll</PackagePath>
+      </WindowSweatersRuntime>
+    </ItemGroup>
+    <WriteLinesToFile File="$(PackageRuntimeList)" Lines="@(WindowSweatersRuntime->'%(FullPath)|%(PackagePath)')" Overwrite="true" Encoding="UTF-8" />
+  </Target>
+</Project>

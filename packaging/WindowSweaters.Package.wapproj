@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <ProjectGuid>{3BF239C2-7D56-456A-973C-40DAB1CC4B51}</ProjectGuid>
+    <WapProjPath Condition="'$(WapProjPath)' == ''">$(MSBuildExtensionsPath)\Microsoft\DesktopBridge\</WapProjPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)obj\</BaseIntermediateOutputPath>
+    <IntermediateOutputPath>$(BaseIntermediateOutputPath)$(Configuration)\</IntermediateOutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+  <Import Project="$(WapProjPath)Microsoft.DesktopBridge.props" />
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\</OutDir>
+    <OutputPath>$(OutDir)</OutputPath>
+    <TargetPlatformVersion>10.0.26100.0</TargetPlatformVersion>
+    <TargetPlatformMinVersion>10.0.22000.0</TargetPlatformMinVersion>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <DefaultLanguage>en-us</DefaultLanguage>
+    <!-- Keep App SDK PRI indexes byte-for-byte; merging them with loose WinUI
+         assets creates duplicate resources. This manifest uses literal logos. -->
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <AppxUseResourceIndexerApi>false</AppxUseResourceIndexerApi>
+    <IncludeProjectPriFile>false</IncludeProjectPriFile>
+    <EntryPointExe>WindowSweaters.Settings.exe</EntryPointExe>
+    <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
+    <AppxIncludeDebugSymbols>false</AppxIncludeDebugSymbols>
+    <AppxPackageIncludePrivateSymbols>false</AppxPackageIncludePrivateSymbols>
+    <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <AppxTestLayoutEnabled>false</AppxTestLayoutEnabled>
+    <AppxLogTelemetryFromSideloadingScript>false</AppxLogTelemetryFromSideloadingScript>
+    <AppxBundle Condition="'$(AppxBundle)' == ''">Never</AppxBundle>
+    <AppxBundlePlatforms>x64</AppxBundlePlatforms>
+    <UapAppxPackageBuildMode>SideloadOnly</UapAppxPackageBuildMode>
+    <PackageChannel Condition="'$(PackageChannel)' == ''">Development</PackageChannel>
+    <StoreIdentityProps Condition="'$(StoreIdentityProps)' == ''">$(MSBuildThisFileDirectory)WindowSweaters.Store.props.user</StoreIdentityProps>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">0.1.0.0</PackageVersion>
+    <PackageName Condition="'$(PackageChannel)' == 'Development'">BumpyClock.WindowSweaters.Development</PackageName>
+    <PackagePublisher Condition="'$(PackageChannel)' == 'Development'">CN=WindowSweaters Development</PackagePublisher>
+    <PackagePublisherDisplayName Condition="'$(PackageChannel)' == 'Development'">Window Sweaters Development</PackagePublisherDisplayName>
+    <PackageDisplayName Condition="'$(PackageChannel)' == 'Development'">Window Sweaters (Development)</PackageDisplayName>
+    <PackageDisplayName Condition="'$(PackageChannel)' == 'Store'">Window Sweaters</PackageDisplayName>
+    <PackageStage>$(IntermediateOutputPath)stage\</PackageStage>
+    <AppxPackageDir>$(MSBuildThisFileDirectory)artifacts\$(PackageChannel)\</AppxPackageDir>
+    <DoNotLaunchApp>true</DoNotLaunchApp>
+  </PropertyGroup>
+  <Import Project="$(StoreIdentityProps)" Condition="'$(PackageChannel)' == 'Store' and Exists('$(StoreIdentityProps)')" />
+  <ItemGroup>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <AppxManifest Include="$(PackageStage)AppxManifest.xml" />
+    <None Include="Package.appxmanifest" />
+    <None Include="README.md" />
+    <None Include="WindowSweaters.Store.props.example" />
+  </ItemGroup>
+  <Import Project="$(WapProjPath)Microsoft.DesktopBridge.targets" />
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\</OutDir>
+    <OutputPath>$(OutDir)</OutputPath>
+  </PropertyGroup>
+  <Target Name="ValidateWindowSweatersPackage" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(Configuration)' != 'Release' or '$(Platform)' != 'x64'" Text="Packaging requires Release|x64 native outputs." />
+    <Error Condition="'$(PackageChannel)' != 'Development' and '$(PackageChannel)' != 'Store'" Text="PackageChannel must be Development or Store." />
+    <Error Condition="'$(PackageChannel)' == 'Store' and !Exists('$(StoreIdentityProps)')" Text="Store packaging requires a local StoreIdentityProps MSBuild .props.user file with all Partner Center identity values." />
+    <Error Condition="'$(PackageName)' == '' or '$(PackagePublisher)' == '' or '$(PackagePublisherDisplayName)' == ''" Text="PackageName, PackagePublisher and PackagePublisherDisplayName are all required." />
+    <Error Condition="'$(PackageChannel)' == 'Store' and ($([System.String]::Copy('$(PackageName)').ToLowerInvariant().Contains('development')) or $([System.String]::Copy('$(PackagePublisher)').ToLowerInvariant().Contains('development')) or $([System.String]::Copy('$(PackagePublisherDisplayName)').ToLowerInvariant().Contains('development')))" Text="Store packaging rejects development identity values. Supply exact Partner Center values." />
+    <Error Condition="'$(AppxPackageSigningEnabled)' != 'false'" Text="This project creates unsigned artifacts only. Signing and installation are separate, explicitly authorized steps." />
+    <Error Condition="'$(AppxBundle)' != 'Never'" Text="WAP PRI splitting cannot preserve this self-contained runtime's indexes. Use scripts\package.ps1 -Bundle for a validated MakeAppx bundle of the WAP-generated MSIX." />
+  </Target>
+  <Target Name="PrepareWindowSweatersPayload" BeforeTargets="AssignTargetPaths" DependsOnTargets="ValidateWindowSweatersPackage">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Prepare-Package.ps1&quot; -Stage &quot;$(PackageStage).&quot; -MSBuild &quot;$(MSBuildBinPath)\MSBuild.exe&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -PublisherDisplayName &quot;$(PackagePublisherDisplayName)&quot; -DisplayName &quot;$(PackageDisplayName)&quot; -Version &quot;$(PackageVersion)&quot; -Channel &quot;$(PackageChannel)&quot; -StoreIdentityProps &quot;$(StoreIdentityProps)&quot;" />
+    <ItemGroup>
+      <Content Include="$(PackageStage)**\*" Exclude="$(PackageStage)AppxManifest.xml" />
+      <Content Update="@(Content)">
+        <Link>$([MSBuild]::MakeRelative('$(PackageStage)', '%(Content.FullPath)'))</Link>
+        <TargetPath>$([MSBuild]::MakeRelative('$(PackageStage)', '%(Content.FullPath)'))</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <AppxPackagePayload Include="@(Content)" />
+    </ItemGroup>
+  </Target>
+  <Target Name="VerifyWindowSweatersPackage" AfterTargets="Build" Condition="'$(GenerateAppxPackageOnBuild)' == 'true'">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Test-Package.ps1&quot; -ArtifactDirectory &quot;$(AppxPackageDir).&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -Version &quot;$(PackageVersion)&quot;" />
+  </Target>
+</Project>
