@@ -1,0 +1,72 @@
+Window Sweaters authored chart and theme data
+
+Source repository: https://github.com/saragordic/window-sweaters
+Windows port repository: https://github.com/BumpyClock/window-sweaters
+Reviewed commit: a49dff52483dafdbe27f972bd271cd28d37cef1c
+
+AuthoredCharts.inc preserves the original collection_chart array from
+src/chart.c:33-227 verbatim. Its 47 entries include 36 atelier repeats and
+11 named general/legacy repeats. Catalogue presentation has 37 app themes:
+tests/catalogue.h:3-43 supplies names, original match strings, chart names,
+palette descriptions, and pattern descriptions. src/apps.c:16-62 supplies
+literal base ARGB colors and source aliases. src/misc/chart.h:14-35 and
+src/chart.c:229-290 define material, corner, cuff, and fitting semantics.
+
+ChartViews.inc and ThemeViews.inc are generated metadata over those original
+read-only C arrays. No PNG screenshots or procedural approximations replace
+the chart cells. Every palette has six slots, a..f; unused slots are zero.
+Cells are original authored row strings, top-down. '.' means the selected
+base yarn. a..f selects literal opaque contrast ARGB. These values are not
+premultiplied pixel buffers; the renderer owns its output channel layout.
+
+Renderer sampling: ws_design_authored_cell_argb returns the literal chart
+value, or zero for base yarn. ws_design_cell_argb additionally converts every
+cuff-colored cell to base yarn, exactly as upstream load_collection does.
+For Notes/Calendar, render cuff_argb separately as a continuous curved outer
+cuff occupying one third of the band. All original row data remains available.
+
+Flags preserve source behavior:
+- WhatsApp: solid rounded corner patches; corner_argb = 0 uses base yarn.
+- Notes/Calendar: outer cuff; colored cells removed from rectangular repeat.
+- Messages: round dots, defined yarn, no sculpted yarn.
+- Finder/Terminal/Grok/Granola/Illustrator/Chrome: fitted whole repeats.
+- Every other chart: sculpted yarn. Every chart: defined yarn.
+- Built-ins are neither generated nor custom; those runtime-only source flags
+  are always false and have no catalogue flag.
+
+Codex and ChatGPT both select atelier-chatgpt. atelier-codex is preserved
+as an independently selectable chart, not assigned to the Codex app theme.
+Discord selects the original 4x4 checker, not an invented atelier variant.
+Braid (12x12), blockstripe (6x1), checker (4x4), seedling (6x6), and trim
+(10x6) keep their original dimensions.
+
+ThemeView.id is a stable semantic string for persistence; it is not a mutable
+chart index. Catalogue order follows upstream presentation, but saved settings
+must use the ID. Names and aliases are source/macOS presentation metadata only:
+this library does not guess Windows identities or perform automatic matching.
+Every theme, including macOS-only designs, is available for manual selection.
+All views and nested data have process lifetime; no allocation, mutation,
+reload, shared active-chart singleton, or synchronization is needed.
+
+Import/verify the exact reviewed source from a local Git checkout:
+  py -3 src\Designs\ImportCatalogue.py <upstream-checkout>
+  py -3 src\Designs\ImportCatalogue.py <upstream-checkout> --verify
+
+Build/run focused native catalogue tests (VS2026 v145, C17/C++20, x64,
+Windows SDK 10.0.26100.0; MSBuild.exe from Visual Studio's MSBuild directory):
+  MSBuild.exe tests\Designs\WindowSweaters.Designs.Tests.vcxproj /m /p:Configuration=Debug /p:Platform=x64 /v:minimal
+  out\x64\Debug\WindowSweaters.Designs.Tests.exe
+  MSBuild.exe tests\Designs\WindowSweaters.Designs.Tests.vcxproj /m /p:Configuration=Release /p:Platform=x64 /v:minimal
+  out\x64\Release\WindowSweaters.Designs.Tests.exe
+
+These tests establish data parity only. They do not claim knitted material
+variant parity, renderer visual fidelity, settings control integration, or
+completion of issue #7. No upstream reference PNGs are needed for the data
+contract. Renderer/desktop verification remains the integration owner's work.
+
+Attribution:
+Window Sweaters is derived from JankyBorders by Felix Kratz:
+https://github.com/FelixKratz/JankyBorders
+The GNU General Public License, version 3, is retained verbatim in LICENSE.
+NOTICE.md is copied verbatim from the reviewed upstream commit.
+Application names describe colorway inspiration, not affiliation/endorsement.

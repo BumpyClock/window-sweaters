@@ -11,7 +11,7 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | [#4](https://github.com/BumpyClock/window-sweaters/issues/4) | Below-target stacking, dialogs, topmost bands | Pending | Pending visible ordering and input evidence |
 | [#5](https://github.com/BumpyClock/window-sweaters/issues/5) | Faithful stockinette, shading, oriented edges, corners | Pending | Pending rendering and upstream comparison |
 | [#6](https://github.com/BumpyClock/window-sweaters/issues/6) | Native settings, host-owned persistence, secure revisioned IPC | In progress | Pending integrated settings and failure tests |
-| [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Pending | Pending catalogue and visual parity |
+| [#7](https://github.com/BumpyClock/window-sweaters/issues/7) | Original stitches and all 37 selectable designs | Exact 37-theme, 47-chart source data ported; material and settings integration pending | C17/C++20 data tests and pinned-source verifier pass; visual parity pending |
 | [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Pending | Pending identity and relaunch tests |
 | [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Pending | Pending resolver and native app evidence |
 | [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Pending | Pending synthetic icons and stale-work tests |
