@@ -380,7 +380,14 @@ PixelResult PixelsFromOwnedIcon(HICON icon) {
         raw.resize(static_cast<std::size_t>(width) * imageHeight * 4);
         status = image->CopyPixels(nullptr, width * 4, static_cast<UINT>(raw.size()), raw.data());
     }
-    // WIC labels premultiplied HICON bytes as BGRA; reinterpret as PBGRA or alpha is applied twice.
+    // WIC labels HICON bytes BGRA, but GDI-stretched icons arrive premultiplied; any channel above alpha proves straight data.
+    bool straight = false;
+    for (std::size_t i = 0; SUCCEEDED(status) && !straight && i < raw.size(); i += 4)
+        straight = raw[i] > raw[i + 3] || raw[i + 1] > raw[i + 3] || raw[i + 2] > raw[i + 3];
+    if (straight)
+        for (std::size_t i = 0; i < raw.size(); i += 4)
+            for (std::size_t c = 0; c < 3; ++c)
+                raw[i + c] = static_cast<BYTE>((raw[i + c] * raw[i + 3] + 127) / 255);
     if (SUCCEEDED(status)) status = factory->CreateBitmapFromMemory(width, imageHeight,
         GUID_WICPixelFormat32bppPBGRA, width * 4, static_cast<UINT>(raw.size()),
         raw.data(), &premultiplied);

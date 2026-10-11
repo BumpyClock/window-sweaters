@@ -121,8 +121,10 @@ These conservative caps can reject otherwise valid large application resources.
 
 WIC/GDI input and intermediate bitmaps are capped at 256x256, then scaled to 48x48.
 AND masks, monochrome transparency and partial alpha are preserved. WIC's HICON
-bridge labels premultiplied GDI bytes as BGRA; this module explicitly restores
-PBGRA semantics and swaps channels without a lossy second alpha multiplication.
+bridge labels its bytes BGRA. Unscaled icon DIBs are straight alpha, while
+GDI-stretched icons are already premultiplied. When any channel exceeds alpha the
+bytes are straight, so this module premultiplies once; it then scales as PBGRA and
+swaps channels without a lossy WIC round trip.
 
 The default per-query deadline is 500 ms. Overlapped reads check cancellation and
 deadline every 5 ms; timeout cancels the operation. Results finishing after deadline

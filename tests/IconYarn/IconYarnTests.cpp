@@ -356,7 +356,7 @@ HICON MemoryIcon(bool legacy) {
     const HBITMAP color = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &data, nullptr, 0);
     Require(color && data, "owned fixture DIB");
     auto* bgra = static_cast<std::uint32_t*>(data);
-    std::fill_n(bgra, IconPixelCount, legacy ? 0x00ff0000u : 0xd9d90000u);
+    std::fill_n(bgra, IconPixelCount, legacy ? 0x00ff0000u : 0xd9ff0000u);
     std::array<std::uint8_t, 48 * 6> mask{};
     // For legacy icons the upper-left 8x8 block is transparent solely through AND bits.
     if (legacy) for (unsigned y = 0; y < 8; ++y) mask[y * 6] = 255;
