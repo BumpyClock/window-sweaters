@@ -56,11 +56,33 @@ public:
     std::uint64_t Change(ConnectionState const& displayed,contracts::Configuration const& appearance);
     std::uint64_t Reset(ConnectionState const& displayed);
     std::uint64_t Import(ConnectionState const& displayed,contracts::ImportMutation mutation);
+    std::uint64_t ChangeStartup(ConnectionState const& displayed,startup::DesiredPreference desired);
     void RequestStop() noexcept;
     void Stop() noexcept;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+};
+class StartupPreferences final {
+public:
+    struct Update {
+        startup::Completion completion;
+        startup::DesiredPreference desired;
+        std::uint64_t save_generation{};
+    };
+    explicit StartupPreferences(Session& session,std::shared_ptr<startup::Backend> backend={});
+    startup::Submission Read();
+    startup::Submission Request(ConnectionState const& displayed,startup::DesiredPreference desired,
+        startup::UserIntent intent);
+    std::optional<Update> Poll();
+    void Observe(ConnectionState const& state) noexcept;
+    startup::Snapshot Snapshot() const noexcept { return controller_->GetSnapshot(); }
+    void Stop() noexcept { controller_->Shutdown(); pending_.reset(); }
+private:
+    Session& session_;
+    std::unique_ptr<startup::Controller> controller_;
+    std::optional<ConnectionState> pending_;
+    startup::DesiredPreference desired_{startup::DesiredPreference::Off};
 };
 struct AppsConnectionState {
     ConnectionState connection;

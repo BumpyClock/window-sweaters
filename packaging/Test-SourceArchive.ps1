@@ -1,9 +1,15 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$SourceZip)
+param(
+    [Parameter(Mandatory)][string]$SourceZip,
+    [string]$InspectionDirectory = (Join-Path $PSScriptRoot 'obj\source-roundtrip')
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$extracted = Join-Path $PSScriptRoot 'obj\source-roundtrip'
+$extracted = [IO.Path]::GetFullPath($InspectionDirectory)
+if (!$extracted.StartsWith(([IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'obj')) + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Source archive inspection must remain under packaging\obj.'
+}
 if (Test-Path -LiteralPath $extracted) { Remove-Item -LiteralPath $extracted -Recurse -Force }
 [void][IO.Directory]::CreateDirectory($extracted)
 $zip = [IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($SourceZip))

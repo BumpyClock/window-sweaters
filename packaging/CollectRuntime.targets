@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Target Name="CollectWindowSweatersRuntime" DependsOnTargets="AddMicrosoftWindowsAppSDKPayloadFilesFromComponents">
+    <Error Condition="'$(Platform)' != 'x64' and '$(Platform)' != 'ARM64'" Text="Package runtime collection supports only x64 and ARM64." />
+    <PropertyGroup><PackageRuntimeArchitecture>$([System.String]::Copy('$(Platform)').ToLowerInvariant())</PackageRuntimeArchitecture></PropertyGroup>
     <Error Condition="'$(WindowsAppSDKSelfContained)' != 'true'" Text="Settings must use WindowsAppSDKSelfContained=true." />
     <Error Condition="!Exists('$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec') or !Exists('$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec')" Text="Restore the Settings project's pinned native packages first." />
     <XmlPeek XmlInputPath="$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='version']/text()">
@@ -15,7 +17,7 @@
       <WindowSweatersRuntime Include="@(MicrosoftWindowsAppSDKFiles);@(MicrosoftWindowsAppSDKFilesRes)">
         <PackagePath>%(RecursiveDir)%(Filename)%(Extension)</PackagePath>
       </WindowSweatersRuntime>
-      <WindowSweatersRuntime Include="$(FoundationDir)runtimes\win-x64\native\Microsoft.WindowsAppRuntime.Bootstrap.dll">
+      <WindowSweatersRuntime Include="$(FoundationDir)runtimes\win-$(PackageRuntimeArchitecture)\native\Microsoft.WindowsAppRuntime.Bootstrap.dll">
         <PackagePath>Microsoft.WindowsAppRuntime.Bootstrap.dll</PackagePath>
       </WindowSweatersRuntime>
       <WindowSweatersRuntime Include="$(OutDir)resources.pri">

@@ -10,7 +10,7 @@
 #include <objbase.h>
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint16_t protocol_version = 6;
+inline constexpr std::uint16_t protocol_version = 7;
 inline constexpr std::size_t frame_size = 176;
 inline constexpr std::size_t frame_header_size = 12;
 inline constexpr DWORD io_timeout_ms = 3000;
@@ -20,7 +20,7 @@ inline constexpr std::size_t maximum_client_leases = 128;
 inline constexpr std::size_t maximum_deduplicated_bytes = 4 * 1024 * 1024;
 using Identity = std::array<std::uint8_t, 16>;
 enum class Operation : std::uint16_t {
-    snapshot = 1, mutate = 2, reset = 3, response = 4, eligibility = 5, applications_snapshot = 6, imports = 7
+    snapshot = 1, mutate = 2, reset = 3, response = 4, eligibility = 5, applications_snapshot = 6, imports = 7, startup = 8
 };
 enum class Status : std::uint32_t {
     saved, conflict, invalid, wrong_instance, storage_error, recovery_required,
@@ -91,6 +91,7 @@ inline std::vector<std::byte> Encode(Message const& value) {
     payload::Writer preferences; payload::Preferences(preferences,value.configuration.eligibility);
     section(1,preferences);
     payload::Writer imports; payload::Imports(imports,value.configuration.imports); section(6,imports);
+    payload::Writer startup; startup.Number(static_cast<unsigned>(value.configuration.startup_desired)); section(8,startup);
     if (value.operation==Operation::imports ||
         (value.operation==Operation::response && value.response_to==Operation::imports)) {
         payload::Writer edit; payload::ImportEdit(edit,value.import_edit); section(5,edit);
@@ -133,7 +134,7 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
     if (get(0,4) != 0x31535757 || get(4,2) != protocol_version ||
         get(8,4) != bytes.size() || get(68,4) > 1) return false;
     auto operation = get(6,2), status = get(12,4);
-    if (operation < 1 || operation > 7 || status > static_cast<unsigned>(Status::client_expired)) return false;
+    if (operation < 1 || operation > 8 || status > static_cast<unsigned>(Status::client_expired)) return false;
     value.operation = static_cast<Operation>(operation); value.status = static_cast<Status>(status);
     value.request_id = get(16,8);
     for (std::size_t i=0; i<16; ++i) {
@@ -167,7 +168,7 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
     unsigned seen=0;
     while (!extension.Done()) {
         std::uint64_t tag,size;
-        if (!extension.Number(tag) || tag<1 || tag>7 || !extension.Number(size) ||
+        if (!extension.Number(tag) || tag<1 || tag>8 || !extension.Number(size) ||
             size>extension.bytes.size()-extension.offset || (seen&(1u<<tag))) return false;
         seen|=1u<<tag;
         payload::Reader section(extension.bytes.subspan(extension.offset,static_cast<std::size_t>(size)));
@@ -181,24 +182,28 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
         } else if (tag==4) {
             std::uint64_t acknowledgement;
             if (value.operation!=Operation::response || !section.Number(acknowledgement) ||
-                acknowledgement<1 || acknowledgement>7 || acknowledgement==4) return false;
+                acknowledgement<1 || acknowledgement>8 || acknowledgement==4) return false;
             value.response_to=static_cast<Operation>(acknowledgement);
         } else if (tag==5) {
             if ((value.operation!=Operation::imports && value.operation!=Operation::response) ||
                 !payload::ImportEdit(section,value.import_edit)) return false;
         } else if (tag==6) {
             if (size>maximum_import_metadata_bytes || !payload::Imports(section,value.configuration.imports)) return false;
-        } else {
+        } else if (tag==7) {
             std::uint64_t code{},line{};
             if (value.operation!=Operation::response || !section.Number(code) ||
                 code>static_cast<unsigned>(imports::ErrorCode::CatalogueLimit)+1 || !section.Number(line) ||
                 !payload::Utf8(section,value.import_failure.reason,512)) return false;
             value.import_failure.code=static_cast<std::uint32_t>(code);
             value.import_failure.line=static_cast<std::uint32_t>(line);
+        } else {
+            std::uint64_t desired;
+            if (!section.Number(desired) || desired>1) return false;
+            value.configuration.startup_desired=static_cast<startup::DesiredPreference>(desired);
         }
         if (!section.Done()) return false;
     }
-    unsigned required=2u|64u;
+    unsigned required=2u|64u|256u;
     if (value.operation==Operation::imports) required|=32u;
     if (value.operation==Operation::eligibility) required|=4u;
     if (value.operation==Operation::response) {

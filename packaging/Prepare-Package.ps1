@@ -8,16 +8,21 @@ param(
     [Parameter(Mandatory)][string]$DisplayName,
     [Parameter(Mandatory)][string]$Version,
     [string]$StoreIdentityProps,
+    [ValidateSet('x64', 'ARM64')][string]$Platform = 'x64',
+    [string]$NativeOutputRoot,
     [ValidateSet('Development', 'Store')][string]$Channel = 'Development'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$root = Split-Path $PSScriptRoot -Parent
+$root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
+if ($NativeOutputRoot) { $NativeOutputRoot = [IO.Path]::GetFullPath($NativeOutputRoot).TrimEnd('\') }
 $stagePath = [IO.Path]::GetFullPath($Stage)
 $ownedRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'obj')) + '\'
 if (!$stagePath.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Package staging must stay inside packaging\obj.'
 }
+$expectedStage = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "obj\$Channel\$Version\$Platform\Release\stage")).TrimEnd('\')
+if ($stagePath.TrimEnd('\') -ne $expectedStage) { throw 'Staging must use the selected channel/version/platform Release stage directory.' }
 if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or @($Version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count) {
     throw 'PackageVersion must contain four integers between 0 and 65535.'
 }
@@ -42,7 +47,9 @@ if ($Channel -eq 'Store') {
         }
     }
 }
-$output = Join-Path $root 'out\x64\Release'
+$buildReceipt = & (Join-Path $PSScriptRoot 'Test-NativeBuild.ps1') -Platform $Platform -NativeOutputRoot $NativeOutputRoot
+$outputRoot = [IO.Path]::GetFullPath((Join-Path $root $buildReceipt.NativeOutputRoot)).TrimEnd('\')
+$output = Join-Path $outputRoot "$Platform\Release"
 $vs = [IO.Path]::GetFullPath((Join-Path (Split-Path $MSBuild -Parent) '..\..\..'))
 $tools = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Directory | Sort-Object Name -Descending | Select-Object -First 1
 $dumpbin = Join-Path $tools.FullName 'bin\Hostx64\x64\dumpbin.exe'
@@ -54,7 +61,9 @@ if (Test-Path -LiteralPath $stagePath) { Remove-Item -LiteralPath $stagePath -Re
 [void][IO.Directory]::CreateDirectory($stagePath)
 $intermediate = Split-Path $stagePath -Parent
 $runtimeList = Join-Path $intermediate 'runtime-files.txt'
-& $MSBuild (Join-Path $root 'src\Settings\WindowSweaters.Settings.vcxproj') /nologo /v:q /t:CollectWindowSweatersRuntime /p:Configuration=Release /p:Platform=x64 "/p:ForceImportAfterCppTargets=$(Join-Path $PSScriptRoot 'CollectRuntime.targets')" "/p:PackageRuntimeList=$runtimeList"
+$runtimeProperties = @("/p:Platform=$Platform")
+if ($NativeOutputRoot) { $runtimeProperties += "/p:NativeOutputRoot=$outputRoot" }
+& $MSBuild (Join-Path $root 'src\Settings\WindowSweaters.Settings.vcxproj') /nologo /v:q /t:CollectWindowSweatersRuntime /p:Configuration=Release @runtimeProperties "/p:ForceImportAfterCppTargets=$(Join-Path $PSScriptRoot 'CollectRuntime.targets')" "/p:PackageRuntimeList=$runtimeList"
 if ($LASTEXITCODE -ne 0) { throw 'Could not collect the Settings project runtime items.' }
 
 $payload = @{}
@@ -97,7 +106,7 @@ foreach ($line in $runtimeRows) {
     if ([IO.Path]::GetExtension($relative) -eq '.winmd') { continue }
     $built = Join-Path $output $relative
     if (!(Test-Path -LiteralPath $source -PathType Leaf) -or !(Test-Path -LiteralPath $built -PathType Leaf)) {
-        throw "Missing project runtime output: $relative. Rebuild Settings Release|x64."
+        throw "Missing project runtime output: $relative. Rebuild Settings Release|$Platform."
     }
     if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $built).Hash) {
         throw "Runtime output differs from the pinned dependency: $relative. Rebuild Settings."
@@ -129,8 +138,15 @@ foreach ($licenseRoot in $licenseRoots) {
 }
 $redist = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory |
     Where-Object { $_.Name -match '^\d+\.' } | Sort-Object Name -Descending | Select-Object -First 1
-$crt = Join-Path $redist.FullName 'x64\Microsoft.VC145.CRT'
+$crt = Join-Path $redist.FullName "$($Platform.ToLowerInvariant())\Microsoft.VC145.CRT"
+if (!(Test-Path -LiteralPath $crt -PathType Container)) { throw "Missing app-local v145 $Platform CRT: $crt" }
+$excludedCrt = @()
 foreach ($file in Get-ChildItem -LiteralPath $crt -Filter '*.dll') {
+    if ($Platform -eq 'ARM64' -and $file.Name -eq 'vcruntime140_1.dll') {
+        [void](& (Join-Path $PSScriptRoot 'Test-PeArchitecture.ps1') -Path $file.FullName -Platform x64)
+        $excludedCrt += $file.Name
+        continue
+    }
     Add-Payload $file.FullName $file.Name 'Visual C++ v145 app-local redistributable'
 }
 Add-Payload (Join-Path $vs 'Licenses\1033\Redist.txt') 'Licenses\VisualCpp\Redist.txt' 'Visual Studio redistributable list'
@@ -138,8 +154,7 @@ Add-Payload (Join-Path $vs 'Licenses\1033\Redist.txt') 'Licenses\VisualCpp\Redis
 $dependencies = @()
 foreach ($relative in @($payload.Keys | Where-Object { $_ -match '(?i)\.(dll|exe)$' } | Sort-Object)) {
     $binary = Join-Path $stagePath $relative
-    $headers = & $dumpbin /nologo /headers $binary
-    if ($LASTEXITCODE -ne 0 -or !($headers -match '8664 machine \(x64\)')) { throw "Non-x64 package binary: $relative" }
+    $payload[$relative].Machine = & (Join-Path $PSScriptRoot 'Test-PeArchitecture.ps1') -Path $binary -Platform $Platform
     $imports = & $dumpbin /nologo /dependents $binary
     if ($LASTEXITCODE -ne 0) { throw "Cannot inspect PE dependencies: $relative" }
     $names = @($imports | Where-Object { $_ -match '^\s+[\w.\-]+\.dll\s*$' } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
@@ -147,7 +162,8 @@ foreach ($relative in @($payload.Keys | Where-Object { $_ -match '(?i)\.(dll|exe
         $kind = 'unresolved'
         if ($payload.ContainsKey($dependency)) { $kind = 'package' }
         elseif ($dependency -match '^(api-ms-|ext-ms-)') { $kind = 'Windows API set' }
-        elseif (Test-Path -LiteralPath (Join-Path "$env:windir\System32" $dependency)) { $kind = 'Windows system DLL (build machine)' }
+        elseif ($dependency -notmatch '^(?i)(msvcp|vcruntime|concrt|vccorlib|Microsoft\.UI|Microsoft\.WindowsAppRuntime)' -and
+            (Test-Path -LiteralPath (Join-Path "$env:windir\System32" $dependency))) { $kind = 'Windows system DLL (build machine presence only; target architecture/OS untested)' }
         $dependencies += [ordered]@{ Binary = $relative; Dependency = $dependency; Resolution = $kind }
         if ($kind -eq 'unresolved') { throw "Unresolved dependency: $relative -> $dependency" }
         if ($relative -eq 'WindowSweaters.Host.exe' -and $dependency -match '^(?i)(msvcp|vcruntime|concrt|Microsoft\.UI|Microsoft\.WindowsAppRuntime)') {
@@ -162,7 +178,7 @@ foreach ($asset in Get-ChildItem (Join-Path $PSScriptRoot 'Assets') -Filter '*.p
 Add-Payload (Join-Path $root 'LICENSE') 'LICENSE' 'GPL-3.0'
 Add-Payload (Join-Path $root 'NOTICE.md') 'NOTICE.md' 'upstream attribution'
 
-$artifactDirectory = Join-Path $PSScriptRoot "artifacts\$Channel"
+$artifactDirectory = Join-Path $PSScriptRoot "artifacts\$Channel\$Version\$Platform"
 [void][IO.Directory]::CreateDirectory($artifactDirectory)
 $sourceName = "WindowSweaters_${Version}_${Channel}_Source.zip"
 $sourceZip = Join-Path $artifactDirectory $sourceName
@@ -190,6 +206,7 @@ Microsoft Windows App SDK and Visual C++ runtime files retain their own licenses
 $manifest.Package.Identity.Name = $Name
 $manifest.Package.Identity.Publisher = $Publisher
 $manifest.Package.Identity.Version = $Version
+$manifest.Package.Identity.ProcessorArchitecture = $Platform.ToLowerInvariant()
 $manifest.Package.Properties.DisplayName = $DisplayName
 $manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName
 $applications = @($manifest.Package.Applications.Application)
@@ -197,18 +214,21 @@ $applications[0].VisualElements.DisplayName = $DisplayName
 $applications[1].VisualElements.DisplayName = "$DisplayName background host"
 $applications[1].Extensions.Extension.StartupTask.DisplayName = $DisplayName
 $manifest.Save((Join-Path $stagePath 'AppxManifest.xml'))
+[void](& (Join-Path $PSScriptRoot 'Test-NativeBuild.ps1') -Platform $Platform -NativeOutputRoot $NativeOutputRoot)
 foreach ($exe in $applicationInputs.Keys) {
     if ($applicationInputs[$exe] -ne (Get-FileHash -LiteralPath (Join-Path $output $exe)).Hash) {
         throw "Native output changed during packaging: $exe. Wait for integration builds to finish, then package the stable prebuilt outputs."
     }
 }
 $report = [ordered]@{
-    Channel = $Channel; Name = $Name; Version = $Version
+    Channel = $Channel; Name = $Name; Version = $Version; Platform = $Platform
+    NativeOutputRoot = $buildReceipt.NativeOutputRoot
     SourceArchive = $sourceName; SourceSHA256 = $sourceHash; SourceFileCount = $sourceFiles.Count
-    Runtime = 'Host static native CRT; Settings WindowsAppSDK 2.5.1 self-contained plus app-local v145 CRT; Windows 11 x64 APIs remain OS dependencies.'
+    Runtime = "Host static native CRT; Settings WindowsAppSDK 2.5.1 self-contained plus app-local v145 $Platform CRT; Windows 11 APIs remain OS dependencies."
     ApplicationInputSHA256 = $applicationInputs
     Payload = @($payload.Values | Sort-Object { $_.Path })
     Dependencies = $dependencies
+    ExcludedCRTFiles = $excludedCrt
     Limitations = @('Unsigned; no installation or launch', 'OS imports inspected on build machine, not a clean Windows 11 22000 machine', 'No Store certification, upload or publication')
 }
 $report | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $artifactDirectory 'payload-report.json') -Encoding UTF8

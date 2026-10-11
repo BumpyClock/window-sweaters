@@ -1,6 +1,6 @@
 # Native packaged startup API
 
-This is the startup-only portion of #16 under the Store/MSIX direction. It uses
+This module supplies startup control for #16 under the Store/MSIX direction. It uses
 the Windows OS `Windows.ApplicationModel.StartupTask` API, not a registry `Run`
 entry, executable-path command, Windows App SDK, or WinUI dependency.
 The manifest task ID is `WindowSweatersStartup`, initially `Enabled="false"`.
@@ -50,7 +50,8 @@ There is no preference file, second store, or disk I/O in this module. OS failur
 OS user/policy blocks, cancellation, and observations do not rewrite that value.
 A saved On plus effective Disabled/DisabledByUser is legitimate; never reconcile
 that mismatch by auto-enabling. Config/IPC/UI integration and durable
-configuration round trips remain outside this module's ownership.
+configuration round trips are supplied by the native Settings Session and the
+host's schema-6/protocol-7 mutation contract.
 
 ### Authorization and Windows semantics
 
@@ -149,6 +150,7 @@ shutdown, stale/duplicate callbacks, concurrent admission, and finite
 backpressure. No real StartupTask changes, registry edits, settings UI launch,
 package install, Store publication, or startup fallback is tested/performed.
 
-Tray controls, Explorer restart, Settings/Host integration, actual packaged
-enable/disable, package startup launch, and complete Host quit are not
-implemented or qualified here. They remain #16 integration work.
+Settings/Host integration and bounded TaskbarCreated tray recovery are implemented
+in their respective consumers. Actual installed-package enable/disable and
+startup launch remain unqualified while delivery is unsigned. Module tests never
+change real Windows startup.

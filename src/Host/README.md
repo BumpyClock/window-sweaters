@@ -117,6 +117,36 @@ load executables as code or invoke shell handlers. There is no file watcher:
 a changed source path invalidates the sample, while same-path replacement
 requires Host restart. These limits can reject valid large or unusual app icons.
 
+## Retained resource admission
+
+The shared graphics owner bounds retained perimeter CPU buffers to 128 MiB
+and estimated BGRA surface backing to 256 MiB. A shared tile/chart allocation
+is charged once across aliases. Upload admission includes the old and new
+surface sets plus the largest transient upload surface; failure leaves the old
+resource ownership intact.
+
+Closing, excluding, suppressing or rebuilding an overlay releases its lease.
+Capacity retries use a bounded FIFO and only run when released capacity can
+help. Queue scratch, in-flight rendering and its tile cache have separate
+existing bounds. These accounting values are not total process heap, driver
+VRAM or actual compositor memory.
+
+The local probe exposes retained CPU bytes, estimated surface bytes, transient
+upload bytes, peaks, surface count and quota waiters. Hidden GPU fixtures cover
+large targets, replacement growth, capacity release and recovery. A full
+many-window physical-driver qualification remains separate.
+
+## Tray and startup
+
+The host observes the saved start-at-sign-in preference and packaged Windows
+state without requesting startup mutations. Settings owns explicit StartupTask
+gestures. No registry Run fallback or automatic enable-on-reconnect is used.
+
+The TaskbarCreated notification recreates only this host's tray icon and version,
+with finite retries and explicit failure state. It does not restart the host or
+rebuild graphics. Shutdown cancels tray retries and startup observations before
+releasing hooks, workers, overlays and device ownership.
+
 ## Application eligibility
 
 Ordinary-window discovery is independent of enabledness. Resource-free tracked

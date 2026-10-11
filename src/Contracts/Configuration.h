@@ -5,9 +5,10 @@
 #include "..\Designs\Catalogue.h"
 #include "ApplicationPayload.h"
 #include "Imports.h"
+#include "..\Startup\Startup.h"
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint32_t configuration_schema = 5;
+inline constexpr std::uint32_t configuration_schema = 6;
 inline constexpr float minimum_width_dip = 2.0f;
 inline constexpr float maximum_width_dip = 64.0f;
 inline constexpr float default_width_dip = 16.0f;
@@ -26,6 +27,7 @@ struct Configuration {
     std::uint32_t schema = configuration_schema;
     std::uint64_t revision = 0;
     bool paused = false;
+    startup::DesiredPreference startup_desired = startup::DesiredPreference::Off;
     float border_width_dip = default_width_dip;
     DesignSelection design_selection = DesignSelection::plain;
     std::string design_id;
@@ -39,7 +41,8 @@ struct Configuration {
 };
 
 inline bool Valid(Configuration const& value) noexcept {
-    return value.schema == configuration_schema && BoundedPreferences(value.eligibility) && std::isfinite(value.border_width_dip) &&
+    return value.schema == configuration_schema && value.startup_desired <= startup::DesiredPreference::On &&
+        BoundedPreferences(value.eligibility) && std::isfinite(value.border_width_dip) &&
         value.border_width_dip >= minimum_width_dip && value.border_width_dip <= maximum_width_dip &&
         value.design_selection <= DesignSelection::shared_zigzag && value.stitch_style <= StitchStyle::garter &&
         value.material_style <= MaterialStyle::raised &&

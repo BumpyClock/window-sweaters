@@ -2,13 +2,14 @@
 
 This Windows Application Packaging Project consumes **already built**
 `out\x64\Release\WindowSweaters.Host.exe` and
-`out\x64\Release\WindowSweaters.Settings.exe`. It does not rebuild, run or install
-the apps. Build the native Release|x64 projects with the repository build script
-first. The coordinator adds this project to the solution.
+`out\<Platform>\Release\WindowSweaters.Settings.exe`, where Platform is `x64`
+or `ARM64`. It does not rebuild, run or install the apps. Build each native
+architecture with the repository script first.
 
 ```powershell
-powershell.exe -NoProfile -File .\scripts\package.ps1
-powershell.exe -NoProfile -File .\scripts\package.ps1 -Bundle
+.\scripts\build.ps1 -Configuration Release -Platform x64
+.\scripts\build.ps1 -Configuration Release -Platform ARM64
+.\scripts\package.ps1 -Version 0.2.0.0 -Architectures x64,ARM64 -Bundle
 ```
 
 Or use Visual Studio 2026 Enterprise MSBuild directly:
@@ -20,7 +21,7 @@ Or use Visual Studio 2026 Enterprise MSBuild directly:
 
 Required tools: DesktopBridge/WAP targets, native v145 tools/redist, and Windows
 SDK **10.0.26100.0** MakeAppx and Manifest Tool. The manifest targets Windows 11
-desktop **10.0.22000.0** and x64 only. App SDK **2.5.1** and C++/WinRT
+desktop **10.0.22000.0**, with native x64 and ARM64 payloads. App SDK **2.5.1** and C++/WinRT
 **2.0.240405.15** come from the Settings project's pinned native package references.
 No packaging NuGet dependency is added.
 
@@ -84,8 +85,11 @@ Each must already exist in the project's output and match the pinned dependency
 hash. WinMD design metadata, test/fixture executables, PDBs, private user files
 and probe logs are not copied. PE architecture/imports are inspected; OS import
 availability is measured on the build machine, not a clean minimum-OS machine.
+Every application and runtime binary must match its package's PE architecture:
+x64 `0x8664` or ARM64 `0xAA64`. Settings includes the matching app-local CRT.
+ARM64 cross-compilation on an x64 host does not establish ARM64 execution.
 The native Settings build must also produce its merged application index
-`out\x64\Release\resources.pri`; named framework PRI files alone do not satisfy
+`out\<Platform>\Release\resources.pri`; named framework PRI files alone do not satisfy
 the app's `ms-appx:///Microsoft.UI.Xaml/Themes/themeresources.xaml` lookup.
 Packaging includes this explicit generated output at package root, keeps its
 hash unchanged, and rejects missing or concurrently changing resource output.
@@ -97,9 +101,18 @@ theme changes succeed; those require the separately authorized UI check.
 
 ## Artifacts, validation and licensing
 
-`packaging\artifacts\Development` (or `Store`) holds unsigned `.msix`, optional
-`.msixbundle`, corresponding-source `.zip`, `payload-report.json` and
-`validation-report.json`. WAP may nest the MSIX under its version folder.
+`packaging\artifacts\<Channel>\<Version>\<Platform>` holds each architecture's
+unsigned `.msix`, corresponding-source `.zip`, `payload-report.json` and
+`validation-report.json`. WAP may nest its MSIX inside that platform folder.
+The combined `.msixbundle` and its validation report sit in the version folder.
+Older versions remain separate and are never bundle inputs.
+
+The development delivery artifact is
+`packaging\artifacts\Development\0.2.0.0\WindowSweaters.Package_0.2.0.0_arm64_x64.msixbundle`.
+It is unsigned and has no installed-package qualification. Both architecture
+payloads validate against their source/build receipts; source archives are
+identical and reproducible without Git. Add the exact Partner Center identity
+and regenerate Store-channel artifacts before submission.
 `packaging\obj\inspection` contains the validated unpacked package.
 MakeAppx validation remains enabled. The verifier checks identity, minimum OS,
 architecture, sibling exes, app visibility, disabled startup, capability and
@@ -132,18 +145,22 @@ source ZIP byte-for-byte. Run the source-only check independently:
 
 ```powershell
 .\packaging\Test-SourceArchive.ps1 `
-  -SourceZip .\packaging\artifacts\Development\WindowSweaters_0.1.0.0_Development_Source.zip
+  -SourceZip .\packaging\artifacts\Development\0.2.0.0\x64\WindowSweaters_0.2.0.0_Development_Source.zip
 ```
 
 The payload report records the original prebuilt application hashes. Packaging
 fails if either native EXE changes while its package is being prepared. Wait
 for integration builds to finish before invoking packaging.
+Each Release build records source and output hashes in `native-build-report.json`.
+Package preparation refuses a missing receipt, changed source, changed output,
+or mismatched platform. `-NativeOutputRoot` selects isolated outputs under
+repository `out`; pass the same root to both build and package commands.
 
-**Not verified:** signed installation, startup enable/disable on an installed
+**Not verified:** signed installation, ARM64 runtime execution, startup enable/disable on an installed
 package, a clean Windows 11 22000 machine, WACK/Store certification or publication.
 No certificate, signing, trust insertion, installation, Store upload or
-submission is performed. Those steps need separate explicit authorization and
-the real Partner Center identity.
+submission is performed. The user selected unsigned bundles and skipped local
+certificate trust and installation. Partner Center identity remains deferred.
 
 ## Authoritative schema references
 
@@ -159,6 +176,7 @@ The installed WAP pipeline attempts to merge runtime PRI indexes and loose
 WinUI resources, causing measured duplicate-resource errors. This project
 disables project PRI generation and preserves the App SDK PRI files as explicit
 payload. WAP's native bundle splitting also requires that generated project PRI;
-the optional `-Bundle` command instead uses SDK MakeAppx to bundle the validated
-x64 MSIX without resource splitting. It unbundles the result and verifies the
-inner MSIX hash. WAP remains responsible for building the primary MSIX.
+the `-Bundle` command instead uses SDK MakeAppx to bundle independently validated
+architecture-specific MSIX files without resource splitting. It unbundles the
+result and verifies every inner MSIX hash, architecture, identity, and version.
+WAP remains responsible for building each primary MSIX.

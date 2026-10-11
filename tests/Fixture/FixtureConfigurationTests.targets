@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="VerifyFixtureConfiguration">
+    <PropertyGroup>
+      <ExpectedFixtureDebugLibraries Condition="'$(Configuration)'=='Debug'">true</ExpectedFixtureDebugLibraries>
+      <ExpectedFixtureDebugLibraries Condition="'$(Configuration)'=='Release'">false</ExpectedFixtureDebugLibraries>
+    </PropertyGroup>
+    <ItemGroup><Link Include="FixtureConfigurationContract" /></ItemGroup>
+    <Error Condition="'$(ConfigurationType)'!='Application' or '$(UseDebugLibraries)'!='$(ExpectedFixtureDebugLibraries)'" Text="Fixture configuration must retain Application type and matching Debug libraries." />
+    <Error Condition="!$([System.String]::Copy('%(Link.AdditionalDependencies)').ToLowerInvariant().Contains('comctl32.lib')) or !$([System.String]::Copy('%(Link.AdditionalDependencies)').ToLowerInvariant().Contains('shell32.lib'))" Text="Fixture configuration must link Comctl32.lib and Shell32.lib." />
+    <Error Condition="'%(Manifest.AdditionalManifestFiles)'!='$(ProjectDir)Fixture.manifest'" Text="Fixture configuration must embed Fixture.manifest." />
+    <Error Condition="'%(ClCompile.LanguageStandard)'!='stdcpp20'" Text="Fixture configuration must retain C++20." />
+    <Message Importance="high" Text="PASS Fixture $(Configuration)|$(Platform) type, Debug libraries, native links, manifest and C++20." />
+  </Target>
+</Project>

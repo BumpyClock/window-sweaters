@@ -101,7 +101,7 @@ void MigrationAndBounds(std::filesystem::path const& root) {
     Check(!Decode(malformed,decoded),"Oversized section rejected before allocation");
     malformed=encoded; malformed[184]=std::byte{2};
     Check(!Decode(malformed,decoded),"Non-boolean persisted preference rejected");
-    message.operation=static_cast<Operation>(8);
+    message.operation=static_cast<Operation>(9);
     Check(!Decode(Encode(message),decoded),"Unsupported operation is rejected");
     applications::EligibilityMutation duplicate;
     auto identity=Path(L"C:\\Apps\\player.exe");

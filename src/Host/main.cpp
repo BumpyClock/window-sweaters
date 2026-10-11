@@ -14,6 +14,7 @@
 #include <shellapi.h>
 #include <sddl.h>
 #include <aclapi.h>
+#include <psapi.h>
 #include <array>
 #include <cerrno>
 #include <atomic>
@@ -47,6 +48,7 @@ constexpr UINT SimulateGraphicsFailureCommand = 1005;
 constexpr UINT_PTR ProbeTimer = 2;
 constexpr UINT_PTR ConfigurationTimer = 3;
 constexpr UINT_PTR RecoveryTimer = 4;
+constexpr UINT_PTR TrayRetryTimer = 5;
 constexpr wchar_t Usage[] =
     L"WindowSweaters.Host.exe [--target <decimal-or-0x-HWND>] [--test-mode] [--probe-output <path>]\n"
     L"  No --target: track supported ordinary application windows.\n"
@@ -381,7 +383,9 @@ class Host final {
           imported_(committed_.imports,std::move(owned.catalogue)),
           appearance_(window_sweaters::host::MakeAppearance(committed_,&imported_)),
           installRoots_(window_sweaters::colorways::QueryWindowsInstallRoots()),
-          renderRevision_(committed_.revision), metadataGate_(committed_.revision) {}
+          renderRevision_(committed_.revision), metadataGate_(committed_.revision) {
+        startup_.SetSavedPreference(committed_.startup_desired);
+    }
 public:
     Host(HINSTANCE instance, const Options& options,
         window_sweaters::integration::ConfigurationHost& configuration)
@@ -397,6 +401,17 @@ public:
         window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, HostClass, L"Window Sweaters",
             WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
         if (!window_) return LastError();
+        taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
+        if (!taskbarCreated_) return LastError();
+        tray_.cbSize = sizeof(tray_);
+        tray_.hWnd = window_;
+        tray_.uID = 1;
+        tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        tray_.uCallbackMessage = TrayMessage;
+        tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        wcscpy_s(tray_.szTip, L"Window Sweaters");
+        startup_.SetSavedPreference(committed_.startup_desired);
+        (void)startup_.ReadState();
         visibility_ = std::make_unique<window_sweaters::visibility::NativeVisibility>(window_);
         const auto visibilityStart = visibility_->Start();
         if (stopped_ || !window_) return E_ABORT;
@@ -421,17 +436,7 @@ public:
         if (FAILED(result)) return result;
         if (stopped_) return E_FAIL;
 
-        tray_.cbSize = sizeof(tray_);
-        tray_.hWnd = window_;
-        tray_.uID = 1;
-        tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        tray_.uCallbackMessage = TrayMessage;
-        tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-        wcscpy_s(tray_.szTip, L"Window Sweaters");
-        if (!Shell_NotifyIconW(NIM_ADD, &tray_)) return E_FAIL;
-        trayAdded_ = true;
-        tray_.uVersion = NOTIFYICON_VERSION_4;
-        if (!Shell_NotifyIconW(NIM_SETVERSION, &tray_)) return E_FAIL;
+        RestoreTray();
         if (!options_.probeOutput.empty() && !SetTimer(window_, ProbeTimer, 250, nullptr)) return LastError();
         return FinishInitialPublication();
     }
@@ -457,6 +462,12 @@ public:
         const auto configurationStatus = configuration_.Status();
         const auto visibilityStats = visibility_ ? visibility_->Stats() : window_sweaters::visibility::NativeStats{};
         const auto iconStats = iconWorker_ ? iconWorker_->Statistics() : finalIconStats_;
+        const auto resourceStats=graphics_.Resources().Status();
+        std::uint64_t commits=0;
+        for (auto const& [hwnd,target]:entries_) { (void)hwnd; commits+=target->overlay.CommitCount(); }
+        PROCESS_MEMORY_COUNTERS_EX memory{sizeof(memory)};
+        const auto memoryObserved=K32GetProcessMemoryInfo(GetCurrentProcess(),
+            reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory));
         output << "{\n"
             << "  \"host_pid\": " << GetCurrentProcessId() << ",\n"
             << "  \"host_hwnd\": " << reinterpret_cast<UINT_PTR>(window_) << ",\n"
@@ -472,6 +483,31 @@ public:
             << "  \"overlay_visible\": " << (entry && entry->overlay.Window() && IsWindowVisible(entry->overlay.Window()) ? "true" : "false") << ",\n"
             << "  \"stopped\": " << (stopped_ ? "true" : "false") << ",\n"
             << "  \"tracked_entries\": " << entries_.size() << ",\n"
+            << "  \"retained_cpu_bytes\": " << resourceStats.retainedCpuBytes
+            << ", \"estimated_gpu_bytes\": " << resourceStats.estimatedGpuBytes
+            << ", \"upload_transient_bytes\": " << resourceStats.uploadTransientBytes
+            << ", \"retained_cpu_limit\": " << graphics_.Resources().CpuLimit()
+            << ", \"estimated_gpu_limit\": " << graphics_.Resources().EstimatedGpuLimit()
+            << ", \"peak_retained_cpu_bytes\": " << resourceStats.peakCpuBytes
+            << ", \"peak_estimated_gpu_bytes\": " << resourceStats.peakEstimatedGpuBytes
+            << ", \"retained_surfaces\": " << resourceStats.surfaces
+            << ", \"retained_resource_quota_rejected\": " << resourceStats.quotaRejected
+            << ", \"retained_resource_error\": " << resourceStats.error
+            << ", \"resource_waiters\": " << resourceRetries_.size()
+            << ", \"composition_commits\": " << commits
+            << ", \"process_gdi_objects\": " << GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS)
+            << ", \"process_user_objects\": " << GetGuiResources(GetCurrentProcess(),GR_USEROBJECTS) << ",\n"
+            << "  \"process_private_bytes\": " << (memoryObserved?memory.PrivateUsage:0)
+            << ", \"process_memory_observed\": " << (memoryObserved?"true":"false")
+            << ", \"render_transient_bytes\": " << queueStats.transientBytes
+            << ", \"render_ready_bytes\": " << queueStats.readyBytes
+            << ", \"tile_resident_cache_bytes\": " << queueStats.residentCacheBytes
+            << ", \"raster_scratch_bytes\": " << queueStats.scratchBytes << ",\n"
+            << "  \"tray_added\": " << (trayAdded_ ? "true" : "false")
+            << ", \"tray_attempts\": " << trayAttempts_ << ", \"tray_error\": " << trayError_ << ",\n"
+            << "  \"startup_desired\": " << static_cast<unsigned>(committed_.startup_desired)
+            << ", \"startup_os_state\": " << static_cast<unsigned>(startup_.GetSnapshot().lastObservation
+                ? startup_.GetSnapshot().lastObservation->result.state : window_sweaters::startup::OsState::Unknown) << ",\n"
             << "  \"creates\": " << counters_.creates << ", \"removes\": " << counters_.removes << ",\n"
             << "  \"geometry_updates\": " << counters_.geometryUpdates << ", \"draws\": " << counters_.draws << ",\n"
             << "  \"pure_moves\": " << counters_.pureMoves << ", \"hides\": " << counters_.hides << ",\n"
@@ -555,6 +591,7 @@ public:
                     std::holds_alternative<window_sweaters::icon_yarn::Fallback>(*target->iconPalette) ?
                     static_cast<int>(std::get<window_sweaters::icon_yarn::Fallback>(*target->iconPalette).reason) : -1)
                 << ",\"overlay_hwnd\":" << reinterpret_cast<UINT_PTR>(target->overlay.Window())
+                << ",\"resource_quota_waiting\":" << (target->render.resourceRetry ? "true" : "false")
                 << ",\"overlay_visible\":" << (target->presentationVisible ? "true" : "false") << "}";
             first=false;
         }
@@ -601,6 +638,7 @@ private:
         unsigned failDeviceInitializations{};
         std::optional<HRESULT> nextOverlayCreateFailure;
         std::optional<window_sweaters::colorways::ResolutionError> nextAppearanceFailure;
+        std::function<HRESULT(DWORD,NOTIFYICONDATAW const&)> notifyTray;
     };
     struct AppearanceFailure {
         HRESULT result{};
@@ -653,6 +691,15 @@ private:
         }
         if (host) {
             try {
+                if (host->stopped_ && message!=WM_DESTROY && message!=WM_NCDESTROY)
+                    return DefWindowProcW(window,message,wparam,lparam);
+                if (host->taskbarCreated_ && message==host->taskbarCreated_) {
+                    host->trayAdded_=false;
+                    host->trayVersionSet_=false;
+                    host->trayAttempts_=0;
+                    host->RestoreTray();
+                    return 0;
+                }
                 if (host->visibility_ && (message == WM_WTSSESSION_CHANGE || message == WM_POWERBROADCAST)) {
                     const auto result = host->visibility_->HandleMessage(message, wparam, lparam);
                     if (result.handled) {
@@ -684,6 +731,10 @@ private:
                         LOWORD(lparam) == NIN_KEYSELECT) host->ShowTrayMenu();
                     return 0;
                 case WM_TIMER:
+                    if (wparam == TrayRetryTimer) {
+                        host->RestoreTray();
+                        return 0;
+                    }
                     if (wparam == RecoveryTimer) {
                         host->RecoveryTick(window_sweaters::rendering::GraphicsRecovery::Clock::now());
                         return 0;
@@ -694,6 +745,7 @@ private:
                         host->PollIcons();
                         host->CheckQueue();
                         host->PollVisibility();
+                        (void)host->startup_.TakeCompletion();
                         return 0;
                     }
                     if (wparam == ProbeTimer) {
@@ -721,6 +773,7 @@ private:
     }
 
     bool TrayCommand(UINT command) {
+        if (stopped_) return false;
         if (command == QuitCommand) { Shutdown(); return true; }
         if (command == SimulateGraphicsFailureCommand && options_.testMode) {
             ++injectedGraphicsFailures_;
@@ -746,6 +799,33 @@ private:
         return false;
     }
 
+    HRESULT NotifyTray(DWORD operation) {
+        if (contract_ && contract_->notifyTray) return contract_->notifyTray(operation,tray_);
+        SetLastError(ERROR_SUCCESS);
+        return Shell_NotifyIconW(operation,&tray_) ? S_OK : LastError();
+    }
+    void RestoreTray() {
+        if (stopped_ || !window_ || (trayAdded_ && trayVersionSet_) || trayAttempts_>=6) return;
+        KillTimer(window_,TrayRetryTimer);
+        ++trayAttempts_;
+        auto result=trayAdded_?S_OK:NotifyTray(NIM_ADD);
+        if (SUCCEEDED(result)) {
+            trayAdded_=true;
+            tray_.uVersion=NOTIFYICON_VERSION_4;
+            result=NotifyTray(NIM_SETVERSION);
+            trayVersionSet_=SUCCEEDED(result);
+        }
+        trayError_=result;
+        probeDirty_=true;
+        if (FAILED(result)) {
+            LogError(L"own tray icon restore",result);
+            if (trayAttempts_<6 && !SetTimer(window_,TrayRetryTimer,
+                std::min<UINT>(4000,250u<<(trayAttempts_-1)),nullptr)) {
+                trayError_=LastError();
+                LogError(L"own tray retry timer",trayError_);
+            }
+        }
+    }
     void ShowTrayMenu() {
         const HMENU menu = CreatePopupMenu();
         if (!menu) return;
@@ -825,12 +905,15 @@ private:
                 PublishApplications(); probeDirty_=true; return;
             }
         }
+        startup_.SetSavedPreference(snapshot.startup_desired);
         auto appearanceOnly=snapshot;
         appearanceOnly.revision=committed_.revision;
         appearanceOnly.eligibility=committed_.eligibility;
+        appearanceOnly.startup_desired=committed_.startup_desired;
         if (appearanceOnly==committed_) {
             const auto previous=committed_.eligibility;
             committed_=snapshot;
+            startup_.SetSavedPreference(committed_.startup_desired);
             metadataGate_.SetConfigurationRevision(committed_.revision);
             for (auto& [hwnd,entry]:entries_) {
                 (void)hwnd;
@@ -847,7 +930,9 @@ private:
                 if (!allowedChanged && !epochChanged) continue;
                 ForgetIcon(*entry, true);
                 AdvanceRenderEpoch(*entry);
-                if (!committed_.eligibility.Allows(*entry->metadata)) Hide(*entry);
+                if (!committed_.eligibility.Allows(*entry->metadata)) {
+                    Hide(*entry); entry->overlay.ReleaseContent(); entry->render.Invalidate();
+                }
                 else entry->placementPending=entry->state.requestedVisible;
             }
             PublishApplications(); probeDirty_=true; return;
@@ -856,6 +941,7 @@ private:
         if (catalogue) nextImported=window_sweaters::integration::ImportedAppearance(snapshot.imports,catalogue,&imported_);
         auto appearance = window_sweaters::host::MakeAppearance(snapshot,&nextImported);
         renderRetries_.clear();
+        resourceRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
             ForgetIcon(*entry);
@@ -884,6 +970,7 @@ private:
         LogError(operation, error);
         ++counters_.renderErrors;
         renderRetries_.clear();
+        resourceRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
             ForgetIcon(*entry);
@@ -894,13 +981,14 @@ private:
         probeDirty_ = true;
     }
 
-    void CheckQueue() noexcept {
+    void CheckQueue() {
         if (!queue_ || queueFaulted_) return;
         const auto status = queue_->Status();
         if (status.state == window_sweaters::rendering::RenderQueueState::Faulted) {
             queueFaulted_ = true;
             QueueFailure(L"render worker terminal failure; decoration hidden", status.error);
         }
+        RetryResourceRenders();
     }
 
     HRESULT GpuFailure(const wchar_t* operation, HRESULT error, std::uint64_t generation) {
@@ -932,6 +1020,7 @@ private:
 
     void ReleaseOverlayDevices() {
         renderRetries_.clear();
+        resourceRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
             ForgetIcon(*entry);
@@ -1304,7 +1393,7 @@ private:
 
     void PollMetadata() {
         using namespace window_sweaters::applications;
-        if (!metadataWorker_ || stopped_) return;
+        if (!metadataWorker_ || stopped_ || !ConfigurationCurrent()) return;
         bool changed=false;
         for (auto const& completion:metadataWorker_->DrainCompletions()) {
             auto entry=Find(completion.request.Token().Target());
@@ -1348,9 +1437,19 @@ private:
                     AdvanceRenderEpoch(*entry); Hide(*entry);
                 }
             }
-            if (entry->state.excluded || !committed_.eligibility.Allows(*entry->metadata))
+            const auto target=entry->state.target;
+            const auto refreshedMetadata=entry->metadata;
+            const bool eligible=EligibleNow(*entry);
+            entry=Find(target);
+            if (stopped_ || !entry || entry->metadata!=refreshedMetadata) continue;
+            const bool ownerUnavailable=!std::holds_alternative<AppMetadata>(*entry->metadata);
+            if (entry->state.excluded || ownerUnavailable || !committed_.eligibility.Allows(*entry->metadata)) {
                 ForgetIcon(*entry, true);
-            if (EligibleNow(*entry)) entry->placementPending=true;
+                AdvanceRenderEpoch(*entry);
+                entry->appearance.reset();
+                Hide(*entry);
+                entry->overlay.ReleaseContent();
+            } else if (eligible) entry->placementPending=true;
             else Hide(*entry);
             changed=true;
         }
@@ -1370,6 +1469,7 @@ private:
             --budget;
         }
         if (changed) { PublishApplications(); probeDirty_=true; }
+        RetryResourceRenders();
         RetryPlacement();
     }
 
@@ -1508,12 +1608,18 @@ private:
             ++counters_.hides;
             probeDirty_ = true;
         }
+        if (entry.state.excluded || !entry.state.requestedVisible) {
+            entry.overlay.ReleaseContent();
+            entry.render.prepared.reset();
+        }
     }
 
     void RetireRenderRetry(Entry& entry) {
         std::erase(renderRetries_, entry.state.target);
         entry.render.retry.reset();
         entry.render.retryQueued = false;
+        std::erase(resourceRetries_,entry.state.target);
+        entry.render.resourceRetry.reset();
     }
 
     static RECT NativeRect(const window_sweaters::geometry::PhysicalRect& rect) noexcept {
@@ -1642,6 +1748,8 @@ private:
         if (entry.render.pending && Matches(*entry.render.pending, entry, *input)) return S_FALSE;
         if (entry.render.failed && Matches(*entry.render.failed, entry, *input)) return S_FALSE;
         if (entry.render.retry && Matches(*entry.render.retry, entry, *input)) return S_FALSE;
+        if (entry.render.resourceRetry && Matches(*entry.render.resourceRetry, entry, *input)) return S_FALSE;
+        if (entry.render.resourceRetry) RetireRenderRetry(entry);
         const auto request = window_sweaters::host::MakeRenderRequest(
             {entry.state.target, entry.renderEpoch}, renderRevision_, recovery_.Generation(), *input,
             std::get<window_sweaters::knitting::TileSpec>(entry.appearance->result));
@@ -1734,6 +1842,17 @@ private:
                 static_cast<float>(request.frame.tuckDip * publication->deviceScale));
             if (FAILED(result)) {
                 Hide(*entry);
+                if (result==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA)) {
+                    entry->render.resourceRetry=request;
+                    if (std::find(resourceRetries_.begin(),resourceRetries_.end(),entry->state.target)==resourceRetries_.end())
+                        resourceRetries_.push_back(entry->state.target);
+                    entry->overlay.ReleaseContent();
+                    entry->render.prepared.reset();
+                    ++counters_.renderErrors;
+                    probeDirty_=true;
+                    LogError(L"aggregate retained-resource admission; decoration suppressed",result);
+                    continue;
+                }
                 LogError(L"knit perimeter GPU upload; decoration hidden", result);
                 if (window_sweaters::rendering::GraphicsRecovery::IsRecoverable(result)) {
                     GpuFailure(L"GPU perimeter upload recovery", result, request.deviceGeneration);
@@ -1757,6 +1876,27 @@ private:
             probeDirty_ = true;
         }
         RetryRenders();
+        RetryResourceRenders();
+    }
+
+    void RetryResourceRenders() {
+        if (stopped_ || !queue_ || queueFaulted_ || committed_.paused ||
+            !recovery_.CanRender(recovery_.Generation())) return;
+        const auto generation=graphics_.Resources().Status().releaseGeneration;
+        if (generation!=resourceReleaseObserved_) {
+            resourceReleaseObserved_=generation;
+            resourceRetryRemaining_=resourceRetries_.size();
+        }
+        const auto attempts=std::min<std::size_t>(8,resourceRetryRemaining_);
+        for (std::size_t i=0;i<attempts && !resourceRetries_.empty() && !stopped_;++i) {
+            --resourceRetryRemaining_;
+            const auto target=resourceRetries_.front(); resourceRetries_.pop_front();
+            auto entry=Find(target);
+            if (!entry || !entry->render.resourceRetry) continue;
+            entry->render.resourceRetry.reset();
+            const auto result=PlaceAndShow(target);
+            if (FAILED(result)) LogError(L"retained-resource capacity retry",result);
+        }
     }
 
     void RetryRenders() {
@@ -1898,6 +2038,7 @@ private:
                 if (FAILED(cancellation)) LogError(L"exact target render cancellation", cancellation);
                 if (entry->overlay.Window()) ++counters_.removes;
                 std::erase(renderRetries_, action.target);
+                std::erase(resourceRetries_,action.target);
                 std::erase(visibilityOrder_, action.target);
                 if (visibility_ && entry->visibilityRegistered) visibility_->UnregisterOverlay(entry->overlay.Window());
                 ForgetIcon(*entry, true);
@@ -1986,10 +2127,12 @@ private:
         const auto recoveryStop = recovery_.Stop();
         recoveryRetry_.reset();
         renderRetries_.clear();
+        resourceRetries_.clear();
         visibilityOrder_.clear();
         // Stop invalidates COM authority; keep the object alive until Host destruction.
         if (visibility_) visibility_->Stop();
-        if (window_) { KillTimer(window_, ProbeTimer); KillTimer(window_, ConfigurationTimer); KillTimer(window_, RecoveryTimer); }
+        startup_.Shutdown();
+        if (window_) { KillTimer(window_, ProbeTimer); KillTimer(window_, ConfigurationTimer); KillTimer(window_, RecoveryTimer); KillTimer(window_,TrayRetryTimer); }
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
             Hide(*entry);
@@ -2034,7 +2177,11 @@ private:
         }
         graphics_.Destroy();
         queue_.reset();
-        if (trayAdded_) { Shell_NotifyIconW(NIM_DELETE, &tray_); trayAdded_ = false; }
+        if (trayAdded_) {
+            const auto removed=NotifyTray(NIM_DELETE);
+            if (FAILED(removed)) LogError(L"own tray icon removal",removed);
+            trayAdded_=false;
+        }
         if (window_) { DestroyWindow(window_); window_ = nullptr; }
     }
 
@@ -2065,12 +2212,20 @@ private:
     std::unique_ptr<window_sweaters::rendering::RenderQueue> queue_;
     window_sweaters::rendering::RenderQueueLimits queueLimits_;
     std::deque<TargetId> renderRetries_;
+    std::deque<TargetId> resourceRetries_;
+    std::uint64_t resourceReleaseObserved_{};
+    std::size_t resourceRetryRemaining_{};
     std::unordered_map<WindowHandle, std::unique_ptr<Entry>> entries_;
     TrackerStats finalStats_;
     window_sweaters::rendering::RenderQueueStatus finalQueueStats_;
     Counters counters_;
     NOTIFYICONDATAW tray_{};
     bool trayAdded_{};
+    bool trayVersionSet_{};
+    UINT taskbarCreated_{};
+    unsigned trayAttempts_{};
+    HRESULT trayError_{};
+    window_sweaters::startup::Controller startup_{window_sweaters::startup::Consumer::HostReadOnly};
     bool probeDirty_{true};
     bool stopped_{};
     bool queueFaulted_{};
@@ -2135,6 +2290,52 @@ void Host::RunConsumerContracts() {
         nullptr, host.instance_, &host);
     require(host.window_ != nullptr && SUCCEEDED(host.graphics_.Initialize()),
         "Consumer contract native receiver and graphics");
+    {
+        std::vector<DWORD> notifications;
+        unsigned failures=2;
+        host.taskbarCreated_=RegisterWindowMessageW(L"TaskbarCreated");
+        host.tray_.cbSize=sizeof(host.tray_); host.tray_.hWnd=host.window_; host.tray_.uID=1;
+        contract.notifyTray=[&](DWORD operation,NOTIFYICONDATAW const& icon) {
+            require(icon.hWnd==host.window_ && icon.uID==1,"Tray restore never touches a foreign icon");
+            notifications.push_back(operation);
+            if (operation==NIM_ADD && failures) { --failures; return HRESULT_FROM_WIN32(ERROR_NOT_READY); }
+            return S_OK;
+        };
+        const auto window=host.window_; const auto composition=host.graphics_.Composition();
+        SendMessageW(host.window_,host.taskbarCreated_,0,0);
+        require(!host.trayAdded_ && host.trayAttempts_==1 && host.trayError_==HRESULT_FROM_WIN32(ERROR_NOT_READY),
+            "Documented taskbar broadcast reaches own hidden Host receiver with exact restore error");
+        SendMessageW(host.window_,WM_TIMER,TrayRetryTimer,0);
+        SendMessageW(host.window_,WM_TIMER,TrayRetryTimer,0);
+        require(host.trayAdded_ && host.trayAttempts_==3 && notifications==std::vector<DWORD>{NIM_ADD,NIM_ADD,NIM_ADD,NIM_SETVERSION} &&
+            host.window_==window && host.graphics_.Composition()==composition && !host.counters_.draws,
+            "Bounded own-icon retry sets version without recreating Host, graphics or drawings");
+        SendMessageW(host.window_,WM_TIMER,TrayRetryTimer,0);
+        require(notifications.size()==4,"Repeated retry timer cannot add duplicate own icon");
+        failures=100;
+        SendMessageW(host.window_,host.taskbarCreated_,0,0);
+        for (unsigned i=0;i<10;++i) SendMessageW(host.window_,WM_TIMER,TrayRetryTimer,0);
+        require(host.trayAttempts_==6 && !host.trayAdded_ && notifications.size()==10,
+            "Unavailable Explorer stops after six attempts, not an unbounded retry loop");
+        unsigned versionFailures=2;
+        notifications.clear();
+        contract.notifyTray=[&](DWORD operation,NOTIFYICONDATAW const&) {
+            notifications.push_back(operation);
+            if (operation==NIM_SETVERSION && versionFailures) { --versionFailures; return E_ACCESSDENIED; }
+            return S_OK;
+        };
+        SendMessageW(host.window_,host.taskbarCreated_,0,0);
+        require(host.trayAdded_ && !host.trayVersionSet_ && host.trayError_==E_ACCESSDENIED,
+            "Own icon remains tracked when its version update fails");
+        for (unsigned i=0;i<2;++i) SendMessageW(host.window_,WM_TIMER,TrayRetryTimer,0);
+        require(host.trayVersionSet_ && notifications==std::vector<DWORD>{NIM_ADD,NIM_SETVERSION,NIM_SETVERSION,NIM_SETVERSION},
+            "Version-only retry neither adds duplicate own icon nor deletes an untracked shell icon");
+        contract.notifyTray={};
+        host.trayAdded_=false;
+        host.trayVersionSet_=false;
+        host.trayAttempts_=0;
+        KillTimer(host.window_,TrayRetryTimer);
+    }
     FixtureSelectionDiagnostics invalidSelection;
     require(!SelectFixture(reinterpret_cast<HWND>(1),&invalidSelection) &&
         invalidSelection.query.stage==NativeQueryStage::Window &&
@@ -2256,6 +2457,19 @@ void Host::RunConsumerContracts() {
     add(10001);
     pump(prepared);
     const auto firstUploads = host.counters_.uploads;
+    {
+        auto preference=host.committed_; ++preference.revision;
+        preference.startup_desired=window_sweaters::startup::DesiredPreference::On;
+        const auto draws=host.counters_.draws;
+        const auto generation=host.recovery_.Generation();
+        const auto receiver=host.window_;
+        host.ApplyConfiguration(preference);
+        require(host.committed_.startup_desired==window_sweaters::startup::DesiredPreference::On &&
+            host.startup_.GetSnapshot().savedDesired==window_sweaters::startup::DesiredPreference::On &&
+            !host.startup_.GetSnapshot().pendingGeneration && host.counters_.draws==draws &&
+            host.recovery_.Generation()==generation && host.window_==receiver,
+            "Startup preference observation uses HostReadOnly without OS mutation, redraw or receiver recreation");
+    }
     auto change = [&](bool paused, float width) {
         auto snapshot = host.committed_;
         ++snapshot.revision;
@@ -2662,7 +2876,8 @@ void Host::RunConsumerContracts() {
         pollUntil([&]{return host.entries_.at(19501)->iconPalette!=nullptr;});
         pump(prepared);
         const auto& native=*host.entries_.at(19501);
-        require(std::get<icon_yarn::SampledPalette>(*native.iconPalette)==
+        const auto nativeSample=std::get_if<icon_yarn::SampledPalette>(native.iconPalette.get());
+        require(nativeSample && *nativeSample==
             icon_yarn::SampledPalette{0xffc04b4bu,0xfff6f0deu} &&
             native.render.prepared->tile.baseArgb==0xffc04b4bu && native.render.prepared->tile.chart &&
             native.render.prepared->tile.chart->semanticId.starts_with("automatic-"),
@@ -2701,6 +2916,8 @@ void Host::RunConsumerContracts() {
                 host.PollIcons();
             }
             require(host.entries_.at(19503)->iconAttempts==4 && !host.entries_.at(19503)->iconPending &&
+                host.entries_.at(19503)->iconPalette &&
+                std::holds_alternative<icon_yarn::Fallback>(*host.entries_.at(19503)->iconPalette) &&
                 std::get<icon_yarn::Fallback>(*host.entries_.at(19503)->iconPalette).reason==icon_yarn::FallbackReason::ResourceLimit &&
                 !host.iconGate_.Size() && !host.iconWorker_->Statistics().queries &&
                 host::SamePreparation(*host.entries_.at(19503)->render.prepared,stable),
@@ -3082,6 +3299,7 @@ void Host::RunConsumerContracts() {
         } disabling,reusing;
         std::atomic<bool> firstDisable=true,firstReuse=true;
         std::atomic<unsigned> changingOwnerQueries{};
+        std::atomic<unsigned> unavailableOwnerQueries{};
         const auto ownerThread=GetCurrentThreadId();
         std::atomic<bool> queriedOffOwner=true;
         host.metadataWorker_=std::make_unique<applications::MetadataWorker>(applications::WorkerLimits{},
@@ -3094,6 +3312,9 @@ void Host::RunConsumerContracts() {
                         applications::PackagedAumid{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"},
                         applications::ExecutablePath{L"C:\\PrivateFixtures\\WindowSweaters.Settings.exe"});
                 if (token.Target().hwnd==20009 && ++changingOwnerQueries>1) return *appB;
+                if (token.Target().hwnd==20010 && ++unavailableOwnerQueries>1)
+                    return applications::MetadataResult{applications::MetadataUnavailable{
+                        applications::UnavailableReason::QueryFailed,applications::QueryStage::Worker,ERROR_ACCESS_DENIED}};
                 return *appA;
             });
         struct MetadataCleanup {
@@ -3141,10 +3362,40 @@ void Host::RunConsumerContracts() {
         require(host.entries_.at(20006)->state.excluded && !host.entries_.at(20006)->overlay.Window(),
             "Verified packaged Settings process alias remains excluded without reducing its persistent identity to a basename");
         auto ownerEnabled=host.committed_; ++ownerEnabled.revision;
+        const auto ownerFixtureWidth=ownerEnabled.border_width_dip;
+        ownerEnabled.border_width_dip=64.f;
         ownerEnabled.eligibility=std::get<applications::EligibilityPreferences>(ownerEnabled.eligibility.Apply(enableA));
         host.ApplyConfiguration(ownerEnabled);
-        add(20009); host.PollMetadata(); waitMetadata(20009);
+        auto enlargeOwner=[&](WindowHandle handle) {
+            auto& window=windows.at(handle);
+            window.rect={-20000,-20000,-11808,-15904};
+            auto& facts=contract.geometry.at(handle);
+            facts.physicalTargetBounds={-20000,-20000,-11808,-15904};
+            facts.physicalDisplayBounds={-30000,-30000,30000,30000};
+            facts.physicalWorkArea={-30000,-30000,30000,30000};
+            require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(window,Dirty::Geometry,1))) &&
+                SUCCEEDED(host.ApplyBatch(contract.model.Observe(window,Dirty::Settlement,1000))),
+                "Owner-refresh quota fixture settles actual large offscreen target geometry");
+        };
+        add(20009); enlargeOwner(20009); host.PollMetadata(); waitMetadata(20009);
         pump([&]{return host.entries_.at(20009)->render.prepared.has_value();});
+        for (WindowHandle handle=20010;handle<=20024;++handle) {
+            add(handle); enlargeOwner(handle);
+            host.entries_.at(handle)->metadata=appA;
+            host.PlaceAndShow(host.entries_.at(handle)->state.target);
+        }
+        auto pressureSettled=[&] {
+            for (WindowHandle handle=20010;handle<=20024;++handle) {
+                auto const& render=host.entries_.at(handle)->render;
+                if (render.pending || render.retry || (!render.prepared && !render.resourceRetry)) return false;
+            }
+            return true;
+        };
+        pump(pressureSettled);
+        require(!host.resourceRetries_.empty(),"Owner-refresh fixture has an existing eligible FIFO aggregate-quota waiter");
+        const auto waitingOwner=host.resourceRetries_.front().hwnd;
+        const auto ownerResources=host.graphics_.Resources().Status();
+        const auto staleOwnerRender=*host.entries_.at(20009)->render.prepared;
         const auto ownerEpoch=host.entries_.at(20009)->renderEpoch;
         host.entries_.at(20009)->nextMetadataQuery=0;
         host.PollMetadata();
@@ -3156,6 +3407,40 @@ void Host::RunConsumerContracts() {
             !host.EligibleNow(*host.entries_.at(20009)) &&
             std::get<applications::AppMetadata>(*host.entries_.at(20009)->metadata).Identity()==std::get<applications::AppMetadata>(*appB).Identity(),
             "Bounded metadata refresh retires only the target whose same-lifetime supported owner property changes");
+        const auto retiredResources=host.graphics_.Resources().Status();
+        require(retiredResources.retainedCpuBytes<ownerResources.retainedCpuBytes &&
+            retiredResources.estimatedGpuBytes<ownerResources.estimatedGpuBytes &&
+            retiredResources.surfaces+4==ownerResources.surfaces &&
+            retiredResources.releases>ownerResources.releases &&
+            host.entries_.at(20009)->overlay.Bounds().right==0 &&
+            !host.entries_.at(20009)->render.resourceRetry,
+            "Enabled-to-disabled current owner refresh releases its exact four-surface lease and CPU/GPU backing");
+        pump([&]{return host.entries_.at(waitingOwner)->render.prepared.has_value();});
+        require(host.entries_.at(waitingOwner)->presentationVisible && !host.entries_.at(waitingOwner)->render.resourceRetry,
+            "Actual owner refresh capacity release admits and renders the existing eligible FIFO waiter");
+        require(host.queue_->Submit(staleOwnerRender)==S_OK,"Late cached old-owner render reaches actual Host queue");
+        pump([&]{auto status=host.queue_->Status();return !status.pending && !status.active && !status.ready;});
+        require(!host.entries_.at(20009)->render.prepared &&
+            host.entries_.at(20009)->overlay.Bounds().right==0 && !host.entries_.at(20009)->presentationVisible,
+            "Late cached old-owner job cannot restore retired owner backing or publication");
+        host.PollMetadata();
+        const auto unavailableDeadline=GetTickCount64()+10000;
+        while ((!unavailableOwnerQueries || host.entries_.at(20010)->metadataPending) &&
+            GetTickCount64()<unavailableDeadline) { Sleep(5); host.PollMetadata(); }
+        require(host.entries_.at(20010)->render.prepared.has_value(),
+            "Unavailable-owner regression begins with actual admitted GPU backing");
+        const auto availableResources=host.graphics_.Resources().Status();
+        host.entries_.at(20010)->nextMetadataQuery=0;
+        host.PollMetadata();
+        while (host.entries_.at(20010)->metadataPending && GetTickCount64()<unavailableDeadline) { Sleep(5); host.PollMetadata(); }
+        const auto unavailableResources=host.graphics_.Resources().Status();
+        require(unavailableOwnerQueries>1 &&
+            std::holds_alternative<applications::MetadataUnavailable>(*host.entries_.at(20010)->metadata) &&
+            !host.entries_.at(20010)->render.prepared && host.entries_.at(20010)->overlay.Bounds().right==0 &&
+            unavailableResources.surfaces+4==availableResources.surfaces &&
+            unavailableResources.retainedCpuBytes<availableResources.retainedCpuBytes &&
+            unavailableResources.estimatedGpuBytes<availableResources.estimatedGpuBytes,
+            "Current unavailable owner fails closed and releases actual retained CPU/GPU lease");
         for (auto const& retirement:host.metadataWorker_->Stop()) host.metadataGate_.Retire(retirement);
         host.metadataWorker_.reset();
         for (auto handle:{WindowHandle{20004},WindowHandle{20005},WindowHandle{20006},WindowHandle{20009}}) {
@@ -3163,9 +3448,16 @@ void Host::RunConsumerContracts() {
                 "Retire private metadata-worker fixture lifetime");
             windows.erase(handle);
         }
+        for (WindowHandle handle=20010;handle<=20024;++handle) {
+            require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()))),
+                "Retire owner-refresh aggregate quota fixtures");
+            windows.erase(handle);
+        }
         auto allOn=host.committed_; ++allOn.revision;
+        allOn.border_width_dip=ownerFixtureWidth;
         allOn.eligibility=std::get<applications::EligibilityPreferences>(allOn.eligibility.Apply({true,true,{}}));
-        host.ApplyConfiguration(allOn); host.RetryPlacement(); pump(prepared);
+        appearanceChange(allOn);
+        std::puts("PASS: actual disabled/unavailable owner refresh releases retained backing, admits FIFO quota waiter and rejects stale old-owner render");
     }
     contract.requireMetadata=false;
     const auto visibleTarget = host.entries_.at(10001)->state.target;
@@ -3179,6 +3471,7 @@ void Host::RunConsumerContracts() {
     pump(prepared);
     const auto recoveredUploads = host.counters_.uploads;
     const auto visibilityRequests = host.queue_->Status().renderRequests;
+    const auto temporaryHideResources=host.graphics_.Resources().Status();
     host.ApplyVisibilityPolicy(contract.policy.SetSession(SessionState::Locked).snapshot);
     require(!host.VisibilityAllows(visibleTarget) &&
         !host.entries_.at(10001)->visibility.CanPublish(contract.policy.Snapshot(), visibleToken),
@@ -3194,7 +3487,11 @@ void Host::RunConsumerContracts() {
     contract.offDesktop.reset();
     require(host.VisibilityAllows(visibleTarget), "Current-desktop return restores current visibility authority");
     require(SUCCEEDED(host.PlaceAndShow(visibleTarget)) &&
-        host.counters_.uploads == recoveredUploads, "Visibility-only recovery reuses prepared GPU pieces");
+        host.counters_.uploads == recoveredUploads &&
+        host.graphics_.Resources().Status().retainedCpuBytes==temporaryHideResources.retainedCpuBytes &&
+        host.graphics_.Resources().Status().estimatedGpuBytes==temporaryHideResources.estimatedGpuBytes &&
+        host.graphics_.Resources().Status().surfaces==temporaryHideResources.surfaces,
+        "Temporary session/desktop hide preserves retained CPU/GPU leases and reuses prepared pieces");
     host.ApplyVisibilityPolicy(contract.policy.SetPower(PowerState::Suspended).snapshot);
     require(!host.VisibilityAllows(visibleTarget), "Suspend suppresses Host publication");
     host.ApplyVisibilityPolicy(contract.policy.SetPower(PowerState::Awake).snapshot);
@@ -3560,6 +3857,114 @@ void Host::RunConsumerContracts() {
     }
     require(SUCCEEDED(host.graphics_.Composition()->WaitForCommitCompletion()),
         "Consumer contract native publications commit");
+    {
+        using namespace window_sweaters;
+        ContractState pressureContract;
+        pressureContract.policy.SetNotificationsReady(true);
+        pressureContract.policy.SetSession(visibility::SessionState::Interactive);
+        pressureContract.policy.SetPower(visibility::PowerState::Awake);
+        pressureContract.policy.SetDisplay(visibility::DisplayState::On);
+        Host pressure(host.instance_,options,configuration);
+        pressure.contract_=&pressureContract;
+        pressure.committed_.border_width_dip=64.f;
+        pressure.appearance_=host::MakeAppearance(pressure.committed_);
+        pressure.window_=CreateWindowExW(0,HostClass,L"",WS_POPUP,0,0,0,0,nullptr,nullptr,host.instance_,&pressure);
+        require(pressure.window_ && SUCCEEDED(pressure.graphics_.Initialize()) &&
+            SUCCEEDED(rendering::RenderQueue::Create(pressure.window_,pressure.queueLimits_,pressure.queue_)) &&
+            SUCCEEDED(pressure.queue_->Start(0,DeviceGeneration)),
+            "Actual offscreen Host pressure fixture uses bounded retained-resource upload owner");
+        for (WindowHandle i=0;i<16;++i) {
+            AliveWindow large;
+            large.hwnd=40000+i; large.identity={GetCurrentProcessId(),1234,large.hwnd};
+            large.className=L"OrdinaryApp"; large.dpi=96;
+            large.rect={-20000,-20000,-11808,-15904};
+            pressureContract.geometry.emplace(large.hwnd,geometry::WindowFacts{
+                {-20000,-20000,-11808,-15904},{-30000,-30000,30000,30000},{-30000,-30000,30000,30000},
+                96,1,false,geometry::CornerPreference::Round,geometry::CornerEligibility::StandardFrame});
+            require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(large,Dirty::Lifecycle,0))),
+                "Sixteen actual 8192x4096 offscreen consumer targets submit production knitting");
+        }
+        auto settle=[&] {
+            const auto deadline=GetTickCount64()+30000;
+            for (;;) {
+                MSG message{};
+                while (PeekMessageW(&message,pressure.window_,rendering::RenderQueue::ReadyMessage,
+                    rendering::RenderQueue::ReadyMessage,PM_REMOVE)) DispatchMessageW(&message);
+                pressure.CheckQueue();
+                pressure.RetryPlacement();
+                const auto queue=pressure.queue_->Status();
+                if (!queue.pending && !queue.active && !queue.ready) break;
+                require(GetTickCount64()<deadline,"Actual large-window pressure queue settles within deadline");
+                MsgWaitForMultipleObjectsEx(0,nullptr,20,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+            }
+        };
+        settle();
+        const auto bounded=pressure.graphics_.Resources().Status();
+        require(bounded.quotaRejected>0 && bounded.surfaces>0 && !pressure.resourceRetries_.empty() &&
+            bounded.retainedCpuBytes<=128u*1024*1024 && bounded.estimatedGpuBytes<=256u*1024*1024 &&
+            bounded.peakCpuBytes<=128u*1024*1024 && bounded.peakEstimatedGpuBytes<=256u*1024*1024,
+            "Actual Host reserves shared CPU and four BGRA surfaces before GPU upload and suppresses over-budget targets");
+        const auto idleDraws=pressure.counters_.draws;
+        const auto idleRequests=pressure.queue_->Status().acceptedRequests;
+        for (unsigned i=0;i<20;++i) pressure.CheckQueue();
+        require(pressure.counters_.draws==idleDraws && pressure.queue_->Status().acceptedRequests==idleRequests,
+            "Static resource pressure has zero redraw or cache-generation retry loop without released space");
+        WindowHandle released{};
+        for (auto const& [hwnd,entry]:pressure.entries_) if (entry->render.prepared) { released=hwnd; break; }
+        const auto firstWaiting=pressure.resourceRetries_.front().hwnd;
+        require(released && SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(
+            DestroyedWindow{released},Dirty::Lifecycle,1))),"Closing one admitted target frees retained backing");
+        pressure.CheckQueue(); settle();
+        require(pressure.entries_.at(firstWaiting)->render.prepared && !pressure.entries_.contains(released),
+            "Actual FIFO resource waiter obtains capacity freed by target close");
+        AliveWindow large;
+        large.hwnd=firstWaiting; large.identity={GetCurrentProcessId(),1234,firstWaiting};
+        large.className=L"OrdinaryApp"; large.dpi=96;
+        large.rect={-20000,-20000,-11808,-11808};
+        pressureContract.geometry.at(firstWaiting).physicalTargetBounds.bottom=-11808;
+        require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(large,Dirty::Geometry,2))),
+            "Actual Host requests growth replacement while old backing remains owned");
+        require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(large,Dirty::Settlement,1000))),
+            "Actual resize settles before growing GPU perimeter publication");
+        settle();
+        std::vector<WindowHandle> growthCapacity;
+        for (auto const& [hwnd,entry]:pressure.entries_)
+            if (hwnd!=firstWaiting && entry->render.prepared && growthCapacity.size()<2) growthCapacity.push_back(hwnd);
+        for (auto hwnd:growthCapacity)
+            require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(
+                DestroyedWindow{hwnd},Dirty::Lifecycle,1001))),"Additional large target close frees capacity for fair queued growth");
+        pressure.CheckQueue(); settle();
+        require(pressure.entries_.at(firstWaiting)->render.prepared &&
+            pressure.entries_.at(firstWaiting)->render.prepared->frame.contentHeightPixels==8192 &&
+            pressure.graphics_.Resources().Status().peakCpuBytes<=128u*1024*1024 &&
+            pressure.graphics_.Resources().Status().peakEstimatedGpuBytes<=256u*1024*1024,
+            "Settled growth admission bounds old-plus-new peak and republishes current size");
+        auto& admitted=*pressure.entries_.at(firstWaiting);
+        large.rect.left+=15; large.rect.right+=15;
+        pressureContract.geometry.at(firstWaiting).physicalTargetBounds.left+=15;
+        pressureContract.geometry.at(firstWaiting).physicalTargetBounds.right+=15;
+        const auto movedDraws=pressure.counters_.draws;
+        const auto movedCommits=admitted.overlay.CommitCount();
+        require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(large,Dirty::Geometry,3))) &&
+            pressure.counters_.draws==movedDraws && admitted.overlay.CommitCount()==movedCommits,
+            "Pure movement of large offscreen target makes no application draw or composition commit");
+        const auto retainedBefore=pressure.graphics_.Resources().Status().retainedCpuBytes;
+        large.visible=false;
+        require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(large,Dirty::Lifecycle,4))) &&
+            pressure.graphics_.Resources().Status().retainedCpuBytes<retainedBefore,
+            "Suppressed offscreen target releases retained CPU/GPU backing");
+        const auto beforeStop=pressure.window_;
+        pressure.Shutdown();
+        SendMessageW(beforeStop,rendering::RenderQueue::ReadyMessage,0,0);
+        pressure.CheckQueue(); pressure.RetryResourceRenders();
+        require(!pressure.graphics_.Resources().Status().retainedCpuBytes &&
+            !pressure.graphics_.Resources().Status().estimatedGpuBytes &&
+            !pressure.graphics_.Resources().Status().surfaces && pressure.entries_.empty() && !pressure.queue_ &&
+            !pressure.TrayCommand(SettingsCommand),
+            "Quit releases aggregate backing and rejects IPC launches, resource retries and late cached jobs");
+        std::printf("PASS: sixteen 8192x4096@96DPI width64 offscreen Host targets; CPU peak=%zu GPU-estimate peak=%zu suppressed=%llu\n",
+            bounded.peakCpuBytes,bounded.peakEstimatedGpuBytes,static_cast<unsigned long long>(bounded.quotaRejected));
+    }
     std::puts("PASS: actual Host stationary width/Pause/Resume rebuilding-Move flow and pending32 burst capacity recovery (hidden native receiver)");
     std::puts("PASS: actual Host app-only epochs preserve unrelated pixels; pending metadata, all-off future owners, multi-window toggle and late production completion gates");
     std::printf("PASS: quota suppression/restore including recursive last retry; %zu chart selections and six stitch/material combinations reach actual native publication\n",

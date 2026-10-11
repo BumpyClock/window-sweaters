@@ -6,7 +6,8 @@
     <WindowsTargetPlatformMinVersion>10.0.22000.0</WindowsTargetPlatformMinVersion>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
     <CharacterSet>Unicode</CharacterSet>
-    <OutDir>$(MSBuildThisFileDirectory)out\$(Platform)\$(Configuration)\</OutDir>
+    <OutDir Condition="'$(NativeOutputRoot)'==''">$(MSBuildThisFileDirectory)out\$(Platform)\$(Configuration)\</OutDir>
+    <OutDir Condition="'$(NativeOutputRoot)'!=''">$(NativeOutputRoot)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir Condition="'$(NativeIntermediateRoot)'==''">$(MSBuildThisFileDirectory)out\obj\$(MSBuildProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <IntDir Condition="'$(NativeIntermediateRoot)'!=''">$(NativeIntermediateRoot)\$(MSBuildProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -17,7 +18,7 @@
       <ConformanceMode>true</ConformanceMode>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;WINVER=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;WINVER=0x0A00;WINRT_NO_SOURCE_LOCATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <SDLCheck>true</SDLCheck>
@@ -26,6 +27,7 @@
       <SubSystem>Windows</SubSystem>
       <MinimumRequiredVersion>10.00</MinimumRequiredVersion>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
 </Project>

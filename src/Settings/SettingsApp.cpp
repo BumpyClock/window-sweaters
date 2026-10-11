@@ -201,6 +201,15 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                 app->Dispatch(L"apps-default-change",[&]{app->ChangeApps({app->apps_default_.IsOn(),false,{}});});
         });
         pause_.Toggled([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
+        startup_toggle_.Toggled([weak](auto const&,auto const&) {
+            if (auto app=weak.get(); app && !app->updating_startup_ && app->startup_)
+                app->Dispatch(L"startup-user-gesture",[&] {
+                    app->startup_->Request(app->draft_.Displayed(),app->startup_toggle_.IsOn()
+                        ? startup::DesiredPreference::On : startup::DesiredPreference::Off,
+                        startup::UserIntent::SettingsGesture);
+                    app->RenderStartup();
+                });
+        });
         width_.ValueChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
         design_.SelectionChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->DesignChanged(); });
         stitch_.SelectionChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
@@ -216,6 +225,8 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         window_.Closed([weak](auto const&,auto const&) {
             if (auto app=weak.get()) {
                 app->closed_=true;
+                if (app->startup_timer_) app->startup_timer_.Stop();
+                if (app->startup_) app->startup_->Stop();
                 app->session_->RequestStop();
                 if (app->apps_session_) app->apps_session_->RequestStop();
                 app->session_->Stop();
@@ -240,6 +251,15 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                     if (auto app=weak.get()) app->Dispatch(L"appearance-dispatch",[&]{app->Render(state);});
                 });
         });
+        startup_=std::make_unique<settings::StartupPreferences>(*session_);
+        startup_->Read();
+        startup_timer_=window_.DispatcherQueue().CreateTimer();
+        startup_timer_.Interval(std::chrono::milliseconds(100));
+        startup_timer_.Tick([weak](auto const&,auto const&) {
+            if (auto app=weak.get(); app && !app->closed_)
+                app->Dispatch(L"startup-observation",[&] { app->PollStartup(); });
+        });
+        startup_timer_.Start();
         apps_session_=std::make_unique<settings::AppsSession>(options_,[weak,dispatcher](settings::AppsConnectionState state) {
             if (auto queue=dispatcher.get())
                 queue.TryEnqueue([weak,state=std::move(state)] {
@@ -446,6 +466,18 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         left_.Children().Append(Card(status_panel)); left_.Children().Append(Card(preview_panel));
         right_=Stack(16); right_.Children().Append(Card(appearance)); right_.Children().Append(Card(apps));
         right_.Children().Append(personal_region);
+        startup_toggle_=ToggleSwitch{};
+        startup_toggle_.Header(box_value(L"Start at sign-in"));
+        startup_toggle_.OnContent(box_value(L"On")); startup_toggle_.OffContent(box_value(L"Off"));
+        startup_toggle_.IsEnabled(false);
+        AutomationProperties::SetName(startup_toggle_,L"Start Window Sweaters at sign-in");
+        startup_status_=TextBlock{}; startup_status_.TextWrapping(TextWrapping::Wrap); StyleSecondary(startup_status_);
+        startup_status_.Text(L"Checking Windows startup state…");
+        AutomationProperties::SetName(startup_status_,L"Windows startup state and saved preference");
+        AutomationProperties::SetLiveSetting(startup_status_,Automation::Peers::AutomationLiveSetting::Polite);
+        auto preferences=Stack(8); preferences.Children().Append(Section(L"Preferences"));
+        preferences.Children().Append(startup_toggle_); preferences.Children().Append(startup_status_);
+        right_.Children().Append(Card(preferences));
 
         root_=Grid{}; root_.Margin(Thickness{24}); root_.ColumnSpacing(24);
         ColumnDefinition preview_column; preview_column.Width(GridLength{1.15,GridUnitType::Star}); preview_column.MaxWidth(560);
@@ -1122,6 +1154,13 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         if (closed_) return;
         auto update=draft_.Apply(state);
         if (!update.accepted) return;
+        if (startup_) startup_->Observe(state);
+        if (startup_save_generation_ && state.settled_edit_generation>=startup_save_generation_ && !state.pending) {
+            startup_save_notice_=state.status==contracts::Status::saved
+                ? L"Preference saved." : L"Preference was not saved. Windows state was not rolled back.";
+            startup_save_generation_=0;
+        }
+        RenderStartup();
         RenderImports(state);
         updating_=true;
         if (update.controls_changed && (!rendered_appearance_ ||
@@ -1197,6 +1236,55 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         }
         status_.Text(text); updating_=false;
     }
+    void PollStartup() {
+        if (auto update=startup_->Poll()) {
+            if (update->completion.command!=startup::Command::Read) {
+                startup_save_generation_=update->save_generation;
+                startup_save_notice_=update->save_generation?L"Saving preference…":
+                    (update->completion.result.outcome==startup::Outcome::Applied ||
+                        update->completion.result.outcome==startup::Outcome::AlreadyEffective)
+                    ? L"Windows state changed, but the preference was not queued for save."
+                    : L"Windows did not apply the request.";
+            }
+            RenderStartup();
+        }
+        const auto now=GetTickCount64();
+        auto snapshot=startup_->Snapshot();
+        if (!snapshot.pendingGeneration && !startup_save_generation_ && now>=startup_next_read_) {
+            startup_next_read_=now+5000;
+            startup_->Read();
+        }
+    }
+    void RenderStartup() {
+        if (!startup_ || closed_) return;
+        auto snapshot=startup_->Snapshot();
+        auto state=snapshot.lastObservation?snapshot.lastObservation->result.state:startup::OsState::Unknown;
+        auto effective=startup::EffectiveEnabled(state);
+        updating_startup_=true;
+        startup_toggle_.IsOn(effective.value_or(false));
+        auto const& connection=draft_.Current();
+        startup_toggle_.IsEnabled(effective.has_value() && !snapshot.pendingGeneration &&
+            !startup_save_generation_ &&
+            (state==startup::OsState::Disabled || state==startup::OsState::Enabled) &&
+            connection.connected && connection.configuration_authoritative && !connection.pending && !draft_.Pending());
+        updating_startup_=false;
+        std::wstring text;
+        switch (state) {
+        case startup::OsState::UnavailableNoPackage: text=L"Unavailable without an installed package. No startup entry was created."; break;
+        case startup::OsState::Disabled: text=L"Windows startup: off."; break;
+        case startup::OsState::Enabled: text=L"Windows startup: on."; break;
+        case startup::OsState::DisabledByUser: text=L"Disabled in Windows Startup apps. Enable it there before trying again."; break;
+        case startup::OsState::DisabledByPolicy: text=L"Disabled by your organization."; break;
+        case startup::OsState::EnabledByPolicy: text=L"Enabled by your organization."; break;
+        default: text=snapshot.pendingGeneration?L"Checking Windows startup state…":L"Windows startup state is unavailable."; break;
+        }
+        if (snapshot.pendingGeneration) text+=L" Request pending.";
+        text+=snapshot.savedDesired==startup::DesiredPreference::On?L" Saved preference: on.":L" Saved preference: off.";
+        if (!startup_save_notice_.empty()) text+=L" "+startup_save_notice_;
+        if (snapshot.lastObservation && snapshot.lastObservation->result.error)
+            text+=L" HRESULT "+std::to_wstring(snapshot.lastObservation->result.error)+L".";
+        startup_status_.Text(text);
+    }
     void RenderPreview(settings::PreviewResult const& result) {
         if (closed_ || result.generation!=preview_generation_) return;
         if (!result.error.empty()) {
@@ -1219,6 +1307,14 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata_{nullptr};
     Window window_{nullptr};
     ToggleSwitch pause_{nullptr};
+    ToggleSwitch startup_toggle_{nullptr};
+    TextBlock startup_status_{nullptr};
+    Microsoft::UI::Dispatching::DispatcherQueueTimer startup_timer_{nullptr};
+    std::unique_ptr<settings::StartupPreferences> startup_;
+    std::uint64_t startup_save_generation_{};
+    std::wstring startup_save_notice_;
+    bool updating_startup_{};
+    std::uint64_t startup_next_read_{};
     Slider width_{nullptr},rows_{nullptr};
     ComboBox design_{nullptr},stitch_{nullptr},material_{nullptr};
     ColorPicker color_{nullptr};

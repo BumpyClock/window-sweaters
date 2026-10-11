@@ -177,7 +177,8 @@ struct ConfigurationServer::Impl {
         if (!Valid(request.configuration) || request.request_id==0 || EmptyIdentity(request.client) ||
             request.status!=Status::saved ||
             (request.operation!=Operation::mutate && request.operation!=Operation::reset &&
-                request.operation!=Operation::eligibility && request.operation!=Operation::imports))
+                request.operation!=Operation::eligibility && request.operation!=Operation::imports &&
+                request.operation!=Operation::startup))
             return {Status::invalid,current.configuration};
         if (request.server!=server) return {Status::wrong_instance,current.configuration};
         // Only an explicit snapshot handshake admits a client; retired tokens never revive.
@@ -202,12 +203,14 @@ struct ConfigurationServer::Impl {
         Configuration next=request.operation==Operation::reset?Configuration{}:request.configuration;
         auto next_catalogue=catalogue;
         if (request.operation==Operation::mutate) {
+            next.startup_desired=current.configuration.startup_desired;
             next.eligibility=current.configuration.eligibility;
             next.imports=current.configuration.imports;
             if (next.design_selection!=current.configuration.design_selection || next.design_id!=current.configuration.design_id)
                 next.imports.selected_id.clear();
         }
         if (request.operation==Operation::reset) {
+            next.startup_desired=current.configuration.startup_desired;
             imports::StoredCatalogue empty; empty.revision_high_water=catalogue->RevisionHighWater();
             auto restored=imports::RestoreCatalogue(empty);
             next_catalogue=std::make_shared<const imports::ImportCatalogue>(
@@ -219,6 +222,10 @@ struct ConfigurationServer::Impl {
             auto preferences=std::get_if<applications::EligibilityPreferences>(&applied);
             if (!preferences || !BoundedPreferences(*preferences)) return {Status::invalid,current.configuration};
             next=current.configuration; next.eligibility=std::move(*preferences);
+        }
+        if (request.operation==Operation::startup) {
+            next=current.configuration;
+            next.startup_desired=request.configuration.startup_desired;
         }
         if (request.operation==Operation::imports) {
             std::vector<applications::AppMetadata> metadata;

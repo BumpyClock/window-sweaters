@@ -212,6 +212,39 @@ void RenderPublicationTokens() {
         "Config/device/terminal invalidation retires every host gate without waiting for completion");
 }
 
+void ResourceReservationBounds() {
+    using namespace rendering;
+    auto tile=std::make_shared<knitting::Tile>();
+    auto perimeter=std::make_shared<KnitPerimeter>(); perimeter->tile=tile;
+    perimeter->width=8; perimeter->height=8;
+    for (auto& piece:perimeter->pieces) piece.image={2,2,8,{0xff123456,0xff123456,0xff123456,0xff123456}};
+    ResourceLedger ledger(1024*1024,176);
+    ResourceLedger::Lease first,alias,replacement;
+    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==80 &&
+        ledger.Status().uploadTransientBytes==16 && ledger.Status().surfaces==4,
+        "Four 2x2 BGRA surfaces reserve literal 64 bytes plus one 16-byte upload bitmap");
+    first.EndUpload();
+    const auto cpu=ledger.Status().retainedCpuBytes;
+    Check(SUCCEEDED(ledger.Reserve(perimeter,alias)) && ledger.Status().retainedCpuBytes==cpu &&
+        ledger.Status().estimatedGpuBytes==144,"Aliased CPU perimeter and tile count once while each overlay has four surfaces");
+    alias.EndUpload();
+    Check(ledger.Reserve(perimeter,replacement)==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
+        ledger.Status().estimatedGpuBytes==128 && ledger.Status().retainedCpuBytes==cpu,
+        "Reserve-before-upload rejects old-plus-new replacement peak even when final surfaces would fit");
+    alias.Reset();
+    Check(SUCCEEDED(ledger.Reserve(perimeter,replacement)) && ledger.Status().retainedCpuBytes==cpu,
+        "Released overlay capacity permits replacement without recounting shared CPU");
+    replacement.EndUpload(); first.Reset();
+    Check(ledger.Status().retainedCpuBytes==cpu && ledger.Status().estimatedGpuBytes==64,
+        "One retained alias keeps CPU backing after old overlay is retired");
+    replacement.Reset();
+    Check(!ledger.Status().retainedCpuBytes && !ledger.Status().estimatedGpuBytes &&
+        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=176,
+        "Last alias retires all CPU and known surface backing accurately");
+    perimeter->pieces[0].image.width=UINT32_MAX;
+    Check(ledger.Reserve(perimeter,first)==E_INVALIDARG && !ledger.Status().reservations,
+        "Overflowed BGRA stride/dimensions cannot enter aggregate ledger");
+}
 void NativePerimeterPublication() {
     struct Apartment {
         HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -388,6 +421,7 @@ int RunHostContractTests() {
     RecursiveValidationCannotOverridePolicy();
     StaleBatchPayloadUsesCurrentSnapshot();
     RenderPublicationTokens();
+    ResourceReservationBounds();
     NativePerimeterPublication();
     RunHostConsumerContracts();
     std::puts("PASS: host action/geometry contract assertions (scripted; no desktop windows launched)");

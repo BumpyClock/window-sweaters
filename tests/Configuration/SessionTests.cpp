@@ -1,5 +1,6 @@
 #include "..\..\src\Settings\Session.h"
 #include "..\..\src\Configuration\Pipe.h"
+#include "..\..\src\Configuration\Storage.h"
 #include "StallPipe.h"
 #include <atomic>
 #include <condition_variable>
@@ -498,6 +499,96 @@ void StalledExchangeStopsPromptly(std::filesystem::path const& directory,bool bu
     Sleep(300);
     Check(calls==1,"No exchange starts after Session stop");
 }
+void StartupPreferencesPersistThroughSoleWriter(std::filesystem::path const& directory) {
+    struct FakeOperation final : startup::PendingOperation {
+        unsigned cancellations{};
+        void Cancel() noexcept override { ++cancellations; }
+    };
+    struct FakeStartup final : startup::Backend {
+        startup::Command command{};
+        Callback completion;
+        std::shared_ptr<FakeOperation> operation=std::make_shared<FakeOperation>();
+        unsigned submissions{};
+        std::shared_ptr<startup::PendingOperation> Begin(startup::Command value,Callback callback) override {
+            command=value; completion=std::move(callback); ++submissions; return operation;
+        }
+        void Complete(startup::Result result) { completion(result); }
+    };
+    auto options=TestOptions(directory,L"startup-preference");
+    imports::StoredCatalogue empty; empty.revision_high_water=41;
+    auto restored=imports::RestoreCatalogue(empty);
+    auto catalogue=std::make_shared<const imports::ImportCatalogue>(
+        std::get<imports::ImportCatalogue>(std::move(restored)));
+    Configuration initial; initial.border_width_dip=23.f; initial.yarn_argb=0xff234567;
+    auto enabled=*applications::AppIdentity::FromExecutablePath(L"C:\\Fixture\\StartupAllowed.exe");
+    applications::EligibilityMutation eligibility; eligibility.defaultEnabled=false;
+    eligibility.edits.emplace_back(applications::SetApplicationPreference{enabled,true});
+    initial.eligibility=std::get<applications::EligibilityPreferences>(initial.eligibility.Apply(eligibility));
+    configuration::DescribeCatalogue(initial.imports,*catalogue);
+    Check(Storage(options.storage_directory).Save(initial,catalogue)==0,"Startup fixture persists nondefault appearance and import revision high water");
+    ConfigurationServer server({options.storage_directory,options.endpoint_suffix,Self()}); server.Start();
+    Observations observed; std::atomic<unsigned> launches{};
+    SessionTransport io;
+    io.exchange=[&](Message const& request,HANDLE cancel) { return Exchange(server.Endpoint(),Self(),request,cancel); };
+    io.start_host=[&] { ++launches; return false; };
+    Session session(options,[&](ConnectionState state) { observed.Add(std::move(state)); },io);
+    auto backend=std::make_shared<FakeStartup>();
+    StartupPreferences preferences(session,backend);
+    auto displayed=observed.Connected();
+    preferences.Observe(displayed);
+    Check(!backend->submissions && preferences.Snapshot().savedDesired==startup::DesiredPreference::Off,
+        "Settings constructor and authoritative handshake do not request OS enable");
+    preferences.Read(); backend->Complete({startup::Outcome::Observed,startup::OsState::Disabled});
+    Check(preferences.Poll()->save_generation==0 && server.Snapshot()==initial,
+        "Read-only Windows observation does not persist or enable");
+    Check(preferences.Request(displayed,startup::DesiredPreference::On,startup::UserIntent::None).status==
+        startup::SubmissionStatus::ExplicitIntentRequired,"Actual Settings startup consumer requires explicit gesture");
+    preferences.Request(displayed,startup::DesiredPreference::On,startup::UserIntent::SettingsGesture);
+    Check(backend->command==startup::Command::Enable,"Explicit Settings gesture requests fake OS enable only");
+    backend->Complete({startup::Outcome::Applied,startup::OsState::Enabled});
+    auto update=preferences.Poll();
+    Check(update && update->save_generation,"Applied OS enable queues exact-revision typed host persistence");
+    auto saved=observed.Wait([&](auto const& state) { return !state.pending && state.settled_edit_generation>=update->save_generation; });
+    auto expected=initial; expected.revision=1; expected.startup_desired=startup::DesiredPreference::On;
+    Check(saved.status==Status::saved && saved.configuration==expected && server.Snapshot()==expected &&
+        Storage(options.storage_directory).Load().configuration==expected,
+        "Real pipe startup acknowledgement and disk preserve appearance, eligibility, imports and high water");
+    preferences.Observe(saved);
+    auto submissions=backend->submissions;
+    preferences.Observe(saved);
+    Check(preferences.Snapshot().savedDesired==startup::DesiredPreference::On && backend->submissions==submissions,
+        "Saved preference observation does not mutate OS state");
+    for (auto result:{startup::Result{startup::Outcome::BlockedByUser,startup::OsState::DisabledByUser},
+        startup::Result{startup::Outcome::BlockedByPolicy,startup::OsState::DisabledByPolicy},
+        startup::Result{startup::Outcome::BlockedByPolicy,startup::OsState::EnabledByPolicy},
+        startup::Result{startup::Outcome::UnavailableNoPackage,startup::OsState::UnavailableNoPackage}}) {
+        preferences.Request(saved,startup::DesiredPreference::Off,startup::UserIntent::SettingsGesture);
+        backend->Complete(result); auto blocked=preferences.Poll();
+        Check(blocked && !blocked->save_generation && blocked->completion.result.state==result.state &&
+            server.Snapshot()==expected,"Actual Settings preserves user/policy/unpackaged OS states without false-success persistence");
+    }
+    configuration::Handle locked(CreateFileW(Storage(options.storage_directory).File().c_str(),GENERIC_READ,
+        FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));
+    Check(bool(locked),"Hold only isolated configuration file against replacement");
+    preferences.Request(saved,startup::DesiredPreference::Off,startup::UserIntent::SettingsGesture);
+    backend->Complete({startup::Outcome::Applied,startup::OsState::Disabled});
+    update=preferences.Poll();
+    auto failed=observed.Wait([&](auto const& state) { return !state.pending && state.settled_edit_generation>=update->save_generation; });
+    preferences.Observe(failed);
+    Check(failed.status==Status::storage_error && server.Snapshot()==expected &&
+        preferences.Snapshot().savedDesired==startup::DesiredPreference::On &&
+        preferences.Snapshot().lastObservation->result.state==startup::OsState::Disabled,
+        "OS change followed by real Save failure remains truthful: desired on, OS off, no automatic rollback");
+    auto count=backend->submissions;
+    preferences.Request(failed,startup::DesiredPreference::Off,startup::UserIntent::SettingsGesture);
+    preferences.Stop();
+    backend->Complete({startup::Outcome::Applied,startup::OsState::Disabled});
+    Check(!preferences.Poll() && preferences.Snapshot().stopped && backend->operation->cancellations &&
+        backend->submissions==count+1 && server.Snapshot()==expected,
+        "Closing actual startup consumer cancels one pending operation and drops late completion without persistence");
+    session.Stop(); server.Stop();
+    Check(!launches,"Startup persistence test never starts OS startup or companion UI");
+}
 }
 int RunSessionTests(std::filesystem::path const& directory) {
     checks=0;
@@ -517,5 +608,6 @@ int RunSessionTests(std::filesystem::path const& directory) {
     RenewedSnapshotSurvivesDisconnect(directory,true);
     StalledExchangeStopsPromptly(directory,false);
     StalledExchangeStopsPromptly(directory,true);
+    StartupPreferencesPersistThroughSoleWriter(directory);
     return checks;
 }

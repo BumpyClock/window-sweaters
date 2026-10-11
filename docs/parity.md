@@ -19,9 +19,9 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | [#12](https://github.com/BumpyClock/window-sweaters/issues/12) | Physical geometry, mixed DPI, Snap, clipping | Geometry and GPU corner policy integrated and independently reviewed | 1,645 focused geometry checks and actual GPU rounded-mask readback pass; normal fixture corners inspected at 100%; physical mixed-monitor matrix pending |
 | [#13](https://github.com/BumpyClock/window-sweaters/issues/13) | Desktop, session, and power visibility | Public-API visibility and host wiring independently reviewed | Ten native/model groups pass; current-desktop tool-window publication verified; actual switching/lock/sleep transitions pending |
 | [#14](https://github.com/BumpyClock/window-sweaters/issues/14) | Shared-device loss and generation-safe recovery | Bounded shared-device recovery integrated and independently reviewed | Injected real D3D/DComp reconstruction verified through Computer Use, with stable target and reused CPU yarn; actual driver reset remains unverified |
-| [#15](https://github.com/BumpyClock/window-sweaters/issues/15) | Bounded perimeter rendering and idle/movement invariants | Bounded preparation independently reviewed; four-surface host publication implemented | Current Release preparation checks: 26 tests, 431 assertions; aggregate live compositor budgets pending |
-| [#16](https://github.com/BumpyClock/window-sweaters/issues/16) | Reversible packaged startup and resilient tray/shutdown | Native StartupTask controller independently reviewed; settings/tray persistence pending | State/cancellation checks pass; installed-package startup and Explorer restart pending |
-| [#17](https://github.com/BumpyClock/window-sweaters/issues/17) | Native MSIX and Microsoft Store preparation | In progress under the user's Store scope change | Development identity only; Partner Center identity, packaged execution, and Store submission pending |
+| [#15](https://github.com/BumpyClock/window-sweaters/issues/15) | Bounded perimeter rendering and idle/movement invariants | Aggregate retained CPU/estimated-surface admission integrated and independently reviewed | Sixteen 8192×4096 width-64 hidden GPU targets stay inside 128/256 MiB admission caps; owner-refresh release and waiter recovery pass; physical compositor memory remains unqualified |
+| [#16](https://github.com/BumpyClock/window-sweaters/issues/16) | Reversible packaged startup and resilient tray/shutdown | Startup preferences, OS-state reporting and bounded TaskbarCreated recovery integrated and independently reviewed | Debug/Release configuration 1,660 and fake startup 20,193 checks pass; actual installed startup and Explorer restart pending |
+| [#17](https://github.com/BumpyClock/window-sweaters/issues/17) | Native MSIX and Microsoft Store preparation | x64/ARM64 build and versioned package pipeline independently reviewed | Frozen 0.2.0.0 unsigned dual-architecture bundle validates; identical corresponding source archives and per-architecture runtime/PRI checks pass; identity deferred |
 | [#18](https://github.com/BumpyClock/window-sweaters/issues/18) | Cross-feature parity and final qualification | Pending | Not release-qualified |
 
 ## Deliberate Windows policies
@@ -34,6 +34,48 @@ original ZIP-only first-delivery policy. The package contains both native
 processes and declares opt-in startup disabled by default. Until the reserved
 Store app's identity is supplied, build output uses a clearly marked development
 identity. No package has been submitted or published.
+The user subsequently requested x64 and ARM64 in one bundle, then chose unsigned
+output and skipped local signing, certificate trust and installation. ARM64
+cross-compilation and payload inspection do not establish execution on ARM64.
+
+## Dual-architecture delivery gate
+
+The package pipeline binds each architecture's original native input hashes and
+archived corresponding-source inventory to its current build receipt, before and
+after bundling. Staged EXE debug-path normalization is recorded separately.
+Contract tests reject stale packages beside a newer same-version native build,
+wrong architectures, missing bundle entries and inconsistent output roots.
+
+Outputs are version-scoped under
+`packaging\artifacts\Development\0.2.0.0\<Platform>`. The combined bundle sits in
+the version folder, preserving older artifacts outside its input set.
+The generated bundle contains exactly one x64 and one ARM64 application package,
+with development identity and version 0.2.0.0. Per-architecture validation covers
+42 x64 and 41 ARM64 binaries, matching CRT/runtime architectures, unchanged
+application PRI, no private paths, and no test executables or signing files.
+Both corresponding-source archives are identical and contain 240 source files.
+Fresh x64 Release native tests pass; ARM64 Host, Settings and Fixture cross-compile.
+
+The runtime now reserves shared retained CPU/chart/tile ownership and estimated
+four-surface BGRA backing before upload, including replacement overlap and upload
+transient storage. Hidden GPU pressure fixtures cover 16 large targets and
+capacity retries. These limits are not physical driver/compositor measurements.
+The actual machine has one 1920×1200 display, Windows 11 Enterprise build 26300,
+AMD Ryzen AI 7 PRO 350 and Radeon 860M. Mixed physical DPI, minimum-build clean
+execution and ARM64 hardware execution are unavailable in this environment.
+
+Direct Computer Use inspected the final x64 build's actual native Settings and
+knitted preview. The unpackaged startup row was disabled and reported Unavailable
+with saved Off. The single fixture retained 474,728 CPU bytes and 396,304 estimated
+surface bytes with no quota or rendering error. Closing Settings returned exit
+zero while Host continued; stopping Host released the ledger to zero and all
+test processes exited.
+
+A requested slider value of 20 was not verified by the accessibility tool;
+the host actually saved 16.221574783325195. The resize tool reported completion
+without changing the observed 1000×720 window, so compact-layout qualification
+remains open. These observations are unpackaged x64 evidence, not installed
+MSIX execution, ARM64 hardware verification, WACK or Store certification.
 
 Native perimeters add ring lighting that upstream lacks. Each band is lit as a
 padded tube under one upper-left screen-space light (`ws_knit_shade_ring`), so

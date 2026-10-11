@@ -142,6 +142,8 @@ struct Session::Impl {
                                 command.request.configuration.revision=commit.after.revision;
                                 command.request.configuration.eligibility=commit.after.eligibility;
                                 command.request.configuration.imports=commit.after.imports;
+                                if (command.request.operation!=Operation::startup)
+                                    command.request.configuration.startup_desired=commit.after.startup_desired;
                                 command.displayed=commit.after;
                                 commit.last_used=++own_clock;
                                 break;
@@ -154,6 +156,11 @@ struct Session::Impl {
                     if (Stopped()) return;
                     view.pending=true; view.detail=L"Saving…"; Publish();
                     auto result=transport.exchange(in_flight->request,cancel.get());
+                    if (result.operation!=Operation::response || result.response_to!=in_flight->request.operation ||
+                        result.client!=client || result.request_id!=in_flight->request.request_id ||
+                        (result.server!=in_flight->request.server && result.status!=Status::wrong_instance) ||
+                        result.client_lease!=in_flight->request.client_lease)
+                        throw std::runtime_error("Invalid mutation acknowledgement");
                     if (in_flight->request.operation==Operation::imports &&
                         (result.operation!=Operation::response || result.response_to!=Operation::imports ||
                             result.import_edit!=in_flight->request.import_edit || result.client!=client ||
@@ -163,14 +170,21 @@ struct Session::Impl {
                         throw std::runtime_error("Invalid import acknowledgement");
                     auto acknowledged=in_flight->request.operation==Operation::reset
                         ? Configuration{} : in_flight->request.configuration;
-                    if (in_flight->request.operation==Operation::reset)
+                    if (in_flight->request.operation==Operation::reset) {
                         acknowledged.imports.high_water=in_flight->displayed.imports.high_water;
+                        acknowledged.startup_desired=in_flight->displayed.startup_desired;
+                    }
                     else if (in_flight->request.operation==Operation::mutate) {
+                        acknowledged.startup_desired=in_flight->displayed.startup_desired;
                         acknowledged.eligibility=in_flight->displayed.eligibility;
                         acknowledged.imports=in_flight->displayed.imports;
                         if (acknowledged.design_selection!=in_flight->displayed.design_selection ||
                             acknowledged.design_id!=in_flight->displayed.design_id)
                             acknowledged.imports.selected_id.clear();
+                    }
+                    else if (in_flight->request.operation==Operation::startup) {
+                        acknowledged=in_flight->displayed;
+                        acknowledged.startup_desired=in_flight->request.configuration.startup_desired;
                     }
                     acknowledged.revision=in_flight->request.configuration.revision+1;
                     if (in_flight->request.operation==Operation::imports) {
@@ -203,6 +217,8 @@ struct Session::Impl {
                             });
                             *inactive=transition;
                         } else own_commits.push_back(transition);
+                    } else if (result.status==Status::saved) {
+                        throw std::runtime_error("Mutation acknowledgement changed unrelated settings");
                     }
                     view.pending=false; view.status=result.status; view.error=result.error;
                     view.import_failure=result.import_failure;
@@ -264,13 +280,14 @@ std::uint64_t Session::Change(ConnectionState const& displayed,bool paused,float
 std::uint64_t Session::Change(ConnectionState const& displayed,Configuration const& appearance) {
     Message request; request.configuration=appearance;
     request.configuration.eligibility=displayed.configuration.eligibility;
+    request.configuration.startup_desired=displayed.configuration.startup_desired;
     request.configuration.revision=displayed.configuration.revision;
     if (!Valid(request.configuration) || !displayed.connected || displayed.client_lease==0 ||
         EmptyIdentity(displayed.server_instance)) return 0;
     request.operation=Operation::mutate; request.client=impl_->client;
     request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
     std::lock_guard lock(impl_->mutex);
-    if (impl_->import_busy) return 0;
+    if (impl_->stop || impl_->import_busy) return 0;
     auto generation=++impl_->last_edit_generation;
     impl_->desired=Impl::Desired{request,displayed.configuration,generation};
     impl_->due=std::chrono::steady_clock::now()+std::chrono::milliseconds(150);
@@ -291,12 +308,27 @@ std::uint64_t Session::Import(ConnectionState const& displayed,ImportMutation mu
     impl_->import_busy=true; impl_->due=std::chrono::steady_clock::now(); impl_->wake.notify_one();
     return generation;
 }
+std::uint64_t Session::ChangeStartup(ConnectionState const& displayed,startup::DesiredPreference desired) {
+    if (!displayed.connected || !displayed.configuration_authoritative || !displayed.client_lease ||
+        EmptyIdentity(displayed.server_instance) || displayed.pending) return 0;
+    Message request; request.operation=Operation::startup; request.configuration=displayed.configuration;
+    request.configuration.startup_desired=desired;
+    if (!Valid(request.configuration)) return 0;
+    request.client=impl_->client; request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->stop || impl_->import_busy || impl_->last_edit_generation>displayed.settled_edit_generation) return 0;
+    auto generation=++impl_->last_edit_generation;
+    impl_->desired=Impl::Desired{std::move(request),displayed.configuration,generation};
+    impl_->import_busy=true; impl_->due=std::chrono::steady_clock::now(); impl_->wake.notify_one();
+    return generation;
+}
 std::uint64_t Session::Reset(ConnectionState const& displayed) {
     if (!displayed.connected || displayed.client_lease==0 || EmptyIdentity(displayed.server_instance)) return 0;
     Message request; request.operation=Operation::reset; request.client=impl_->client;
     request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
     request.configuration=displayed.configuration;
     std::lock_guard lock(impl_->mutex);
+    if (impl_->stop || impl_->import_busy) return 0;
     auto generation=++impl_->last_edit_generation;
     impl_->desired=Impl::Desired{request,displayed.configuration,generation};
     impl_->due=std::chrono::steady_clock::now(); impl_->wake.notify_one();
@@ -309,6 +341,36 @@ void Session::RequestStop() noexcept {
 void Session::Stop() noexcept {
     RequestStop();
     if (impl_->worker.joinable()) impl_->worker.join();
+}
+StartupPreferences::StartupPreferences(Session& session,std::shared_ptr<startup::Backend> backend)
+    : session_(session),controller_(backend
+        ? std::make_unique<startup::Controller>(std::move(backend),startup::Consumer::SettingsUserActions)
+        : std::make_unique<startup::Controller>(startup::Consumer::SettingsUserActions)) {}
+startup::Submission StartupPreferences::Read() { return controller_->ReadState(); }
+startup::Submission StartupPreferences::Request(ConnectionState const& displayed,startup::DesiredPreference desired,
+    startup::UserIntent intent) {
+    if (pending_ || !displayed.connected || !displayed.configuration_authoritative || displayed.pending)
+        return {startup::SubmissionStatus::Busy};
+    auto submission=controller_->RequestUserChange(desired,intent);
+    if (submission.status==startup::SubmissionStatus::Accepted) {
+        pending_=displayed; desired_=desired;
+    }
+    return submission;
+}
+std::optional<StartupPreferences::Update> StartupPreferences::Poll() {
+    auto completion=controller_->TakeCompletion();
+    if (!completion) return {};
+    Update update{*completion,desired_,0};
+    if (completion->command!=startup::Command::Read && pending_ &&
+        (completion->result.outcome==startup::Outcome::Applied ||
+            completion->result.outcome==startup::Outcome::AlreadyEffective))
+        update.save_generation=session_.ChangeStartup(*pending_,desired_);
+    pending_.reset();
+    return update;
+}
+void StartupPreferences::Observe(ConnectionState const& state) noexcept {
+    if (state.connected && state.configuration_authoritative)
+        controller_->SetSavedPreference(state.configuration.startup_desired);
 }
 DraftState::Update DraftState::Apply(ConnectionState const& state) {
     if (state.publication_sequence<=current_.publication_sequence) return {};

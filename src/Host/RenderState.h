@@ -61,9 +61,10 @@ struct RenderState {
     std::optional<rendering::RenderRequest> prepared;
     std::optional<rendering::RenderRequest> failed;
     std::optional<rendering::RenderRequest> retry;
+    std::optional<rendering::RenderRequest> resourceRetry;
     bool retryQueued{};
     void Invalidate() noexcept {
-        pending.reset(); prepared.reset(); failed.reset(); retry.reset(); retryQueued = false;
+        pending.reset(); prepared.reset(); failed.reset(); retry.reset(); resourceRetry.reset(); retryQueued = false;
     }
 };
 

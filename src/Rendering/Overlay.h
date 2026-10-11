@@ -6,6 +6,7 @@
 #include <dcomp.h>
 #include <wrl/client.h>
 #include "KnitRaster.h"
+#include "ResourceLedger.h"
 
 namespace window_sweaters::rendering {
 
@@ -21,12 +22,15 @@ public:
 
     ID2D1Device* Drawing() const noexcept { return drawing_.Get(); }
     IDCompositionDevice* Composition() const noexcept { return composition_.Get(); }
+    ResourceLedger& Resources() const noexcept { return *resources_; }
+    std::shared_ptr<ResourceLedger> ResourceOwner() const noexcept { return resources_; }
 
 private:
     Microsoft::WRL::ComPtr<ID3D11Device> graphics_;
     Microsoft::WRL::ComPtr<ID2D1Factory1> factory_;
     Microsoft::WRL::ComPtr<ID2D1Device> drawing_;
     Microsoft::WRL::ComPtr<IDCompositionDevice> composition_;
+    std::shared_ptr<ResourceLedger> resources_{std::make_shared<ResourceLedger>()};
 };
 
 class Overlay final {
@@ -47,6 +51,7 @@ public:
     HRESULT ReorderBelow(HWND target) noexcept;
     HRESULT Show() noexcept;
     void Hide() noexcept;
+    void ReleaseContent() noexcept;
     void Destroy() noexcept;
 
     HWND Window() const noexcept { return window_; }
@@ -68,6 +73,8 @@ private:
     Microsoft::WRL::ComPtr<IDCompositionVisual> visual_;
     std::array<Microsoft::WRL::ComPtr<IDCompositionSurface>, 4> surfaces_;
     std::shared_ptr<const KnitPerimeter> perimeter_;
+    std::shared_ptr<ResourceLedger> resources_;
+    ResourceLedger::Lease resourceLease_;
 };
 
 }

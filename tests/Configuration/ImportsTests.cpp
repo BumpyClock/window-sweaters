@@ -195,8 +195,8 @@ void Persistence(std::filesystem::path const& root) {
     }
     restarted.Stop();
 }
-void Schema4(std::filesystem::path const& root) {
-    auto directory=root/L"imports-schema4"; Storage storage(directory);
+void LegacyStartupSchema(std::filesystem::path const& root,unsigned schema) {
+    auto directory=root/(L"imports-schema"+std::to_wstring(schema)); Storage storage(directory);
     Configuration old; old.revision=47; old.paused=true; old.border_width_dip=23.5f;
     old.design_selection=DesignSelection::shared_zigzag; old.stitch_style=StitchStyle::garter;
     old.material_style=MaterialStyle::plain; old.stitch_rows=9.5f; old.yarn_argb=0xff172839u;
@@ -215,15 +215,20 @@ void Schema4(std::filesystem::path const& root) {
             tag|=static_cast<unsigned char>(bytes[offset+i])<<(8*i);
             size|=static_cast<unsigned char>(bytes[offset+4+i])<<(8*i);
         }
-        if (tag==6) { bytes.erase(bytes.begin()+offset,bytes.begin()+offset+8+size); frameLength-=8+size; break; }
-        offset+=8+size;
+        if ((schema==4 && tag==6) || tag==8) { bytes.erase(bytes.begin()+offset,bytes.begin()+offset+8+size); frameLength-=8+size; }
+        else offset+=8+size;
     }
-    bytes.resize(12+frameLength+4); Put(bytes,4,4); Put(bytes,8,bytes.size());
-    Put(bytes,12+4,5,2); Put(bytes,12+64,4); Put(bytes,12+8,frameLength);
+    if (schema==4) bytes.resize(12+frameLength+4);
+    Put(bytes,4,schema); Put(bytes,8,bytes.size());
+    Put(bytes,12+4,schema+1,2); Put(bytes,12+64,schema); Put(bytes,12+8,frameLength);
     WriteRecord(storage.File(),bytes); auto exact=Bytes(storage.File());
     auto loaded=storage.Load();
     Check(loaded.state==StorageState::ready && loaded.configuration==old && loaded.catalogue->RevisionHighWater()==0 &&
-        Bytes(storage.File())==exact,"Schema4 protocol5 migrates all exact appearance and exclusion fields in memory without rewrite");
+        Bytes(storage.File())==exact,"Schema4/5 migrates exact appearance and exclusion fields with startup off in memory without rewrite");
+    auto malformed=bytes; Put(malformed,12+68,2); WriteRecord(storage.File(),malformed);
+    auto corrupt=Bytes(storage.File());
+    Check(storage.Load().state==StorageState::corrupt && storage.Save({})!=0 && Bytes(storage.File())==corrupt,
+        "Invalid legacy startup migration preserves exact malformed file instead of inventing saved defaults");
 }
 struct Observations {
     std::mutex mutex; std::condition_variable wake; std::vector<settings::ConnectionState> states;
@@ -405,6 +410,6 @@ int RunImportsTests(std::filesystem::path const& root) {
     auto apartment=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
     struct Apartment { HRESULT result; ~Apartment() {if (SUCCEEDED(result)) CoUninitialize();} } cleanup{apartment};
     Check(SUCCEEDED(apartment),"Imports E2E COM apartment");
-    checks=0; Persistence(root); Schema4(root); SessionCases(root); StorageFailureAndShadow(root); AboveWireLimit(root);
+    checks=0; Persistence(root); LegacyStartupSchema(root,4); LegacyStartupSchema(root,5); SessionCases(root); StorageFailureAndShadow(root); AboveWireLimit(root);
     OrdinaryEditsChainAfterImport(root,false); OrdinaryEditsChainAfterImport(root,true); return checks;
 }

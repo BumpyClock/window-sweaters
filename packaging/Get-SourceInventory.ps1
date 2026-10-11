@@ -8,8 +8,8 @@ Set-StrictMode -Version Latest
 $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\')
 $inventoryRelative = 'packaging/SourceInventory.json'
 function Test-ExcludedSource([string]$relative) {
-    return $relative -match '(?i)(^|/)(\.git|\.vs|\.packages|obj|bin|out|artifacts|outputs|probe-results)/' -or
-        $relative -match '(?i)\.(user|pdb|ilk|log|pfx|pem|key|msix|msixbundle|zip)$'
+    return $relative -match '(?i)(^|/)(\.git|\.vs|\.packages|packages|build|obj|bin|out|artifacts|outputs|probe-results|TestResults|AppPackages|Generated Files|Debug|Release|x64|x86|ARM64|\.run-[^/]+)/' -or
+        $relative -match '(?i)\.(user|suo|pdb|ilk|obj|pch|idb|res|exe|dll|lib|exp|winmd|tlog|binlog|log|pfx|p12|pem|key|cer|crt|der|p7b|p7x|nupkg|snupkg|msix|msixbundle|appx|appxbundle|appxupload|msixupload|appxsym|zip)$'
 }
 function Test-SourcePath([string]$relative) {
     if ($relative -match '(^|/)\.\.?(/|$)|[\\:<>|?*\x00-\x1f]' -or $relative.StartsWith('/') -or

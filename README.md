@@ -11,7 +11,7 @@ signing, installation, and publication are separate operations.
 
 ## Platform
 
-The target is Windows 11 x64, build 22000 or later. The tray host uses C++20, Win32, Direct2D, and DirectComposition. Portable knitting code remains C where practical. Settings use an on-demand C++/WinRT WinUI 3 process; the host does not load WinUI or the Windows App SDK.
+The target is Windows 11 x64 and ARM64, build 22000 or later. The tray host uses C++20, Win32, Direct2D, and DirectComposition. Portable knitting code remains C where practical. Settings use an on-demand C++/WinRT WinUI 3 process; the host does not load WinUI or the Windows App SDK.
 
 Native projects use Visual Studio/MSBuild, not CMake. Install Visual Studio 2026 with the Desktop development with C++ workload and Windows SDK 10.0.26100.0. Projects pin the v145 platform toolset, C++20, and C17. Settings target the stable Windows App SDK 2.5.1.
 
@@ -22,10 +22,17 @@ From PowerShell at the repository root:
 ```powershell
 .\scripts\build.ps1 -Configuration Debug -IncludeFixture
 .\scripts\build.ps1 -Configuration Release -IncludeFixture
+.\scripts\build.ps1 -Configuration Release -Platform ARM64
 .\scripts\test.ps1 -Configuration Debug -NoBuild
 ```
 
-The build script accepts `-MSBuild <path>` for other Visual Studio editions or installation locations. Native artifacts are written to `out\x64\<Configuration>`. The current CLI checks validate arguments without selecting desktop applications; they do not prove input transparency or visual parity.
+The build script accepts `-MSBuild <path>` for other Visual Studio editions or installation locations. Native artifacts are written to `out\<Platform>\<Configuration>`. ARM64 compilation requires the corresponding v145 toolchain. Cross-compilation does not prove execution on ARM64 hardware.
+
+After both Release builds, `.\scripts\package.ps1 -Architectures x64,ARM64 -Bundle`
+produces an unsigned development bundle. It validates matching architecture
+payloads and source/build receipts. See [packaging](packaging/README.md) for
+Partner Center identity setup. Signing, certificate trust, installation and
+Store submission remain separate operations.
 
 To iterate on chart designs, `python scripts\preview-designs.py` renders the Windows-authored themes as flat labelled strips to `out\design-preview.png`. Pass theme IDs to select themes, or `--all` for the whole catalogue. It shows chart cells only; the Knitting tests write knitted renders to `tests\Knitting\outputs`.
 

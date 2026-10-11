@@ -117,11 +117,11 @@ void Schema3Migration(const std::filesystem::path& root) {
             tag|=static_cast<unsigned char>(schema3[offset+i])<<(8*i);
             size|=static_cast<unsigned char>(schema3[offset+4+i])<<(8*i);
         }
-        if (tag==6) {
+        if (tag==6 || tag==8) {
             schema3.erase(schema3.begin()+offset,schema3.begin()+offset+8+size);
-            frameLength-=8+size; break;
+            frameLength-=8+size;
         }
-        offset+=8+size;
+        else offset+=8+size;
     }
     schema3.resize(12+frameLength+4);
     Put(schema3,12+8,frameLength); Put(schema3,8,schema3.size());
@@ -149,8 +149,8 @@ void Schema3Migration(const std::filesystem::path& root) {
         Bytes(storage.File())==future,"Newer disk schema is preserved until explicit recovery");
     WriteRecord(storage.File(),unchanged);
     auto next=original; ++next.revision; next.design_selection=DesignSelection::shared_zigzag;
-    Check(storage.Save(next)==0 && storage.Load().configuration==next && Bytes(storage.File())[4]==5,
-        "First successful semantic mutation durably upgrades schema3 to schema5");
+    Check(storage.Save(next)==0 && storage.Load().configuration==next && Bytes(storage.File())[4]==configuration_schema,
+        "First successful semantic mutation durably upgrades schema3 to current schema");
 }
 struct Observed {
     std::mutex mutex;

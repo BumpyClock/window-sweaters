@@ -51,8 +51,21 @@ A fresh admitted snapshot after host restart or client-lease expiry clears the
 transient expiry status and confirms its complete configuration. A later
 disconnect therefore retains the renewed host's latest appearance, not a
 previous instance's values. Publication/edit/confirmation metadata is local to
-Settings; protocol 6 preserves this local ordering contract while schema 5 adds
+Settings; protocol 7 preserves this local ordering contract while schema 6 adds
 owned personal imports and retains the existing shared mode and eligibility.
+
+## Start at sign-in
+
+The Preferences section shows the saved desire and Windows effective startup
+state separately. Startup is Off by default. Only an explicit user toggle calls
+the packaged StartupTask controller; opening Settings, observing state, saving
+preferences and reconnecting never enable startup.
+
+Disabled-by-user and policy-owned states remain Windows decisions. Unpackaged
+execution displays startup as unavailable rather than claiming it is disabled
+successfully. Settings polls bounded completions and saves the explicit desired
+choice through the host. OS failure or storage failure stays visible; an OS
+change is not automatically undone to hide a failed preference save.
 
 ## Preview-first layout
 

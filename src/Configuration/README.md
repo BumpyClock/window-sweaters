@@ -1,12 +1,13 @@
 # Configuration contract
 
-`contracts::Configuration` schema 5 contains semantic settings, not target handles,
+`contracts::Configuration` schema 6 contains semantic settings, not target handles,
 tile indexes, cache keys, or renderer output:
 
 | Field | Contract |
 | --- | --- |
 | `revision` | Host-owned committed revision; mutations supply the expected revision |
 | `paused` | Pause decoration |
+| `startup_desired` | Explicit saved start-at-sign-in preference, default Off; independent of effective Windows state |
 | `border_width_dip` | Finite 2–64 DIP, default 16 |
 | `design_selection` | `plain`, `original`, `by_app`, or `shared_zigzag` |
 | `design_id` | Exact immutable catalogue theme ID, required only for `original` |
@@ -35,7 +36,7 @@ Typed import operations change only the validated import candidate.
 
 ## Storage and migration
 
-Schema 5 is length-framed and contains the bounded configuration record plus the
+Schema 6 is length-framed and contains the bounded configuration record plus the
 owned stored catalogue. The complete disk envelope is limited to 17,891,328 bytes.
 Validated PNG bytes, material, stable IDs, content hashes, numeric revisions and
 the catalogue high-water mark are stored atomically with appearance and exact
@@ -61,7 +62,7 @@ IDs are at most 63 ASCII bytes (`a`–`z`, `0`–`9`, `-`), a bounded UTF-8 subs
 containing the exact authored semantic IDs. Embedded NULs and nonzero padding are
 invalid. Reads validate the fixed header and aggregate file limit before allocation.
 
-Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3/4 records
+Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3/4/5 records
 migrate **in memory only**. Startup and snapshot reads do not rewrite them.
 Schema 1 acquires raised stockinette. Schema 2 retains every appearance field;
 both acquire default-on eligibility with no exceptions. Schema 3 retains its
@@ -70,6 +71,8 @@ appearance and application exceptions. Its supported selection values remain
 Schema 4 also retains Shared Zigzag. Older schemas acquire a genuinely empty
 personal catalogue; current malformed storage cannot infer an empty catalogue
 or reconstruct missing revision history.
+Schema 5 retains its complete personal catalogue and bindings. All older schemas
+acquire startup Off in memory, without enabling startup or rewriting the file.
 A successful validated mutation performs the ordinary staged,
 flushed atomic replacement; failed writes retain legacy bytes and committed
 state. Corrupt, unsupported old values, or newer-schema files remain untouched.
@@ -82,7 +85,7 @@ failed save or weakening permanent failed-write retention.
 
 ## IPC and acknowledgment
 
-Protocol version 6 retains the first 176 appearance bytes and its typed,
+Protocol version 7 retains the first 176 appearance bytes and its typed,
 length-framed sections. The byte-mode pipe reads a 12-byte header, validates the
 total bound, then reads exactly that frame. The previous header/request/client/
 server/revision/schema/pause/width offsets are unchanged. Offset 76 now carries
@@ -94,7 +97,7 @@ personal-import metadata and import mutations. Required sections are
 operation-specific. Unknown/duplicate sections, unsupported operations, trailing
 data, invalid identities, duplicate edits, bad counts and unchecked lengths
 are rejected. The 1 MiB aggregate limit applies before payload allocation.
-The live endpoint accepts protocol 6 only. Legacy schema decoding exists
+The live endpoint accepts protocol 7 only. Legacy schema decoding exists
 solely for validated disk migration, not an alternate live mutation path.
 The existing three-second I/O budget covers the complete header/body read;
 partial byte progress does not restart the deadline.
@@ -110,7 +113,9 @@ windows, with counts, labels, supported-property provenance and failure facts.
 They contain no pixel blobs. Publisher authenticity is not claimed.
 
 Operations include snapshots, appearance mutations, explicit recovery reset,
-eligibility changes and personal imports. All-on/off atomically changes the
+eligibility changes, personal imports and startup-preference mutations.
+Startup edits preserve appearance, eligibility and imports; appearance edits
+cannot overwrite the startup preference. All-on/off atomically changes the
 default and clears exceptions; default-only changes retain explicit choices.
 Snapshots include disabled running owners and saved non-running choices.
 Observation generation advances for metadata/lifecycle/count changes even when
@@ -154,3 +159,8 @@ Ordinary design-change and reset acknowledgments account for selection clearing
 and retained revision history before extending the Settings own-commit chain.
 Failed imports and saves retain the previous committed catalogue, configuration,
 and asset revision.
+
+Startup mutation acknowledges only the durable desired preference. The
+Settings-owned StartupTask controller separately reports Windows effective state
+and errors. A failed save after an OS change is reported as a mismatch, not
+silently reversed or presented as a successful saved preference.

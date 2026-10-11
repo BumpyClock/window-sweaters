@@ -83,6 +83,7 @@ HRESULT Overlay::Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& gra
     if (!SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA)) return LastError();
 
     composition_ = graphics.Composition();
+    resources_ = graphics.ResourceOwner();
     HRESULT result = graphics.Drawing()->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
         context_.ReleaseAndGetAddressOf());
     if (FAILED(result)) return result;
@@ -207,6 +208,9 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
         bytes += image.ByteSize();
     }
     if (bytes > 64ull * 1024 * 1024) return E_OUTOFMEMORY;
+    ResourceLedger::Lease reservation;
+    const auto admitted=resources_->Reserve(perimeter,reservation);
+    if (FAILED(admitted)) return admitted;
     Microsoft::WRL::ComPtr<IDCompositionVisual> nextRoot;
     std::array<Microsoft::WRL::ComPtr<IDCompositionSurface>, 4> surfaces;
     HRESULT result = composition_->CreateVisual(nextRoot.ReleaseAndGetAddressOf());
@@ -226,11 +230,14 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
         static_cast<float>(clip.right), static_cast<float>(clip.bottom)));
     if (SUCCEEDED(result)) result = target_->SetRoot(nextRoot.Get());
     if (SUCCEEDED(result)) result = composition_->Commit();
-    if (FAILED(result)) { Hide(); return result; }
+    if (SUCCEEDED(result)) result = composition_->WaitForCommitCompletion();
+    if (FAILED(result)) { Destroy(); return result; }
     ++commits_;
     visual_ = std::move(nextRoot);
     surfaces_ = std::move(surfaces);
     perimeter_ = std::move(perimeter);
+    reservation.EndUpload();
+    resourceLease_=std::move(reservation);
     clip_ = clip;
     return UpdatePlacement(bounds, clip);
 }
@@ -271,19 +278,36 @@ void Overlay::Hide() noexcept {
 }
 
 void Overlay::Destroy() noexcept {
-    Hide();
-    if (target_) target_->SetRoot(nullptr);
-    if (composition_) composition_->Commit();
-    for (auto& surface : surfaces_) surface.Reset();
-    perimeter_.reset();
-    visual_.Reset();
+    ReleaseContent();
     target_.Reset();
     context_.Reset();
     composition_.Reset();
+    resources_.reset();
     if (window_) DestroyWindow(window_);
     window_ = nullptr;
     bounds_ = clip_ = {};
     commits_ = 0;
+}
+
+void Overlay::ReleaseContent() noexcept {
+    Hide();
+    if (!perimeter_ && !visual_) return;
+    auto detached=target_?target_->SetRoot(nullptr):S_OK;
+    if (SUCCEEDED(detached) && composition_) {
+        detached=composition_->Commit();
+        if (SUCCEEDED(detached)) detached=composition_->WaitForCommitCompletion();
+    }
+    if (FAILED(detached)) {
+        target_.Reset();
+        context_.Reset();
+        if (window_) DestroyWindow(window_);
+        window_=nullptr;
+    }
+    for (auto& surface : surfaces_) surface.Reset();
+    perimeter_.reset();
+    visual_.Reset();
+    resourceLease_.Reset();
+    bounds_ = clip_ = {};
 }
 
 }
