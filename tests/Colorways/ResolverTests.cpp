@@ -6,6 +6,7 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <tuple>
 
 using namespace window_sweaters;
 using namespace window_sweaters::colorways;
@@ -91,6 +92,19 @@ void KnownMappings() {
         steamAppearance.pattern == PatternChoice(AuthoredChart{"atelier-steam"}) &&
         steamAppearance.mapping && steamAppearance.mapping->provenance.starts_with("Measured 2026-10-10"),
         "measured Steam main-window owner receives its literal authored design");
+    for (const auto& [path, theme, base, chart] : {
+             std::tuple{L"C:\\Windows\\System32\\Taskmgr.exe", "task-manager", 0xff202833u, "atelier-task-manager"},
+             std::tuple{L"C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\Common7\\IDE\\devenv.exe",
+                 "visual-studio", 0xff2a1f3du, "atelier-visual-studio"},
+             std::tuple{L"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe",
+                 "visual-studio", 0xff2a1f3du, "atelier-visual-studio"}}) {
+        const auto owner = Executable(path);
+        const auto value = Appearance(ResolveAppearance(&owner, {}, {}, roots));
+        Check(value.theme_id == theme && value.base_argb == base &&
+            value.pattern == PatternChoice(AuthoredChart{chart}) &&
+            value.mapping && value.mapping->provenance.starts_with("Measured 2026-10-11"),
+            "measured Task Manager and Visual Studio owners receive their literal authored designs");
+    }
     const auto steamClient = Executable(L"C:\\Program Files (x86)\\Steam\\Steam.exe");
     Check(Appearance(ResolveAppearance(&steamClient, {}, {}, roots)).theme_id != "steam",
         "Steam.exe bootstrapper is not the measured window owner");
@@ -133,7 +147,9 @@ void KnownMappings() {
              std::pair{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "windows-calculator"},
              std::pair{L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!Windows365", "windows-app"},
              std::pair{L"Microsoft.BingWeather_8wekyb3d8bbwe!App", "msn-weather"},
-             std::pair{L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "windows-terminal"}}) {
+             std::pair{L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "windows-terminal"},
+             std::pair{L"Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "notepad"},
+             std::pair{L"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel", "windows-settings"}}) {
         auto identity = Package(aumid);
         Check(Appearance(ResolveAppearance(&identity, {})).theme_id == theme, "documented Windows package AUMID mapping");
     }
@@ -171,6 +187,9 @@ void UnmappedAndSimilarNames() {
         L"C:\\Windows\\SysWOW64\\explorer.exe",
         L"C:\\Windows\\System32\\notepad.exe",
         L"C:\\Windows\\System32\\cmd.exe",
+        L"C:\\Windows\\SysWOW64\\Taskmgr.exe",
+        L"C:\\Program Files\\Microsoft Visual Studio\\18\\Preview\\Common7\\IDE\\devenv.exe",
+        L"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\Common7\\IDE\\devenv.exe",
         L"\\\\server\\share\\Google\\Chrome\\Application\\chrome.exe"
     };
     for (const auto path : paths) {

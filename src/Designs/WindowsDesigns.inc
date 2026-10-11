@@ -182,6 +182,46 @@ static const char* const k_weather_rows[] = {
 };
 static const uint32_t k_weather_yarn[6] = { 0xfff3f0e8u, 0xfff0c95au, 0xff2b4f8fu };
 
+static const char* const k_notepad_rows[] = {
+    ".aa....aa...",
+    "a..a..a..a..",
+    ".aa....aa...",
+    "............",
+    "bbbbbbbbbbbb",
+    "..cc.ccc....",
+};
+static const uint32_t k_notepad_yarn[6] = { 0xffdfe6eeu, 0xff8fc3ecu, 0xfff3ecd8u };
+
+static const char* const k_task_manager_rows[] = {
+    "........a...............",
+    ".......a.a..............",
+    "aaaaaaa...a.......aaaaaa",
+    ".b.........a.....a...b..",
+    ".b.b........a...a..b.b.b",
+    ".b.b.b.......aaa...b.b.b",
+};
+static const uint32_t k_task_manager_yarn[6] = { 0xff6cc24au, 0xff4f9be8u };
+
+static const char* const k_settings_rows[] = {
+    "................",
+    ".aaacc....ccbbb.",
+    ".aaacc....ccbbb.",
+    ".......cc.......",
+    "aaaaaaaccbbbbbbb",
+    ".......cc.......",
+};
+static const uint32_t k_settings_yarn[6] = { 0xff4c9be8u, 0xff7d8794u, 0xfff2f4f7u };
+
+static const char* const k_visual_studio_rows[] = {
+    "..............",
+    ".aaa....bbb...",
+    "a...a..b...b..",
+    "a....ab....b..",
+    "a...a..b...b..",
+    ".aaa....bbb...",
+};
+static const uint32_t k_visual_studio_yarn[6] = { 0xff8a5cd6u, 0xffc9b3f0u };
+
 #define WINDOWS_CHART(name, width, rows, yarn, flags) \
     { name, width, (uint32_t)(sizeof(rows) / sizeof((rows)[0])), yarn, flags, 0, 0, rows }
 
@@ -206,6 +246,10 @@ static const ChartView k_windows_chart_views[] = {
     WINDOWS_CHART("atelier-windows-app", 20, k_windows_app_rows, k_windows_app_yarn, ChartDefinedYarn | ChartSculptedYarn),
     WINDOWS_CHART("atelier-windows-terminal", 36, k_windows_terminal_rows, k_windows_terminal_yarn, ChartDefinedYarn | ChartSculptedYarn),
     WINDOWS_CHART("atelier-weather", 12, k_weather_rows, k_weather_yarn, ChartDefinedYarn | ChartSculptedYarn),
+    WINDOWS_CHART("atelier-notepad", 12, k_notepad_rows, k_notepad_yarn, ChartDefinedYarn | ChartSculptedYarn),
+    WINDOWS_CHART("atelier-task-manager", 24, k_task_manager_rows, k_task_manager_yarn, ChartDefinedYarn | ChartSculptedYarn),
+    WINDOWS_CHART("atelier-settings", 16, k_settings_rows, k_settings_yarn, ChartDefinedYarn | ChartSculptedYarn),
+    WINDOWS_CHART("atelier-visual-studio", 14, k_visual_studio_rows, k_visual_studio_yarn, ChartDefinedYarn | ChartSculptedYarn),
 };
 
 #undef WINDOWS_CHART
@@ -247,4 +291,12 @@ static const ThemeView k_windows_theme_views[] = {
       "Campbell black, sage, cornflower, cream, rose, straw, teal", "Prompt chevrons marching through the Campbell colours" },
     { "msn-weather", "Weather", NULL, "atelier-weather", 0xff5b9fd6u,
       "Sky blue, cream, sun gold, rain blue", "Slanting rain dashes in cream and rain blue, with a gold glint" },
+    { "notepad", "Notepad", NULL, "atelier-notepad", 0xff2c6cb0u,
+      "Notepad blue, ring silver, sky, paper cream", "Spiral coils over a sky ruled line with cream typed words" },
+    { "task-manager", "Task Manager", NULL, "atelier-task-manager", 0xff202833u,
+      "Graphite, CPU green, memory blue", "A green CPU spike and dip over blue usage bars" },
+    { "windows-settings", "Settings", NULL, "atelier-settings", 0xff23303du,
+      "Slate, accent blue, track grey, knob white", "On and off toggle switches above a half-filled slider" },
+    { "visual-studio", "Visual Studio", NULL, "atelier-visual-studio", 0xff2a1f3du,
+      "Aubergine, Visual Studio violet, lavender", "Violet and lavender infinity loops" },
 };

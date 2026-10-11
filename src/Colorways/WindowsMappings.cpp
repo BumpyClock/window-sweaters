@@ -72,6 +72,14 @@ constexpr std::string_view windows_terminal =
     "https://learn.microsoft.com/en-us/windows/terminal/install ; "
     "https://raw.githubusercontent.com/microsoft/terminal/main/src/cascadia/CascadiaPackage/Package.appxmanifest";
 
+constexpr std::string_view measured_owner =
+    "Measured 2026-10-11 from the running window owner's QueryFullProcessImageName and GetApplicationUserModelId; "
+    "AUMID form: https://learn.microsoft.com/en-us/windows/configuration/store/find-aumid";
+constexpr std::string_view visual_studio =
+    "Measured 2026-10-11: the running Visual Studio 2026 window owner is "
+    "%ProgramFiles%\\Microsoft Visual Studio\\18\\Enterprise\\Common7\\IDE\\devenv.exe; "
+    "default layout: https://learn.microsoft.com/en-us/visualstudio/install/change-installation-locations";
+
 constexpr auto mappings = std::to_array<WindowsMapping>({
     {"microsoft-teams", WindowsRoot::PackageIdentity, L"MSTeams_8wekyb3d8bbwe!MSTeams", L"ms-teams.exe", teams_package},
     {"microsoft-teams", WindowsRoot::LocalAppData, L"Microsoft\\Teams\\current\\Teams.exe", L"Teams.exe", teams_classic},
@@ -109,6 +117,15 @@ constexpr auto mappings = std::to_array<WindowsMapping>({
     {"windows-app", WindowsRoot::PackageIdentity, L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!Windows365", L"Windows365.exe", windows_app},
     {"msn-weather", WindowsRoot::PackageIdentity, L"Microsoft.BingWeather_8wekyb3d8bbwe!App", L"Microsoft.Msn.Weather.exe", weather},
     {"windows-terminal", WindowsRoot::PackageIdentity, L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", L"WindowsTerminal.exe", windows_terminal},
+    {"notepad", WindowsRoot::PackageIdentity, L"Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", L"Notepad.exe", measured_owner},
+    {"windows-settings", WindowsRoot::PackageIdentity, L"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel", L"SystemSettings.exe", measured_owner},
+    {"task-manager", WindowsRoot::Windows, L"System32\\Taskmgr.exe", L"Taskmgr.exe", measured_owner},
+    {"visual-studio", WindowsRoot::ProgramFiles, L"Microsoft Visual Studio\\18\\Enterprise\\Common7\\IDE\\devenv.exe", L"devenv.exe", visual_studio},
+    {"visual-studio", WindowsRoot::ProgramFiles, L"Microsoft Visual Studio\\18\\Professional\\Common7\\IDE\\devenv.exe", L"devenv.exe", visual_studio},
+    {"visual-studio", WindowsRoot::ProgramFiles, L"Microsoft Visual Studio\\18\\Community\\Common7\\IDE\\devenv.exe", L"devenv.exe", visual_studio},
+    {"visual-studio", WindowsRoot::ProgramFiles, L"Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\devenv.exe", L"devenv.exe", visual_studio},
+    {"visual-studio", WindowsRoot::ProgramFiles, L"Microsoft Visual Studio\\2022\\Professional\\Common7\\IDE\\devenv.exe", L"devenv.exe", visual_studio},
+    {"visual-studio", WindowsRoot::ProgramFiles, L"Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe", L"devenv.exe", visual_studio},
 });
 
 constexpr auto coverage = std::to_array<ThemeCoverage>({
@@ -167,6 +184,10 @@ constexpr auto coverage = std::to_array<ThemeCoverage>({
     {"windows-app", WindowsCoverage::Mapped, "Windows App shell (Application Id Windows365) only; ConnectionShell and remote session windows unmapped."},
     {"msn-weather", WindowsCoverage::Mapped, "Exact documented package AUMID only."},
     {"windows-terminal", WindowsCoverage::Mapped, "Stable packaged Terminal only; Preview, Canary and unpackaged builds unmapped."},
+    {"notepad", WindowsCoverage::Mapped, "Packaged Windows 11 Notepad AUMID only; legacy System32\\notepad.exe unmapped."},
+    {"windows-settings", WindowsCoverage::Mapped, "Exact Settings package AUMID only; Control Panel and settings dialogs hosted by other processes unmapped."},
+    {"task-manager", WindowsCoverage::Mapped, "Exact %windir%\\System32\\Taskmgr.exe only; an elevated Task Manager may refuse owner metadata."},
+    {"visual-studio", WindowsCoverage::Mapped, "Default 2022 and 2026 (18) Community, Professional and Enterprise paths only; Preview, Build Tools and custom paths unmapped."},
 });
 
 std::wstring_view RootPath(WindowsRoot root, const WindowsInstallRoots& roots) noexcept {

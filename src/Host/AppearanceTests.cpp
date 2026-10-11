@@ -150,6 +150,9 @@ void KnownOwners() {
         {true, L"MicrosoftCorporationII.Windows365_8wekyb3d8bbwe!Windows365", "windows-app", 0xff2b5fa8},
         {true, L"Microsoft.BingWeather_8wekyb3d8bbwe!App", "msn-weather", 0xff5b9fd6},
         {true, L"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "windows-terminal", 0xff0c0c0c},
+        {true, L"Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "notepad", 0xff2c6cb0},
+        {true, L"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel", "windows-settings", 0xff23303d},
+        {false, L"C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\Common7\\IDE\\devenv.exe", "visual-studio", 0xff2a1f3d},
     };
     const auto checkOwner = [](const Fixture& fixture, const applications::AppIdentity& identity) {
         const auto tile = host::MakeAppearance(ByAppConfiguration(), identity, roots);
