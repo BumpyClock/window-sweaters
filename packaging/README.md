@@ -36,23 +36,52 @@ No packaging NuGet dependency is added.
 `WindowSweaters.Package` is the first project in `WindowSweaters.sln`, so a
 fresh Visual Studio open treats it as the startup project. If this machine
 already saved a different startup project, right-click
-`WindowSweaters.Package` and choose **Set as Startup Project** once.
+`WindowSweaters.Package` and choose **Set as Startup Project** once. The
+current Visual Studio session has that startup project set.
 
 The packaging project is Release-only. Solution `Debug|x64` and `Debug|ARM64`
 map it to `Release|x64` and `Release|ARM64`. That mapping is intentional; it is
 not a missing Debug configuration. Build and Deploy are enabled for those
 mappings so F5 and Ctrl+F5 (**Start Without Debugging**) can build, deploy, and
-launch the package.
+launch the package. After a solution reload, the mapping warning was gone.
+Configuration Manager shows solution `Debug|x64` mapping the WAP project to
+`Release|x64` with Build and Deploy checked. An amd64 MSBuild package build
+completed successfully.
 
-Inside Visual Studio, `PrepareWindowSweatersPayload` first runs
+The WAP project has no redundant solution project dependencies. Inside Visual
+Studio, `PrepareWindowSweatersPayload` first runs
 `scripts\build.ps1 -Configuration Release` for the active platform to refresh
-the native build receipt, then stages the package. Visual Studio does not set
-`DoNotLaunchApp`, so F5/Ctrl+F5 start Settings (`EntryPointExe` is
-`WindowSweaters.Settings.exe`).
+the native build receipt, then stages the package. That script owns the native
+Release builds. Visual Studio does not set `DoNotLaunchApp`, so F5/Ctrl+F5
+start Settings (`EntryPointExe` is `WindowSweaters.Settings.exe`).
+
+Settings references `WindowSweaters.Startup.Settings.vcxproj`, a distinct
+project GUID that imports the shared startup sources with `/MD` and `/MDd`.
+Host retains `WindowSweaters.Startup.vcxproj` with `/MT` and `/MTd`. That
+split resolved the missing
+`Startup\MultiThreadedDebugDLL\WindowSweaters.Startup.lib` link failure.
 
 F5/Ctrl+F5 deploy uses Windows Developer Mode and local package deployment.
-That path is separate from signed artifact distribution. It does not sign,
-trust a certificate, or prove Store-installed execution.
+The user authorized that local Visual Studio development registration. It does
+not sign, trust a certificate, change OS settings, or prove Store-installed
+execution. It registered the x64 Development `0.1.0.0` layout, not the
+unsigned x64/ARM64 `0.2.0.0` delivery bundle.
+
+F5 then deployed and launched x64 Development `0.1.0.0` Settings. The debugger
+first paused on thrown `winrt::hresult_error` because **Break when this
+exception type is thrown** was checked. Continuing past those first-chance
+stops produced a responsive Settings UI connected to Host.
+`settings-startup.log` recorded successful `window-activated` and
+`apps-presentation-ready` stages. Throw sites were not identified; symbols
+were missing. This records handled first-chance stops, not that every
+`hresult_error` is harmless. The local checkbox was then unchecked for
+`winrt::hresult_error` only. Production exception handling was not changed.
+That uncheck does not hide unhandled errors and is not a reason to disable
+other first-chance breaks.
+
+After Stop Debugging, Visual Studio **Start Without Debugging** launched a
+fresh packaged Settings process with the same responsive Connected UI. Both
+launch paths were verified.
 
 ## Development versus Store
 
@@ -150,8 +179,12 @@ unexpected content.
 
 Original neutral yarn artwork is generated from fixed vector geometry in
 `Generate-Assets.ps1`: 44×44, 50×50 StoreLogo, 71×71, 150×150, 310×150 and
-310×310 PNGs. No fonts, third-party marks, catalogue plates or AI promotional
-images are used. Rerun the generator to reproduce them.
+310×310 PNGs, plus `WindowSweaters.ico` with 16, 20, 24, 32, 40, 48, 64 and
+256 px PNG frames from the same yarn-ball drawing. Regenerating the ICO leaves
+those PNG bytes unchanged. No fonts, third-party marks, catalogue plates or AI
+promotional images are used. Rerun the generator to reproduce them. Both native
+executables embed that shared ICO as resource 101 via `src\AppIcon.rc`. Host
+tray loads the embedded small icon with `LR_SHARED` instead of `IDI_APPLICATION`.
 
 The package includes `LICENSE`, `NOTICE.md` and `SOURCE.txt`. Its accompanying
 source ZIP snapshots the current repository source, including uncommitted
@@ -187,9 +220,13 @@ repository `out`; pass the same root to both build and package commands.
 
 **Not verified:** signed installation, ARM64 runtime execution, startup enable/disable on an installed
 package, a clean Windows 11 22000 machine, WACK/Store certification or publication.
-No certificate, signing, trust insertion, installation, Store upload or
-submission is performed. The user selected unsigned bundles and skipped local
-certificate trust and installation. Partner Center identity remains deferred.
+The unsigned Development `0.2.0.0` x64/ARM64 bundle remains unsigned and is not
+signed-installation or ARM64-runtime qualified. Visual Studio F5/Ctrl+F5
+registered a separate local x64 Development `0.1.0.0` layout after explicit
+user approval of local Visual Studio development package deployment. No
+certificate, signing, trust insertion, Store upload, or submission was
+performed. OS settings were not changed. Partner Center identity remains
+deferred.
 
 ## Authoritative schema references
 

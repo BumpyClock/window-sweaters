@@ -3,6 +3,7 @@
 #include "OverlayState.h"
 #include "RenderState.h"
 #include "Appearance.h"
+#include "..\AppIcon.h"
 #include "..\Geometry\NativeGeometry.h"
 #include "..\Integration\ConfigurationHost.h"
 #include "..\Configuration\Pipe.h"
@@ -393,10 +394,16 @@ public:
     ~Host() { Shutdown(); }
 
     HRESULT Initialize() {
+        const auto smallIcon = static_cast<HICON>(LoadImageW(instance_, MAKEINTRESOURCEW(IDI_WINDOW_SWEATERS),
+            IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+        if (!smallIcon) return LastError();
         WNDCLASSEXW windowClass{sizeof(windowClass)};
         windowClass.lpfnWndProc = WindowProc;
         windowClass.hInstance = instance_;
         windowClass.lpszClassName = HostClass;
+        windowClass.hIcon = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_WINDOW_SWEATERS));
+        if (!windowClass.hIcon) return LastError();
+        windowClass.hIconSm = smallIcon;
         if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return LastError();
         window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, HostClass, L"Window Sweaters",
             WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
@@ -408,7 +415,7 @@ public:
         tray_.uID = 1;
         tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         tray_.uCallbackMessage = TrayMessage;
-        tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        tray_.hIcon = smallIcon;
         wcscpy_s(tray_.szTip, L"Window Sweaters");
         startup_.SetSavedPreference(committed_.startup_desired);
         (void)startup_.ReadState();

@@ -14,8 +14,7 @@ $sizes = [ordered]@{
     'Wide310x150Logo.png' = @(310, 150)
     'Square310x310Logo.png' = @(310, 310)
 }
-foreach ($name in $sizes.Keys) {
-    $width, $height = $sizes[$name]
+function New-YarnBitmap([int]$width, [int]$height) {
     $bitmap = New-Object Drawing.Bitmap($width, $height)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
     $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
@@ -35,6 +34,45 @@ foreach ($name in $sizes.Keys) {
     $graphics.DrawArc($wrap, 20, 37, 63, 25, 5, 170)
     $graphics.DrawArc($wrap, 22, 47, 59, 23, 5, 160)
     $graphics.DrawBezier($tail, 66, 73, 83, 84, 49, 93, 82, 88)
+    $tail.Dispose(); $wrap.Dispose(); $fill.Dispose(); $graphics.Dispose()
+    return $bitmap
+}
+foreach ($name in $sizes.Keys) {
+    $width, $height = $sizes[$name]
+    $bitmap = New-YarnBitmap $width $height
     $bitmap.Save((Join-Path $OutputDirectory $name), [Drawing.Imaging.ImageFormat]::Png)
-    $tail.Dispose(); $wrap.Dispose(); $fill.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
+    $bitmap.Dispose()
+}
+$frames = foreach ($size in @(16, 20, 24, 32, 40, 48, 64, 256)) {
+    $bitmap = New-YarnBitmap $size $size
+    $stream = New-Object IO.MemoryStream
+    try {
+        $bitmap.Save($stream, [Drawing.Imaging.ImageFormat]::Png)
+        @{ Size = $size; Bytes = $stream.ToArray() }
+    } finally {
+        $stream.Dispose()
+        $bitmap.Dispose()
+    }
+}
+$writer = New-Object IO.BinaryWriter([IO.File]::Create((Join-Path $OutputDirectory 'WindowSweaters.ico')))
+try {
+    $writer.Write([uint16]0)
+    $writer.Write([uint16]1)
+    $writer.Write([uint16]$frames.Count)
+    $offset = 6 + 16 * $frames.Count
+    foreach ($frame in $frames) {
+        $dimension = if ($frame.Size -eq 256) { 0 } else { $frame.Size }
+        $writer.Write([byte]$dimension)
+        $writer.Write([byte]$dimension)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]$frame.Bytes.Length)
+        $writer.Write([uint32]$offset)
+        $offset += $frame.Bytes.Length
+    }
+    foreach ($frame in $frames) { $writer.Write([byte[]]$frame.Bytes) }
+} finally {
+    $writer.Dispose()
 }

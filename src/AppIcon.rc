@@ -1,0 +1,3 @@
+#include "AppIcon.h"
+
+IDI_WINDOW_SWEATERS ICON "WindowSweaters.ico"
