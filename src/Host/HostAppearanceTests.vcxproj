@@ -35,6 +35,7 @@
     <ClCompile Include="..\Applications\ProcessMetadata.cpp" />
     <ClCompile Include="..\Colorways\Resolver.cpp" />
     <ClCompile Include="..\Colorways\WindowsMappings.cpp" />
+    <ClCompile Include="..\IconYarn\IconMotif.cpp" />
     <ClCompile Include="..\IconYarn\IconPalette.cpp" />
     <ClCompile Include="..\Knitting\KnitTile.cpp" />
     <ClCompile Include="..\Knitting\Chart.cpp" />

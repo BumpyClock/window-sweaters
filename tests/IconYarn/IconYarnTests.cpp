@@ -1,3 +1,4 @@
+#include "..\..\src\IconYarn\IconMotif.h"
 #include "..\..\src\IconYarn\WindowsIcon.h"
 
 #include <algorithm>
@@ -113,6 +114,57 @@ void Sampling() {
     Require(MotifName(Motif::Zigzag) == "zigzag" && MotifName(Motif::Twinkle) == "twinkle",
             "authored motif names");
     std::cout << "PASS portable sampling, alpha, coverage, faint-gray, contrast and motif\n";
+}
+
+bool Isolated(const MotifRows& rows) {
+    const auto width = static_cast<int>(rows[0].size());
+    for (int y = 0; y < 6; ++y)
+        for (int x = 0; x < width; ++x) {
+            if (rows[y][x] == '.') continue;
+            bool neighbour = false;
+            for (int yy = std::max(0, y - 1); yy < std::min(6, y + 2); ++yy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if ((yy != y || dx) && rows[yy][(x + dx + width) % width] != '.') neighbour = true;
+            if (!neighbour) return true;
+        }
+    return false;
+}
+
+void Motifs() {
+    struct Golden { std::uint32_t seed; std::string_view glyph; MotifRows rows; };
+    const Golden goldens[]{
+        {0, "", {"aa..aa..a", "..a.a....", "aababaa..", "..aaa....", "aababaa..", "..a.a...."}},
+        {1, "", {"..aa........aa..", ".aaaa......aaaa.", "aabbaa....aabbaa", "aabbaabbbbaabbaa", ".aaaa.bbbb.aaaa.", "..aa........aa.."}},
+        {2, "", {"............", "..a.....a...", ".aba...aba..", "aabaa.aabaa.", ".aba...aba..", "..a.....a..."}},
+        {3, "", {"..ab.ba...", "aabbabbaa.", "..ababa...", "aabbabbaa.", "..ab.ba...", "aa..aa..aa"}},
+        {4, "", {"..a..aaa", ".aba....", "aabaabbb", ".aba.bbb", "..a.....", "........"}},
+        {0x9e3779b9u, "", {".......", ".a.a...", ".bab...", ".aaa...", ".bab...", ".a.a..."}},
+        {0xdeadbeefu, "", {"..aa......aa....", ".aaaa....aaaa...", "aabbaa..aabbaa..", "aabbaa..aabbaa..", ".aaaa....aaaa...", "..aa......aa...."}},
+        {0xffffffffu, "", {"..a.a...", "aababaa.", "..aaa...", "aababaa.", "..a.a...", "aa..aa.."}},
+        {1234567, ".aaa.aabaa..b...aaa.a...a", {".aaa....", "aabaabbb", "..b..bbb", ".aaa....", "a...a...", "........"}},
+        {7654321, ".aaa.aabaa..b...aaa.a...a", {".aaa........aaa.", "aabaabbbbbbaabaa", "..b..bbbbbb..b..", ".aaa........aaa.", "a...a......a...a", "................"}},
+        {7654322, ".aaa.aabaa..b...aaa.a...a", {".aaa...a...a..", "aabaa...aaa...", "..b......b....", ".aaa...aabaa..", "a...a...aaa...", ".............."}},
+        {99, "aa..aaab..baab..baab..ba..aa..aa..aa", {"aa..a..aa.", "ab..b..ba.", "aa..a..aa.", "ab..b..ba.", "aa..a..aa.", "aa..aa..aa"}},
+        {0xe2acd194u, "..aa....aab.aaaaaaaaaaaa..aa....aa..", {"..aa......aa....", "..aa......aa....", "aaaaaa..aaaaaa..", "aaaaaa..aaaaaa..", "..aa......aa....", "..aa......aa...."}},
+        {0xe38465f3u, "bbbbbbbbbbbbaaaaaaaaaaaa............", {"bbbbbbbbbbbbbbbbbb", "bbbbbbbbbbbbbbbbbb", "aaaaaa......aaaaaa", "aaaaaa......aaaaaa", "..................", ".................."}},
+    };
+    for (const auto& golden : goldens)
+        Require(GenerateMotif(golden.seed, golden.glyph) == golden.rows, "motif matches icongen.py golden rows");
+    const std::string_view glyphs[]{"", ".aaa.aabaa..b...aaa.a...a", "aa..aaab..baab..baab..ba..aa..aa..aa", DiamondGlyph(6)};
+    for (std::uint32_t seed = 0; seed < 3000; ++seed)
+        for (const auto glyph : glyphs) {
+            const auto rows = GenerateMotif(seed * 2654435761u, glyph);
+            Require(rows == GenerateMotif(seed * 2654435761u, glyph), "motif is deterministic");
+            const auto width = rows[0].size();
+            Require(width >= 4 && width <= 24, "motif width stays within 4..24");
+            for (const auto& row : rows)
+                Require(row.size() == width && row.find_first_not_of(".ab") == std::string::npos, "motif rows are uniform '.ab'");
+            Require(!Isolated(rows), "motif has no isolated stitches");
+        }
+    bool threw = false;
+    try { (void)GenerateMotif(1, "abc"); } catch (const std::invalid_argument&) { threw = true; }
+    Require(threw, "invalid glyph is rejected");
+    std::cout << "PASS icon motif generators match icongen.py and keep 6-row '.ab' charts\n";
 }
 
 WorkToken Token(std::uint64_t target, std::uint64_t revision = 1) {
@@ -610,6 +662,7 @@ int wmain(int argc, wchar_t** argv) {
             return 2;
         }
         Sampling();
+        Motifs();
         Lifetimes();
         Workers();
         Pressure();
