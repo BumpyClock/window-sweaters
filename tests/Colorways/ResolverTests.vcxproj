@@ -34,6 +34,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ResolverTests.cpp" />
+    <ClCompile Include="RecolorTests.cpp" />
     <ClCompile Include="..\..\src\Applications\AppIdentity.cpp" />
   </ItemGroup>
   <ItemGroup>

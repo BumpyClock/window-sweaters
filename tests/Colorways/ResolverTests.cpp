@@ -12,6 +12,8 @@
 using namespace window_sweaters;
 using namespace window_sweaters::colorways;
 
+std::size_t RecolorTests();
+
 namespace {
 std::size_t checks = 0;
 void Check(bool condition, const char* label) {
@@ -464,7 +466,9 @@ int main() {
         PrecedenceAndModes();
         PersonalPixelsAndValidation();
         CoverageAndManualCatalogue();
-        std::cout << "PASS: " << checks << " resolver checks; fixtures only, no installed-application demonstration\n";
+        const auto recolor = RecolorTests();
+        std::cout << "PASS: " << checks << " resolver checks and " << recolor
+                  << " recolour checks; fixtures only, no installed-application demonstration\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << '\n';
