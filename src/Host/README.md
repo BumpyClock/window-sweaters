@@ -91,8 +91,9 @@ Shared Zigzag is a distinct persisted mode. It samples every eligible owner,
 including mapped apps, and applies one shared motif with per-app colors.
 Ordinary By app mode does not sample mapped owners or alter their authored
 palettes. The resolver derives shared contrast from the winning base yarn;
-its personal-rule precedence remains available, but personal import persistence
-and UI are not integrated yet.
+personal-rule precedence applies to the host's persisted exact application
+bindings. Native Settings imports rules and literal PNG charts through typed,
+durably acknowledged host mutations.
 
 The host supplies kind-prefixed canonical UTF-8 identity bytes. Executable keys
 use invariant uppercase; packaged AUMIDs remain exact. Icon input uses a verified

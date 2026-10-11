@@ -16,7 +16,7 @@
     </ClCompile>
     <Link><SubSystem>Console</SubSystem><AdditionalDependencies>advapi32.lib;shell32.lib;ole32.lib;d2d1.lib;windowscodecs.lib;propsys.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="ConfigurationTests.cpp"/><ClCompile Include="SessionTests.cpp"/><ClCompile Include="AppearanceTests.cpp"/><ClCompile Include="ApplicationsTests.cpp"/><ClCompile Include="AppsSessionTests.cpp"/><ClCompile Include="IconModeTests.cpp"/><ClCompile Include="..\..\src\Settings\Session.cpp"/></ItemGroup>
+  <ItemGroup><ClCompile Include="ConfigurationTests.cpp"/><ClCompile Include="SessionTests.cpp"/><ClCompile Include="AppearanceTests.cpp"/><ClCompile Include="ApplicationsTests.cpp"/><ClCompile Include="AppsSessionTests.cpp"/><ClCompile Include="IconModeTests.cpp"/><ClCompile Include="ImportsTests.cpp"/><ClCompile Include="..\..\src\Colorways\Resolver.cpp"/><ClCompile Include="..\..\src\Colorways\WindowsMappings.cpp"/><ClCompile Include="..\..\src\Settings\Session.cpp"/></ItemGroup>
   <ItemGroup><ProjectReference Include="..\..\src\Configuration\WindowSweaters.Configuration.vcxproj"><Project>{2D727CBB-89D4-47D2-A630-0212AF370E26}</Project></ProjectReference><ProjectReference Include="..\..\src\Settings\WindowSweaters.Settings.Core.vcxproj"><Project>{78D7C86B-22BD-4E54-8C2A-62D180D83711}</Project></ProjectReference></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
 </Project>

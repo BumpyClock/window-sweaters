@@ -6,6 +6,7 @@
 #include "..\Geometry\NativeGeometry.h"
 #include "..\Integration\ConfigurationHost.h"
 #include "..\Configuration\Pipe.h"
+#include "..\Configuration\Storage.h"
 #include "..\Visibility\NativeVisibility.h"
 #include "..\Rendering\GraphicsRecovery.h"
 #include "..\IconYarn\WindowsIcon.h"
@@ -372,13 +373,19 @@ TrackerConfig MakeTrackerConfig(const Options& options) {
 }
 
 class Host final {
+    Host(HINSTANCE instance,const Options& options,
+        window_sweaters::integration::ConfigurationHost& configuration,
+        window_sweaters::configuration::CommittedState owned)
+        : instance_(instance), options_(options), configuration_(configuration),
+          committed_(std::move(owned.configuration)),
+          imported_(committed_.imports,std::move(owned.catalogue)),
+          appearance_(window_sweaters::host::MakeAppearance(committed_,&imported_)),
+          installRoots_(window_sweaters::colorways::QueryWindowsInstallRoots()),
+          renderRevision_(committed_.revision), metadataGate_(committed_.revision) {}
 public:
     Host(HINSTANCE instance, const Options& options,
         window_sweaters::integration::ConfigurationHost& configuration)
-        : instance_(instance), options_(options), configuration_(configuration), committed_(configuration.Snapshot()),
-          appearance_(window_sweaters::host::MakeAppearance(committed_)),
-          installRoots_(window_sweaters::colorways::QueryWindowsInstallRoots()), renderRevision_(committed_.revision),
-          metadataGate_(committed_.revision) {}
+        : Host(instance,options,configuration,configuration.OwnedSnapshot()) {}
     ~Host() { Shutdown(); }
 
     HRESULT Initialize() {
@@ -774,12 +781,50 @@ private:
                     LogError(L"tray save rejected; committed appearance unchanged",
                         HRESULT_FROM_WIN32(ERROR_WRITE_FAULT));
         }
-        const auto snapshot = configuration_.PollSnapshot(committed_.revision);
+        const auto snapshot = configuration_.PollOwnedSnapshot(committed_.revision);
         if (!snapshot) return;
-        ApplyConfiguration(*snapshot);
+        ApplyConfiguration(snapshot->configuration,snapshot->catalogue);
     }
 
-    void ApplyConfiguration(const window_sweaters::contracts::Configuration& snapshot) {
+    void ApplyConfiguration(const window_sweaters::contracts::Configuration& snapshot,
+        window_sweaters::configuration::CatalogueSnapshot catalogue={}) {
+        if (snapshot.imports!=committed_.imports) {
+            auto onlyImports=snapshot;
+            onlyImports.revision=committed_.revision; onlyImports.imports=committed_.imports;
+            if (onlyImports==committed_) {
+                auto nextImported=window_sweaters::integration::ImportedAppearance(snapshot.imports,
+                    catalogue?catalogue:configuration_.OwnedSnapshot().catalogue,&imported_);
+                auto nextAppearance=window_sweaters::host::MakeAppearance(snapshot,&nextImported);
+                for (auto& [hwnd,entry]:entries_) {
+                    (void)hwnd;
+                    bool same=false;
+                    if (entry->appearance) {
+                        auto old=std::get_if<window_sweaters::knitting::TileSpec>(&entry->appearance->result);
+                        auto known=entry->metadata?std::get_if<window_sweaters::applications::AppMetadata>(entry->metadata.get()):nullptr;
+                        try {
+                            auto automatic=entry->iconInput && entry->iconPalette?
+                                window_sweaters::integration::AutomaticProposal(*entry->iconInput,*entry->iconPalette):
+                                std::optional<window_sweaters::colorways::AutomaticAppearance>{};
+                            auto proposed=known?window_sweaters::host::MakeAppearance(snapshot,known->Identity(),
+                                installRoots_,automatic,{},&nextImported):nextAppearance;
+                            same=old && SameAutomaticAppearance(*old,proposed);
+                        } catch (const std::invalid_argument&) {}
+                    }
+                    if (same) {
+                        const bool identityDependent=window_sweaters::contracts::PerApplication(snapshot.design_selection) ||
+                            !nextImported.Personal().empty();
+                        entry->appearance->owner=identityDependent?entry->metadata:nullptr;
+                        continue;
+                    }
+                    AdvanceRenderEpoch(*entry); Hide(*entry); entry->render.Invalidate();
+                    entry->appearance.reset(); entry->placementPending=entry->state.requestedVisible;
+                }
+                imported_=std::move(nextImported); committed_=snapshot; appearance_=std::move(nextAppearance);
+                metadataGate_.SetConfigurationRevision(committed_.revision);
+                for (auto& [hwnd,entry]:entries_) { (void)hwnd; entry->metadataPending=false; }
+                PublishApplications(); probeDirty_=true; return;
+            }
+        }
         auto appearanceOnly=snapshot;
         appearanceOnly.revision=committed_.revision;
         appearanceOnly.eligibility=committed_.eligibility;
@@ -807,7 +852,9 @@ private:
             }
             PublishApplications(); probeDirty_=true; return;
         }
-        auto appearance = window_sweaters::host::MakeAppearance(snapshot);
+        auto nextImported=imported_;
+        if (catalogue) nextImported=window_sweaters::integration::ImportedAppearance(snapshot.imports,catalogue,&imported_);
+        auto appearance = window_sweaters::host::MakeAppearance(snapshot,&nextImported);
         renderRetries_.clear();
         for (auto& [hwnd, entry] : entries_) {
             (void)hwnd;
@@ -819,6 +866,7 @@ private:
             entry->placementPending = false;
         }
         committed_ = snapshot;
+        imported_=std::move(nextImported);
         renderRevision_=snapshot.revision;
         metadataGate_.SetConfigurationRevision(committed_.revision);
         for (auto& [hwnd,entry]:entries_) { (void)hwnd; entry->metadataPending=false; }
@@ -1141,7 +1189,8 @@ private:
         }
         for (unsigned attempt=0;attempt<2;++attempt) {
             if (configuration_.Revision()==committed_.revision) return true;
-            if (auto snapshot=configuration_.PollSnapshot(committed_.revision)) ApplyConfiguration(*snapshot);
+            if (auto snapshot=configuration_.PollOwnedSnapshot(committed_.revision))
+                ApplyConfiguration(snapshot->configuration,snapshot->catalogue);
         }
         return configuration_.Revision()==committed_.revision;
     }
@@ -1154,7 +1203,7 @@ private:
 
     bool ResolveTargetAppearance(Entry& entry) {
         using namespace window_sweaters;
-        const bool byApp = contracts::PerApplication(committed_.design_selection);
+        const bool byApp = contracts::PerApplication(committed_.design_selection) || !imported_.Personal().empty();
         const auto* known = entry.metadata ? std::get_if<applications::AppMetadata>(entry.metadata.get()) : nullptr;
         if (byApp && !known) return false;
         if (entry.appearance && entry.appearance->revision == renderRevision_) {
@@ -1179,7 +1228,7 @@ private:
                 const auto automatic = entry.iconInput && entry.iconPalette ?
                     integration::AutomaticProposal(*entry.iconInput, *entry.iconPalette) :
                     std::optional<colorways::AutomaticAppearance>{};
-                appearance.result = byApp ? host::MakeAppearance(committed_, known->Identity(), installRoots_, automatic) : appearance_;
+                appearance.result = byApp ? host::MakeAppearance(committed_, known->Identity(), installRoots_, automatic,{},&imported_) : appearance_;
             }
         } catch (const host::AppearanceResolutionError& error) {
             appearance.result = AppearanceFailure{E_INVALIDARG, error.Error()};
@@ -1379,7 +1428,7 @@ private:
                 const auto* owner = std::get_if<applications::AppMetadata>(entry->metadata.get());
                 try {
                     auto proposed = host::MakeAppearance(committed_, owner->Identity(), installRoots_,
-                        integration::AutomaticProposal(*entry->iconInput, *completion.palette));
+                        integration::AutomaticProposal(*entry->iconInput, *completion.palette),{},&imported_);
                     const auto* old = entry->appearance ?
                         std::get_if<knitting::TileSpec>(&entry->appearance->result) : nullptr;
                     if (!old || !SameAutomaticAppearance(*old, proposed)) {
@@ -1993,6 +2042,7 @@ private:
     const Options& options_;
     window_sweaters::integration::ConfigurationHost& configuration_;
     window_sweaters::contracts::Configuration committed_;
+    window_sweaters::integration::ImportedAppearance imported_;
     window_sweaters::knitting::TileSpec appearance_;
     const window_sweaters::colorways::WindowsInstallRoots installRoots_;
     std::uint64_t renderRevision_{};
@@ -2097,6 +2147,66 @@ void Host::RunConsumerContracts() {
         host.window_, host.queueLimits_, host.queue_)) &&
         SUCCEEDED(host.queue_->Start(host.committed_.revision, DeviceGeneration)),
         "Consumer contract production render queue");
+    {
+        using namespace window_sweaters;
+        const auto directory=std::filesystem::current_path()/L"out"/L"issue11"/
+            (L"startup-consumer-"+std::to_wstring(GetCurrentProcessId()));
+        std::filesystem::create_directories(directory);
+        struct Cleanup {
+            std::filesystem::path directory;
+            ~Cleanup() {std::error_code error; std::filesystem::remove_all(directory,error);}
+        } cleanup{directory};
+        auto path=directory/L"startup.png";
+        knitting::SavePng({2,2,8,{0xffe02152u,0xff37d0a6u,0,0xffe02152u}},path.c_str());
+        auto file=imports::ImportPngFile(path.native());
+        require(std::holds_alternative<imports::FileImport>(file),"Running-server startup fixture validates its owned PNG");
+        auto built=imports::BuildCandidate({},imports::AddChart{"startup-literal",std::get<imports::FileImport>(std::move(file)).chart});
+        require(std::holds_alternative<imports::ImportCatalogue>(built),"Running-server startup fixture owns a nonempty catalogue");
+        auto catalogue=std::make_shared<const imports::ImportCatalogue>(std::get<imports::ImportCatalogue>(std::move(built)));
+        contracts::Configuration initial; initial.revision=7;
+        configuration::DescribeCatalogue(initial.imports,*catalogue);
+        require(configuration::Storage(directory).Save(initial,catalogue)==ERROR_SUCCESS,
+            "Running-server startup fixture persists its initial revision and catalogue");
+        integration::ConfigurationHost liveConfiguration({true,directory,
+            L"startup-consumer-"+std::to_wstring(GetCurrentProcessId()),{}});
+        require(liveConfiguration.Start().state==integration::HostState::running,
+            "Actual sole-writer ConfigurationHost starts its native server before consumer construction");
+        auto captured=liveConfiguration.OwnedSnapshot();
+        require(liveConfiguration.SubmitLocal(false,24.f,captured.configuration.revision).state==
+            integration::LocalSubmissionState::queued,"Actual server save interleaves after the one owned startup capture");
+        const auto deadline=GetTickCount64()+10000;
+        while (liveConfiguration.Revision()==captured.configuration.revision && GetTickCount64()<deadline) Sleep(1);
+        auto completed=liveConfiguration.DrainLocalCompletions();
+        require(completed.completions.size()==1 && completed.completions[0].result.status==contracts::Status::saved &&
+            completed.current.revision==8,"Actual worker durably advances configuration during consumer startup");
+        Host startup(host.instance_,options,liveConfiguration,std::move(captured));
+        const auto target=TargetId{19600,GetCurrentProcessId(),1234,1};
+        auto oldToken=applications::TargetToken::FromTarget(target,startup.committed_.revision);
+        auto request=startup.metadataGate_.Begin(*oldToken);
+        require(startup.committed_.revision==7 && startup.renderRevision_==7 && request &&
+            startup.imported_.Find(catalogue->Charts()[0].Id(),1),
+            "Startup appearance, catalogue, render revision and metadata gate derive from one coherent owned snapshot");
+        startup.window_=CreateWindowExW(0,HostClass,L"",WS_POPUP,0,0,0,0,nullptr,nullptr,startup.instance_,&startup);
+        require(startup.window_ && SUCCEEDED(rendering::RenderQueue::Create(
+            startup.window_,startup.queueLimits_,startup.queue_)) &&
+            SUCCEEDED(startup.queue_->Start(startup.renderRevision_,DeviceGeneration)),
+            "Startup consumer has its own hidden native receiver and render queue");
+        require(startup.ConfigurationCurrent() && startup.committed_.revision==8 && startup.renderRevision_==8,
+            "Real-server startup poll advances all consumer configuration epochs without another mutation");
+        auto currentToken=applications::TargetToken::FromTarget(target,startup.committed_.revision);
+        auto currentRequest=startup.metadataGate_.Begin(*currentToken);
+        auto metadata=std::make_shared<const applications::MetadataResult>(applications::ResolveMetadata(
+            applications::NoPackagedIdentity{},applications::ExecutablePath{L"C:\\PrivateFixtures\\startup.exe"}));
+        require(currentRequest && !startup.metadataGate_.Accept({*request,metadata},currentToken) &&
+            startup.metadataGate_.Accept({*currentRequest,metadata},currentToken),
+            "Actual running-server startup interleaving retires old metadata and accepts current revision immediately");
+        Host fresh(host.instance_,options,liveConfiguration);
+        auto freshToken=applications::TargetToken::FromTarget(target,fresh.committed_.revision);
+        require(fresh.committed_.revision==8 && fresh.renderRevision_==8 && fresh.metadataGate_.Begin(*freshToken),
+            "Public Host constructor obtains one current owned snapshot from the actual running server");
+        startup.Shutdown(); liveConfiguration.Quit();
+        std::puts("PASS: actual running-server startup save interleaving keeps one owned configuration/catalogue/render/metadata snapshot");
+    }
     std::unordered_map<WindowHandle, AliveWindow> windows;
     auto add = [&](WindowHandle handle) {
         AliveWindow window;
@@ -2739,6 +2849,140 @@ void Host::RunConsumerContracts() {
         }
         appearanceChange(previousConfiguration);
         std::puts("PASS: actual hidden Host native PE/WIC-to-GPU icon yarn, cached relaunch, shared per-app colors, out-of-order completion, exclusion/destruction/mode/device fences and no eviction feedback; tracker lifetimes are scripted, not desktop verification");
+    }
+    {
+        const auto previous=host.committed_;
+        for (auto mode:{contracts::DesignSelection::plain,contracts::DesignSelection::original}) {
+            const WindowHandle personalHandle=mode==contracts::DesignSelection::plain?19621:19623;
+            const WindowHandle unrelatedHandle=personalHandle+1;
+            auto manual=previous; manual.design_selection=mode;
+            manual.design_id=mode==contracts::DesignSelection::original?"messages":"";
+            manual.yarn_argb=0xff315273u;
+            appearanceChange(manual);
+            auto owner=appMetadata(L"C:\\PrivateFixtures\\cache-personal.exe");
+            auto unrelatedOwner=appMetadata(L"C:\\PrivateFixtures\\cache-other.exe");
+            add(personalHandle); add(unrelatedHandle);
+            host.entries_.at(personalHandle)->metadata=owner; host.entries_.at(unrelatedHandle)->metadata=unrelatedOwner;
+            host.PlaceAndShow(host.entries_.at(personalHandle)->state.target);
+            host.PlaceAndShow(host.entries_.at(unrelatedHandle)->state.target); pump(prepared);
+            const auto unchanged=*host.entries_.at(unrelatedHandle)->render.prepared;
+            const auto epoch=host.entries_.at(unrelatedHandle)->renderEpoch;
+            const auto overlay=host.entries_.at(unrelatedHandle)->overlay.Window();
+            std::array metadata{std::get<applications::AppMetadata>(*owner)};
+            auto candidate=configuration::PrepareImport(host.committed_.imports,
+                std::make_shared<const imports::ImportCatalogue>(),
+                contracts::SetRulesText{"cache-personal = #214365\n"},metadata);
+            require(std::holds_alternative<configuration::ImportCandidate>(candidate),
+                "First personal binding is planned for exact identity in global Plain/Original mode");
+            auto imported=std::get<configuration::ImportCandidate>(std::move(candidate));
+            auto snapshot=host.committed_; snapshot.imports=imported.preferences; ++snapshot.revision;
+            host.ApplyConfiguration(snapshot,imported.catalogue);
+            host.PlaceAndShow(host.entries_.at(personalHandle)->state.target); pump(prepared);
+            const auto before=host.counters_;
+            const auto queueBefore=host.queue_->Status();
+            auto& unrelatedMove=windows.at(unrelatedHandle);
+            unrelatedMove.rect.left+=9; unrelatedMove.rect.right+=9;
+            contract.geometry.at(unrelatedHandle).physicalTargetBounds={unrelatedMove.rect.left,unrelatedMove.rect.top,
+                unrelatedMove.rect.right,unrelatedMove.rect.bottom};
+            require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(unrelatedMove,Dirty::Geometry,GetTickCount64()))),
+                "Unrelated real Move follows first personal binding in global Plain/Original mode");
+            host.entries_.at(unrelatedHandle)->metadata=appMetadata(L"c:\\PRIVATEFIXTURES\\cache-other.EXE");
+            require(host.ResolveTargetAppearance(*host.entries_.at(unrelatedHandle)),
+                "Unrelated same-identity metadata refresh retains cached appearance authority");
+            snapshot=host.committed_; ++snapshot.revision; contract.pendingConfiguration=snapshot;
+            require(host.ConfigurationCurrent() && host.ResolveTargetAppearance(*host.entries_.at(unrelatedHandle)),
+                "Unrelated observation poll retains identity-aware cache after first binding");
+            auto queueAfter=host.queue_->Status();
+            require(host.entries_.at(unrelatedHandle)->renderEpoch==epoch && host.entries_.at(unrelatedHandle)->overlay.Window()==overlay &&
+                host.entries_.at(unrelatedHandle)->presentationVisible && host.entries_.at(unrelatedHandle)->render.prepared &&
+                host::SamePreparation(*host.entries_.at(unrelatedHandle)->render.prepared,unchanged) &&
+                host.counters_.uploads==before.uploads &&
+                host.counters_.appearanceResolutions==before.appearanceResolutions &&
+                queueAfter.renderRequests==queueBefore.renderRequests && queueAfter.tileGenerations==queueBefore.tileGenerations,
+                "First personal binding reconciles unchanged Plain/Original cache ownership without unrelated flicker, epoch or draw");
+            for (auto handle:{personalHandle,unrelatedHandle}) {
+                host.ApplyBatch(contract.model.Observe(DestroyedWindow{handle},Dirty::Lifecycle,GetTickCount64()));
+                windows.erase(handle);
+            }
+            snapshot=manual; snapshot.revision=host.committed_.revision+1;
+            host.ApplyConfiguration(snapshot,std::make_shared<const imports::ImportCatalogue>()); pump(prepared);
+        }
+        appearanceChange(previous);
+    }
+    {
+        const auto beforeImports=host.committed_;
+        auto owner=appMetadata(L"C:\\PrivateFixtures\\Imports\\personal.exe");
+        auto other=appMetadata(L"C:\\PrivateFixtures\\Imports\\other.exe");
+        add(19601); add(19602);
+        host.entries_.at(19601)->metadata=owner; host.entries_.at(19602)->metadata=other;
+        host.PlaceAndShow(host.entries_.at(19601)->state.target);
+        host.PlaceAndShow(host.entries_.at(19602)->state.target); pump(prepared);
+        const auto unchanged=*host.entries_.at(19602)->render.prepared;
+        const auto unchangedEpoch=host.entries_.at(19602)->renderEpoch;
+        const auto unchangedWindow=host.entries_.at(19602)->overlay.Window();
+        const auto scratch=std::filesystem::current_path()/L"out"/L"issue11"/L"consumer-imports";
+        std::filesystem::create_directories(scratch);
+        auto path=scratch/L"literal.png";
+        struct Cleanup { std::filesystem::path path; ~Cleanup() {std::error_code error; std::filesystem::remove_all(path,error);} } cleanup{scratch};
+        auto read=[&](std::uint32_t argb) {
+            knitting::RasterImage image{2,2,8,{argb,0xff37d0a6u,0,argb}};
+            knitting::SavePng(image,path.c_str());
+            auto imported=imports::ImportPngFile(path.native());
+            require(std::holds_alternative<imports::FileImport>(imported),"Hidden actual Host fixture validates PNG through pinned local reader");
+            return std::get<imports::FileImport>(std::move(imported)).chart;
+        };
+        configuration::CatalogueSnapshot catalogue=std::make_shared<const imports::ImportCatalogue>();
+        auto built=imports::BuildCandidate(*catalogue,imports::AddChart{"consumer-literal",read(0xffe02152u)});
+        require(std::holds_alternative<imports::ImportCatalogue>(built),"Hidden Host owns validated imported catalogue candidate");
+        catalogue=std::make_shared<const imports::ImportCatalogue>(std::get<imports::ImportCatalogue>(std::move(built)));
+        auto importedConfig=beforeImports;
+        configuration::DescribeCatalogue(importedConfig.imports,*catalogue);
+        std::array metadata{std::get<applications::AppMetadata>(*owner)};
+        auto rules=configuration::PrepareImport(importedConfig.imports,catalogue,
+            contracts::SetRulesText{"personal = #123456 consumer-literal\n"},metadata);
+        require(std::holds_alternative<configuration::ImportCandidate>(rules),"Hidden Host import planner binds exact metadata identity");
+        auto candidate=std::get<configuration::ImportCandidate>(std::move(rules));
+        catalogue=candidate.catalogue; importedConfig.imports=candidate.preferences;
+        importedConfig.revision=host.committed_.revision+1;
+        host.ApplyConfiguration(importedConfig,catalogue);
+        require(host.entries_.at(19602)->renderEpoch==unchangedEpoch &&
+            host.entries_.at(19602)->overlay.Window()==unchangedWindow &&
+            host::SamePreparation(*host.entries_.at(19602)->render.prepared,unchanged),
+            "Imported per-identity rule invalidates only affected actual entries, not unrelated tiles or overlay");
+        host.PlaceAndShow(host.entries_.at(19601)->state.target); pump(prepared);
+        const auto id=catalogue->Charts()[0].Id();
+        const auto& first=host.entries_.at(19601)->render.prepared->tile;
+        require(first.baseArgb==0xff123456u && first.chart && first.chart->semanticId==id &&
+            first.chart->contentRevision==1 && first.chart->argbCells==
+                std::vector<std::uint32_t>{0xffe02152u,0xff37d0a6u,0,0xffe02152u},
+            "Actual hidden Host GPU publication uses personal base plus exact imported cells and alpha sentinel");
+        auto replace=[&](std::uint32_t color) {
+            auto changed=imports::BuildCandidate(*catalogue,imports::ReplaceChart{id,read(color),{}});
+            require(std::holds_alternative<imports::ImportCatalogue>(changed),"Hidden Host replacement candidate preserves stable ID");
+            catalogue=std::make_shared<const imports::ImportCatalogue>(std::get<imports::ImportCatalogue>(std::move(changed)));
+            auto snapshot=host.committed_; configuration::DescribeCatalogue(snapshot.imports,*catalogue);
+            ++snapshot.revision; host.ApplyConfiguration(snapshot,catalogue);
+            host.PlaceAndShow(host.entries_.at(19601)->state.target);
+        };
+        replace(0xff1357a9u);
+        require(host.entries_.at(19601)->render.pending.has_value(),"Replacement queues actual async imported GPU preparation");
+        auto old=*host.entries_.at(19601)->render.pending;
+        replace(0xffa95173u); pump(prepared);
+        auto const& current=host.entries_.at(19601)->render.prepared;
+        require(current->token.appearanceRevision!=old.token.appearanceRevision &&
+            current->tile.chart->contentRevision==3 && current->tile.chart->argbCells[0]==0xffa95173u &&
+            host.entries_.at(19602)->renderEpoch==unchangedEpoch &&
+            host::SamePreparation(*host.entries_.at(19602)->render.prepared,unchanged),
+            "Per-asset revision fences reject in-flight older PNG replacement and preserve unrelated actual preparation");
+        host.ApplyBatch(contract.model.Observe(DestroyedWindow{19601},Dirty::Lifecycle,GetTickCount64()));
+        auto late=host.committed_; ++late.revision; host.ApplyConfiguration(late,catalogue);
+        require(!host.entries_.contains(19601),"Late imported catalogue observation cannot recreate a destroyed owner");
+        host.ApplyBatch(contract.model.Observe(DestroyedWindow{19602},Dirty::Lifecycle,GetTickCount64()));
+        windows.erase(19601); windows.erase(19602);
+        auto reset=beforeImports; reset.revision=host.committed_.revision+1;
+        host.ApplyConfiguration(reset,std::make_shared<const imports::ImportCatalogue>());
+        pump(prepared);
+        std::puts("PASS: actual hidden Host personal PNG generation, literal RGB, alpha sentinel, targeted identity/asset invalidation and in-flight replacement/destruction fences");
     }
     auto appA=appMetadata(L"C:\\PrivateFixtures\\One\\app.exe");
     auto appB=appMetadata(L"C:\\PrivateFixtures\\Two\\app.exe");

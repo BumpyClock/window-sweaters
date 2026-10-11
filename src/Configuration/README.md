@@ -1,6 +1,6 @@
 # Configuration contract
 
-`contracts::Configuration` schema 4 contains semantic settings, not target handles,
+`contracts::Configuration` schema 5 contains semantic settings, not target handles,
 tile indexes, cache keys, or renderer output:
 
 | Field | Contract |
@@ -15,6 +15,7 @@ tile indexes, cache keys, or renderer output:
 | `stitch_rows` | Finite 1.5–12 rows across the border, default 6; more rows mean smaller stitches |
 | `yarn_argb` | Opaque ARGB, default `0xff4e8098` |
 | `eligibility` | Default-on plus explicit `AppIdentity`-keyed enable/disable exceptions |
+| `imports` | Bounded personal rules, exact application bindings, diagnostics, chart headers and selected asset ID |
 
 Every catalogue ID (pinned originals and Windows-authored designs) is accepted. Unknown IDs, unsupported enum values,
 nonfinite/out-of-range floats, translucent yarn, and noncanonical selection/ID
@@ -26,17 +27,20 @@ preferences remain saved for a later return to plain knit.
 pause/width API. The serialized host worker merges only those two values into the
 current appearance **after** the expected-revision check. The overload
 `SubmitLocal(Configuration const&)` submits the appearance fields and preserves
-committed eligibility. `SubmitEligibility(mutation, expected_revision)` changes
-only application preferences. Neither operation overwrites the other feature.
+committed eligibility and personal imports. Changing the design clears the manual
+PNG selection; other appearance edits retain it.
+`SubmitEligibility(mutation, expected_revision)` changes only application preferences.
+Typed import operations change only the validated import candidate.
 `Snapshot()` and mutation acknowledgments include every new field.
 
 ## Storage and migration
 
-Schema 4 is length-framed: 12-byte little-endian magic/schema/total-length header,
-a bounded protocol-5 configuration record, then CRC-32 of all preceding bytes.
-The file is limited to 1 MiB plus its 16-byte envelope. The configuration record
-contains appearance plus a tagged eligibility section; no snapshots, PNGs,
-target handles or process identities are persisted.
+Schema 5 is length-framed and contains the bounded configuration record plus the
+owned stored catalogue. The complete disk envelope is limited to 17,891,328 bytes.
+Validated PNG bytes, material, stable IDs, content hashes, numeric revisions and
+the catalogue high-water mark are stored atomically with appearance and exact
+application bindings. Source paths and file identities are not asset references.
+The high-water mark survives removal of every chart and ready-state reset.
 
 The read-only legacy schema-2 disk record is exactly 120 bytes:
 
@@ -57,12 +61,15 @@ IDs are at most 63 ASCII bytes (`a`–`z`, `0`–`9`, `-`), a bounded UTF-8 subs
 containing the exact authored semantic IDs. Embedded NULs and nonzero padding are
 invalid. Reads validate the fixed header and aggregate file limit before allocation.
 
-Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3 records
+Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3/4 records
 migrate **in memory only**. Startup and snapshot reads do not rewrite them.
 Schema 1 acquires raised stockinette. Schema 2 retains every appearance field;
 both acquire default-on eligibility with no exceptions. Schema 3 retains its
 appearance and application exceptions. Its supported selection values remain
 0–2; a legacy record cannot introduce the new value 3 by changing enum bytes.
+Schema 4 also retains Shared Zigzag. Older schemas acquire a genuinely empty
+personal catalogue; current malformed storage cannot infer an empty catalogue
+or reconstruct missing revision history.
 A successful validated mutation performs the ordinary staged,
 flushed atomic replacement; failed writes retain legacy bytes and committed
 state. Corrupt, unsupported old values, or newer-schema files remain untouched.
@@ -75,19 +82,19 @@ failed save or weakening permanent failed-write retention.
 
 ## IPC and acknowledgment
 
-Protocol version 5 retains the first 176 appearance bytes and its typed,
+Protocol version 6 retains the first 176 appearance bytes and its typed,
 length-framed sections. The byte-mode pipe reads a 12-byte header, validates the
 total bound, then reads exactly that frame. The previous header/request/client/
 server/revision/schema/pause/width offsets are unchanged. Offset 76 now carries
 the actual Win32 storage error in responses (zero in requests), and offset 80
 retains the 64-bit client lease. Appearance fields occupy offsets 88–108 in the
 same semantic order as above; the bounded 64-byte ID occupies offsets 112–175.
-Tag 1 contains eligibility preferences; tag 2 an eligibility mutation; tag 3
-an application snapshot; tag 4 the acknowledged operation. Required tags are
-operation-specific. Unknown/duplicate tags, unsupported operations, trailing
+Sections carry eligibility, application snapshots, typed acknowledgments,
+personal-import metadata and import mutations. Required sections are
+operation-specific. Unknown/duplicate sections, unsupported operations, trailing
 data, invalid identities, duplicate edits, bad counts and unchecked lengths
 are rejected. The 1 MiB aggregate limit applies before payload allocation.
-The live endpoint accepts protocol 5 only. Protocol-4/schema-3 decoding exists
+The live endpoint accepts protocol 6 only. Legacy schema decoding exists
 solely for validated disk migration, not an alternate live mutation path.
 The existing three-second I/O budget covers the complete header/body read;
 partial byte progress does not restart the deadline.
@@ -102,8 +109,8 @@ resource-limit diagnostic. Snapshots contain at most 8192 rows and 4096 running
 windows, with counts, labels, supported-property provenance and failure facts.
 They contain no pixel blobs. Publisher authenticity is not claimed.
 
-Only snapshot, appearance mutation, explicit recovery reset, eligibility mutation,
-and application snapshot operations exist. All-on/off atomically changes the
+Operations include snapshots, appearance mutations, explicit recovery reset,
+eligibility changes and personal imports. All-on/off atomically changes the
 default and clears exceptions; default-only changes retain explicit choices.
 Snapshots include disabled running owners and saved non-running choices.
 Observation generation advances for metadata/lifecycle/count changes even when
@@ -128,3 +135,22 @@ coalesced request. Only an exact full-configuration acknowledgment extending an
 own revision by one can advance a proven own chain. Foreign refreshes never
 rebase it. The bounded 32-entry chain history retains active roots across more
 than 70 continuous appearance changes.
+
+## Personal imports
+
+Snapshots carry at most 256 KiB of import metadata and 128 exact application
+bindings, not PNG pixel blobs. The host retains an immutable owned catalogue;
+unchanged observation and geometry checks do not copy or re-decode its 16 MiB
+budget. PNG add/replace operations carry a bounded local path that the host worker
+validates and reads off the event/UI threads.
+
+Rule documents keep their source text and explicit matched/ambiguous/unmatched
+diagnostics. Saved winning bindings use exact `AppIdentity`; restart does not
+opportunistically rebind them. A rule without a chart supplies an explicit plain
+pattern. Imported shadows precede the immutable authored chart, and removing a
+shadow restores the original. Literal PNG yarn colors are never generated colors.
+
+Ordinary design-change and reset acknowledgments account for selection clearing
+and retained revision history before extending the Settings own-commit chain.
+Failed imports and saves retain the previous committed catalogue, configuration,
+and asset revision.

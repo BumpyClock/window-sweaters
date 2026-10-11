@@ -265,6 +265,16 @@ std::uint64_t ConfigurationHost::Revision() const {
     std::lock_guard guard(impl_->mutex);
     return impl_->server?impl_->server->Revision():impl_->stopped_snapshot.revision;
 }
+configuration::CommittedState ConfigurationHost::OwnedSnapshot() const {
+    std::lock_guard guard(impl_->mutex);
+    return impl_->server?impl_->server->OwnedSnapshot():configuration::CommittedState{
+        impl_->stopped_snapshot,std::make_shared<const imports::ImportCatalogue>()};
+}
+std::optional<configuration::CommittedState> ConfigurationHost::PollOwnedSnapshot(std::uint64_t revision) const {
+    std::lock_guard guard(impl_->mutex);
+    if (!impl_->server || impl_->server->Revision()==revision) return {};
+    return impl_->server->OwnedSnapshot();
+}
 std::uint64_t ConfigurationHost::EligibilityRevision(applications::AppIdentity const& identity) const {
     std::lock_guard guard(impl_->mutex);
     return impl_->server?impl_->server->EligibilityRevision(identity):impl_->stopped_snapshot.revision;

@@ -32,6 +32,11 @@
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="Storage.cpp"/><ClCompile Include="Pipe.cpp"/><ClCompile Include="ConfigurationServer.cpp"/><ClCompile Include="..\Designs\Catalogue.c"><CompileAs>CompileAsC</CompileAs><LanguageStandard_C>stdc17</LanguageStandard_C></ClCompile></ItemGroup>
   <ItemGroup>
+    <ClCompile Include="ImportState.cpp"/>
+    <ClCompile Include="..\Imports\Rules.cpp"/>
+    <ClCompile Include="..\Imports\Png.cpp"/>
+    <ClCompile Include="..\Imports\Deflate.cpp"/>
+    <ClCompile Include="..\Imports\Catalogue.cpp"><ObjectFileName>$(IntDir)ImportsCatalogue.obj</ObjectFileName></ClCompile>
     <ClCompile Include="..\Applications\AppIdentity.cpp"/>
     <ClCompile Include="..\Applications\EligibilityPreferences.cpp"/>
     <ClCompile Include="..\Applications\WindowOwnerMetadata.cpp"/>

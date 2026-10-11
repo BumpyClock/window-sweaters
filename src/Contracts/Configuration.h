@@ -4,9 +4,10 @@
 #include <string>
 #include "..\Designs\Catalogue.h"
 #include "ApplicationPayload.h"
+#include "Imports.h"
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint32_t configuration_schema = 4;
+inline constexpr std::uint32_t configuration_schema = 5;
 inline constexpr float minimum_width_dip = 2.0f;
 inline constexpr float maximum_width_dip = 64.0f;
 inline constexpr float default_width_dip = 16.0f;
@@ -33,6 +34,7 @@ struct Configuration {
     float stitch_rows = 6.f;
     std::uint32_t yarn_argb = 0xff4e8098u;
     applications::EligibilityPreferences eligibility;
+    ImportPreferences imports;
     bool operator==(Configuration const&) const = default;
 };
 

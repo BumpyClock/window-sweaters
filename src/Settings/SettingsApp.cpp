@@ -4,6 +4,7 @@
 #include "..\Configuration\Pipe.h"
 #include "..\Configuration\Storage.h"
 #include <microsoft.ui.xaml.window.h>
+#include <shobjidl.h>
 #include <sddl.h>
 #undef GetCurrentTime
 #include <winrt/Microsoft.UI.Dispatching.h>
@@ -21,6 +22,8 @@
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Storage.Pickers.h>
+#include <winrt/Windows.Storage.h>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -174,97 +177,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         StartupDiagnostic(L"resource-merge",S_OK,L"Merging native XamlControlsResources into Application resources.");
         Resources().MergedDictionaries().Append(controls_resources);
         StartupDiagnostic(L"resources",S_OK,L"WinUI control resources loaded.");
-        auto layout=StackPanel{}; layout.Spacing(16); layout.Margin(Thickness{24});
-        auto heading=TextBlock{}; heading.Text(L"Window Sweaters"); heading.FontSize(28);
-        layout.Children().Append(heading);
-        auto description=TextBlock{}; description.Text(L"Native knitted borders. Closing settings keeps decoration running.");
-        description.TextWrapping(TextWrapping::Wrap); layout.Children().Append(description);
-        status_=TextBlock{}; status_.Text(L"Connecting to host…"); status_.TextWrapping(TextWrapping::Wrap);
-        AutomationProperties::SetName(status_,L"Connection and saved revision status");
-        AutomationProperties::SetLiveSetting(status_,Automation::Peers::AutomationLiveSetting::Polite);
-        layout.Children().Append(status_);
-        auto apps_heading=TextBlock{}; apps_heading.Text(L"Applications"); apps_heading.FontSize(22);
-        layout.Children().Append(apps_heading);
-        apps_status_=TextBlock{}; apps_status_.Text(L"Loading host-owned application list…");
-        apps_status_.TextWrapping(TextWrapping::Wrap);
-        AutomationProperties::SetName(apps_status_,L"Application choices status");
-        AutomationProperties::SetLiveSetting(apps_status_,Automation::Peers::AutomationLiveSetting::Polite);
-        layout.Children().Append(apps_status_);
-        auto app_actions=StackPanel{}; app_actions.Orientation(Orientation::Horizontal); app_actions.Spacing(12);
-        apps_all_on_=Button{}; apps_all_on_.Content(box_value(L"All apps on"));
-        apps_all_off_=Button{}; apps_all_off_.Content(box_value(L"All apps off"));
-        AutomationProperties::SetName(apps_all_on_,L"All applications on");
-        AutomationProperties::SetName(apps_all_off_,L"All applications off");
-        app_actions.Children().Append(apps_all_on_); app_actions.Children().Append(apps_all_off_);
-        layout.Children().Append(app_actions);
-        apps_default_=ToggleSwitch{}; apps_default_.Header(box_value(L"Default for newly discovered apps"));
-        apps_default_.OnContent(box_value(L"Enabled")); apps_default_.OffContent(box_value(L"Disabled"));
-        AutomationProperties::SetName(apps_default_,L"Default for new applications");
-        layout.Children().Append(apps_default_);
-        auto app_help=TextBlock{};
-        app_help.Text(L"All on/off also clears saved choices. Changing only the default preserves explicit choices. Identity comes from supported Windows properties, not publisher verification.");
-        app_help.TextWrapping(TextWrapping::Wrap); layout.Children().Append(app_help);
-        apps_list_=ListView{}; apps_list_.MaxHeight(340);
-        apps_list_.SelectionMode(ListViewSelectionMode::None);
-        AutomationProperties::SetName(apps_list_,L"Running applications and saved non-running choices");
-        layout.Children().Append(apps_list_);
-        pause_=ToggleSwitch{}; pause_.Header(box_value(L"Pause decoration")); pause_.TabIndex(0);
-        pause_.OnContent(box_value(L"Paused")); pause_.OffContent(box_value(L"Enabled"));
-        AutomationProperties::SetName(pause_,L"Pause decoration");
-        layout.Children().Append(pause_);
-        width_label_=TextBlock{}; width_label_.Text(L"Border width: 16 DIP");
-        layout.Children().Append(width_label_);
-        width_=Slider{}; width_.Minimum(contracts::minimum_width_dip); width_.Maximum(contracts::maximum_width_dip);
-        width_.StepFrequency(0.5); width_.Value(contracts::default_width_dip); width_.TabIndex(1);
-        AutomationProperties::SetName(width_,L"Border width");
-        AutomationProperties::SetHelpText(width_,L"Exterior border width, from 2 to 64 device-independent pixels.");
-        layout.Children().Append(width_);
-        preview_status_=TextBlock{}; preview_status_.Text(L"Production knit preview");
-        layout.Children().Append(preview_status_);
-        preview_image_=Image{}; preview_image_.MaxWidth(528); preview_image_.Height(268);
-        preview_image_.Stretch(Media::Stretch::Uniform);
-        AutomationProperties::SetName(preview_image_,L"Production knitted border preview");
-        layout.Children().Append(preview_image_);
-        design_=ComboBox{}; design_.Header(box_value(L"Original design")); design_.HorizontalAlignment(HorizontalAlignment::Stretch);
-        AutomationProperties::SetName(design_,L"Original design");
-        auto add_design=[&](wchar_t const* name,char const* id) {
-            ComboBoxItem item; item.Content(box_value(name)); item.Tag(box_value(to_hstring(id)));
-            design_.Items().Append(item);
-        };
-        add_design(L"Plain knit","");
-        add_design(L"By app (authored or icon-derived)","@by-app");
-        add_design(L"Shared Zigzag (each app's colors)","@shared-zigzag");
-        for (std::size_t i=0;i<designs::ws_design_theme_count();++i) {
-            auto theme=designs::ws_design_theme_at(i);
-            auto name=to_hstring(theme->name); add_design(name.c_str(),theme->id);
-        }
-        design_.SelectedIndex(0); layout.Children().Append(design_);
-        auto mode_help=TextBlock{};
-        mode_help.Text(L"Original charts keep their authored stitches, material, corners and cuffs. Raised material uses stockinette; Pattern knit restores the selected plain stitch. By app keeps mapped palettes and samples unknown app icons. Shared Zigzag samples each app's colors. Automatic previews are representative, not a selected app.");
-        mode_help.TextWrapping(TextWrapping::Wrap); layout.Children().Append(mode_help);
-        stitch_=ComboBox{}; stitch_.Header(box_value(L"Plain stitch")); stitch_.HorizontalAlignment(HorizontalAlignment::Stretch);
-        for (auto name:{L"Stockinette",L"Rib",L"Garter"}) stitch_.Items().Append(box_value(name));
-        stitch_.SelectedIndex(0); AutomationProperties::SetName(stitch_,L"Plain stitch"); layout.Children().Append(stitch_);
-        material_=ComboBox{}; material_.Header(box_value(L"Plain material")); material_.HorizontalAlignment(HorizontalAlignment::Stretch);
-        material_.Items().Append(box_value(L"Pattern knit")); material_.Items().Append(box_value(L"Raised stockinette"));
-        material_.SelectedIndex(static_cast<int>(contracts::Configuration{}.material_style));
-        AutomationProperties::SetName(material_,L"Plain material"); layout.Children().Append(material_);
-        rows_label_=TextBlock{}; rows_label_.Text(L"Stitch size: 6 rows across the border");
-        layout.Children().Append(rows_label_);
-        rows_=Slider{}; rows_.Minimum(contracts::minimum_stitch_rows); rows_.Maximum(contracts::maximum_stitch_rows);
-        rows_.StepFrequency(0.5); rows_.Value(6);
-        AutomationProperties::SetName(rows_,L"Stitch rows across border");
-        AutomationProperties::SetHelpText(rows_,L"1.5 to 12 rows across the band. More rows make smaller stitches.");
-        layout.Children().Append(rows_);
-        auto color_label=TextBlock{}; color_label.Text(L"Base yarn color (ARGB; knit output is opaque)");
-        layout.Children().Append(color_label);
-        color_=ColorPicker{}; color_.Color(ToColor(contracts::Configuration{}.yarn_argb)); color_.IsAlphaEnabled(false);
-        color_.IsMoreButtonVisible(false); color_.MaxWidth(480);
-        AutomationProperties::SetName(color_,L"Base yarn color"); layout.Children().Append(color_);
-        reset_=Button{}; reset_.Content(box_value(L"Reset preserved configuration…")); reset_.TabIndex(2);
-        reset_.Visibility(Visibility::Collapsed); AutomationProperties::SetName(reset_,L"Reset preserved configuration");
-        layout.Children().Append(reset_);
-        scroll_=ScrollViewer{}; scroll_.Content(layout); window_.Content(scroll_);
+        BuildLayout();
         StartupDiagnostic(L"controls",S_OK,L"All native appearance controls and preview view constructed.");
         auto weak=get_weak();
         scroll_.Loaded([weak](auto const&,auto const&) {
@@ -293,7 +206,12 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         stitch_.SelectionChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
         material_.SelectionChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
         rows_.ValueChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
-        color_.ColorChanged([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
+        color_.ColorChanged([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) { app->UpdateYarnSummary(); app->Change(); }
+        });
+        root_.SizeChanged([weak](auto const&,SizeChangedEventArgs const& args) {
+            if (auto app=weak.get()) app->Dispatch(L"layout-class",[&]{app->ApplyLayoutClass(args.NewSize().Width);});
+        });
         reset_.Click([weak](auto const&,auto const&) { if (auto app=weak.get()) app->ConfirmReset(); });
         window_.Closed([weak](auto const&,auto const&) {
             if (auto app=weak.get()) {
@@ -307,7 +225,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             }
         });
         HWND native=nullptr; window_.as<IWindowNative>()->get_WindowHandle(&native);
-        SetWindowPos(native,nullptr,0,0,660,920,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        PlaceWindow(native);
         auto class_name=ActivationClass(options_);
         WNDCLASSW registration{}; registration.lpfnWndProc=ActivationProcedure;
         registration.hInstance=GetModuleHandleW(nullptr); registration.lpszClassName=class_name.c_str();
@@ -332,16 +250,554 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             if (auto queue=dispatcher.get()) queue.TryEnqueue([weak,result=std::move(result)] {
                 if (auto app=weak.get()) app->Dispatch(L"preview-dispatch",[&]{app->RenderPreview(*result);});
             });
-        });
-        EnableControls(false); EnableApps(false); window_.Activate();
+        },settings::Preview::Render{},options_.storage_directory);
+        EnableControls(false); EnableApps(false); EnableImports(false); window_.Activate();
         StartupDiagnostic(L"window-activated",S_OK,L"Native settings window activated; awaiting host snapshot.");
     }
     void EnableControls(bool enabled) {
         pause_.IsEnabled(enabled); width_.IsEnabled(enabled); design_.IsEnabled(enabled);
         rows_.IsEnabled(enabled); color_.IsEnabled(enabled);
         bool plain=design_.SelectedIndex()==0;
+        plain_group_.Visibility(plain?Visibility::Visible:Visibility::Collapsed);
         material_.IsEnabled(enabled&&plain);
         stitch_.IsEnabled(enabled&&plain&&material_.SelectedIndex()==0);
+    }
+    void LoadStyles() {
+        try {
+            styles_=Markup::XamlReader::Load(LR"(<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+<Style x:Key="WsPage" TargetType="Grid"><Setter Property="Background" Value="{ThemeResource ApplicationPageBackgroundThemeBrush}"/></Style>
+<Style x:Key="WsCard" TargetType="Border">
+<Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
+<Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+<Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="8"/><Setter Property="Padding" Value="16"/></Style>
+<Style x:Key="WsSwatch" TargetType="Border">
+<Setter Property="BorderBrush" Value="{ThemeResource ControlStrongStrokeColorDefaultBrush}"/>
+<Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="4"/>
+<Setter Property="Width" Value="20"/><Setter Property="Height" Value="20"/></Style>
+<Style x:Key="WsSecondary" TargetType="TextBlock">
+<Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+<Setter Property="FontSize" Value="12"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
+</ResourceDictionary>)").as<ResourceDictionary>();
+        } catch (hresult_error const& error) {
+            StartupDiagnostic(L"style-load-failed",error.code(),error.message()); throw;
+        }
+        for (auto key:{L"WsPage",L"WsCard",L"WsSwatch",L"WsSecondary"}) {
+            if (!styles_.HasKey(box_value(key))) {
+                StartupDiagnostic(L"style-load-failed",E_FAIL,key);
+                throw hresult_error(E_FAIL,L"Required native theme style is missing.");
+            }
+        }
+    }
+    template<class Target> void ApplyStyle(Target const& target,wchar_t const* key) const {
+        target.Style(styles_.Lookup(box_value(key)).template as<Style>());
+    }
+    void StyleSecondary(TextBlock const& text) const { ApplyStyle(text,L"WsSecondary"); }
+    Style Builtin(wchar_t const* key) { return Resources().Lookup(box_value(key)).as<Style>(); }
+    TextBlock Heading(wchar_t const* text,wchar_t const* style,Automation::Peers::AutomationHeadingLevel level) {
+        TextBlock heading; heading.Text(text); heading.Style(Builtin(style)); heading.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetHeadingLevel(heading,level); return heading;
+    }
+    TextBlock Section(wchar_t const* text) {
+        return Heading(text,L"SubtitleTextBlockStyle",Automation::Peers::AutomationHeadingLevel::Level2);
+    }
+    TextBlock Group(wchar_t const* text) {
+        return Heading(text,L"BodyStrongTextBlockStyle",Automation::Peers::AutomationHeadingLevel::Level3);
+    }
+    TextBlock Caption(wchar_t const* text) {
+        TextBlock caption; caption.Text(text); StyleSecondary(caption); return caption;
+    }
+    Border Card(UIElement const& child) {
+        Border card; ApplyStyle(card,L"WsCard"); card.Child(child); return card;
+    }
+    Grid ButtonGrid(std::initializer_list<Button> buttons) {
+        Grid grid; grid.ColumnSpacing(8); grid.RowSpacing(8);
+        for (int column=0;column<2;++column) grid.ColumnDefinitions().Append(ColumnDefinition{});
+        int index=0;
+        for (auto const& button:buttons) {
+            if (index%2==0) {
+                RowDefinition row; row.Height(GridLength{1,GridUnitType::Auto}); grid.RowDefinitions().Append(row);
+            }
+            button.HorizontalAlignment(HorizontalAlignment::Stretch); button.MinHeight(44);
+            Grid::SetRow(button,index/2); Grid::SetColumn(button,index%2);
+            grid.Children().Append(button); ++index;
+        }
+        return grid;
+    }
+    static StackPanel Stack(double spacing) { StackPanel panel; panel.Spacing(spacing); return panel; }
+    void BuildLayout() {
+        LoadStyles();
+        status_=TextBlock{}; status_.Text(L"Connecting to host…"); status_.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetName(status_,L"Connection and saved revision status");
+        AutomationProperties::SetLiveSetting(status_,Automation::Peers::AutomationLiveSetting::Polite);
+        reset_=Button{}; reset_.Content(box_value(L"Reset preserved configuration…")); reset_.MinHeight(44);
+        reset_.Visibility(Visibility::Collapsed); AutomationProperties::SetName(reset_,L"Reset preserved configuration");
+        auto status_panel=Stack(8); status_panel.Children().Append(status_); status_panel.Children().Append(reset_);
+
+        preview_image_=Image{}; preview_image_.MaxWidth(528); preview_image_.MaxHeight(268); preview_image_.MinHeight(160);
+        preview_image_.Stretch(Media::Stretch::Uniform); preview_image_.HorizontalAlignment(HorizontalAlignment::Center);
+        AutomationProperties::SetName(preview_image_,L"Production knitted border preview");
+        preview_status_=TextBlock{}; preview_status_.Text(L"Production knit preview"); preview_status_.TextWrapping(TextWrapping::Wrap);
+        StyleSecondary(preview_status_);
+        pause_=ToggleSwitch{}; pause_.Header(box_value(L"Pause decoration"));
+        pause_.OnContent(box_value(L"Paused")); pause_.OffContent(box_value(L"Enabled"));
+        AutomationProperties::SetName(pause_,L"Pause decoration");
+        width_label_=TextBlock{}; width_label_.Text(L"Border width: 16 DIP");
+        width_=Slider{}; width_.Minimum(contracts::minimum_width_dip); width_.Maximum(contracts::maximum_width_dip);
+        width_.StepFrequency(0.5); width_.Value(contracts::default_width_dip);
+        AutomationProperties::SetName(width_,L"Border width");
+        AutomationProperties::SetHelpText(width_,L"Exterior border width, from 2 to 64 device-independent pixels.");
+        auto preview_panel=Stack(12);
+        for (auto const& child:std::initializer_list<UIElement>{Section(L"Preview"),preview_image_,preview_status_,pause_,width_label_,width_})
+            preview_panel.Children().Append(child);
+
+        design_=ComboBox{}; design_.Header(box_value(L"Original design")); design_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        AutomationProperties::SetName(design_,L"Original design");
+        auto add_design=[&](wchar_t const* name,char const* id) {
+            ComboBoxItem item; item.Content(box_value(name)); item.Tag(box_value(to_hstring(id)));
+            design_.Items().Append(item);
+        };
+        add_design(L"Plain knit","");
+        add_design(L"By app (authored or icon-derived)","@by-app");
+        add_design(L"Shared Zigzag (each app's colors)","@shared-zigzag");
+        for (std::size_t i=0;i<designs::ws_design_theme_count();++i) {
+            auto theme=designs::ws_design_theme_at(i);
+            auto name=to_hstring(theme->name); add_design(name.c_str(),theme->id);
+        }
+        design_.SelectedIndex(0);
+        material_=ComboBox{}; material_.Header(box_value(L"Plain material")); material_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        material_.Items().Append(box_value(L"Pattern knit")); material_.Items().Append(box_value(L"Raised stockinette"));
+        material_.SelectedIndex(static_cast<int>(contracts::Configuration{}.material_style));
+        AutomationProperties::SetName(material_,L"Plain material");
+        stitch_=ComboBox{}; stitch_.Header(box_value(L"Plain stitch")); stitch_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        for (auto name:{L"Stockinette",L"Rib",L"Garter"}) stitch_.Items().Append(box_value(name));
+        stitch_.SelectedIndex(0); AutomationProperties::SetName(stitch_,L"Plain stitch");
+        plain_group_=Stack(12);
+        plain_group_.Children().Append(material_); plain_group_.Children().Append(stitch_);
+        plain_group_.Children().Append(Caption(L"Raised material uses stockinette; Pattern knit restores the selected plain stitch."));
+        rows_label_=TextBlock{}; rows_label_.Text(L"Stitch size: 6 rows across the border");
+        rows_=Slider{}; rows_.Minimum(contracts::minimum_stitch_rows); rows_.Maximum(contracts::maximum_stitch_rows);
+        rows_.StepFrequency(0.5); rows_.Value(6);
+        AutomationProperties::SetName(rows_,L"Stitch rows across border");
+        AutomationProperties::SetHelpText(rows_,L"1.5 to 12 rows across the band. More rows make smaller stitches.");
+        color_=ColorPicker{}; color_.Color(ToColor(contracts::Configuration{}.yarn_argb)); color_.IsAlphaEnabled(false);
+        color_.IsMoreButtonVisible(false); color_.MaxWidth(480);
+        AutomationProperties::SetName(color_,L"Base yarn color");
+        yarn_swatch_=Border{}; ApplyStyle(yarn_swatch_,L"WsSwatch");
+        yarn_hex_=TextBlock{}; yarn_hex_.VerticalAlignment(VerticalAlignment::Center); StyleSecondary(yarn_hex_);
+        TextBlock yarn_title; yarn_title.Text(L"Base yarn color (opaque)"); yarn_title.VerticalAlignment(VerticalAlignment::Center);
+        auto yarn_header=StackPanel{}; yarn_header.Orientation(Orientation::Horizontal); yarn_header.Spacing(12);
+        yarn_header.Children().Append(yarn_swatch_); yarn_header.Children().Append(yarn_title); yarn_header.Children().Append(yarn_hex_);
+        yarn_expander_=Expander{}; yarn_expander_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        yarn_expander_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        yarn_expander_.Header(yarn_header); yarn_expander_.Content(color_); UpdateYarnSummary();
+        auto appearance=Stack(12);
+        appearance.Children().Append(Section(L"Appearance")); appearance.Children().Append(design_);
+        appearance.Children().Append(Caption(L"Original charts keep their authored stitches, material, corners and cuffs. By app keeps mapped palettes and samples unknown app icons. Shared Zigzag samples each app's colors. Automatic previews are representative, not a selected app."));
+        appearance.Children().Append(plain_group_); appearance.Children().Append(rows_label_); appearance.Children().Append(rows_);
+        appearance.Children().Append(yarn_expander_);
+
+        apps_status_=TextBlock{}; apps_status_.Text(L"Loading host-owned application list…");
+        apps_status_.TextWrapping(TextWrapping::Wrap); StyleSecondary(apps_status_);
+        AutomationProperties::SetName(apps_status_,L"Application choices status");
+        AutomationProperties::SetLiveSetting(apps_status_,Automation::Peers::AutomationLiveSetting::Polite);
+        apps_all_on_=Button{}; apps_all_on_.Content(box_value(L"All apps on"));
+        apps_all_off_=Button{}; apps_all_off_.Content(box_value(L"All apps off"));
+        AutomationProperties::SetName(apps_all_on_,L"All applications on");
+        AutomationProperties::SetName(apps_all_off_,L"All applications off");
+        apps_default_=ToggleSwitch{}; apps_default_.Header(box_value(L"Default for newly discovered apps"));
+        apps_default_.OnContent(box_value(L"Enabled")); apps_default_.OffContent(box_value(L"Disabled"));
+        AutomationProperties::SetName(apps_default_,L"Default for new applications");
+        apps_list_=ListView{}; apps_list_.MaxHeight(340);
+        apps_list_.SelectionMode(ListViewSelectionMode::None);
+        AutomationProperties::SetName(apps_list_,L"Running applications and saved non-running choices");
+        auto apps=Stack(12);
+        apps.Children().Append(Section(L"Applications")); apps.Children().Append(apps_status_);
+        apps.Children().Append(ButtonGrid({apps_all_on_,apps_all_off_})); apps.Children().Append(apps_default_);
+        apps.Children().Append(Caption(L"All on/off also clears saved choices. Changing only the default preserves explicit choices. Identity comes from supported Windows properties, not publisher verification."));
+        apps.Children().Append(apps_list_);
+
+        BuildImports();
+        rules_save_.Style(Builtin(L"AccentButtonStyle"));
+        personal_summary_=Caption(L"Connecting to host…");
+        auto personal_header=Stack(2);
+        personal_header.Children().Append(Group(L"Personal designs")); personal_header.Children().Append(personal_summary_);
+        auto personal=Stack(16);
+        personal.Children().Append(Caption(L"Rules: executable prefix = #RRGGBB [chart name]. Only verified Windows executable metadata binds rules; unmatched and ambiguous rules remain unbound. No chart means plain knit. PNGs retain their exact yarn colors."));
+        personal.Children().Append(rules_); personal.Children().Append(ButtonGrid({rules_save_,rules_import_}));
+        personal.Children().Append(Group(L"Rule diagnostics (a matched identity may still lose to a longer prefix)"));
+        personal.Children().Append(rule_diagnostics_);
+        personal.Children().Append(Group(L"Saved bindings (applied)")); personal.Children().Append(saved_bindings_);
+        personal.Children().Append(Group(L"PNG charts")); personal.Children().Append(chart_name_); personal.Children().Append(charts_);
+        personal.Children().Append(chart_summary_);
+        personal.Children().Append(ButtonGrid({chart_select_,chart_plain_,chart_add_,chart_replace_,chart_remove_}));
+        personal.Children().Append(Group(L"Precise application color")); personal.Children().Append(color_app_);
+        personal.Children().Append(app_rgb_); personal.Children().Append(app_color_save_);
+        personal_expander_=Expander{}; personal_expander_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        personal_expander_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        personal_expander_.Header(personal_header); personal_expander_.Content(personal);
+        AutomationProperties::SetName(personal_expander_,L"Personal designs");
+        auto personal_region=Stack(8);
+        personal_region.Children().Append(personal_expander_); personal_region.Children().Append(import_status_);
+
+        auto heading=Heading(L"Window Sweaters",L"TitleTextBlockStyle",Automation::Peers::AutomationHeadingLevel::Level1);
+        auto header=Stack(4); header.Children().Append(heading);
+        header.Children().Append(Caption(L"Native knitted borders. Closing settings keeps decoration running."));
+        left_=Stack(16); left_.Children().Append(header);
+        left_.Children().Append(Card(status_panel)); left_.Children().Append(Card(preview_panel));
+        right_=Stack(16); right_.Children().Append(Card(appearance)); right_.Children().Append(Card(apps));
+        right_.Children().Append(personal_region);
+
+        root_=Grid{}; root_.Margin(Thickness{24}); root_.ColumnSpacing(24);
+        ColumnDefinition preview_column; preview_column.Width(GridLength{1.15,GridUnitType::Star}); preview_column.MaxWidth(560);
+        ColumnDefinition controls_column; controls_column.Width(GridLength{1,GridUnitType::Star});
+        root_.ColumnDefinitions().Append(preview_column); root_.ColumnDefinitions().Append(controls_column);
+        for (int row=0;row<2;++row) {
+            RowDefinition definition; definition.Height(GridLength{1,GridUnitType::Auto}); root_.RowDefinitions().Append(definition);
+        }
+        Grid::SetRow(left_,0); Grid::SetColumn(left_,0); Grid::SetRow(right_,0); Grid::SetColumn(right_,1);
+        root_.Children().Append(left_); root_.Children().Append(right_);
+        scroll_=ScrollViewer{}; scroll_.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+        scroll_.HorizontalScrollMode(ScrollMode::Disabled); scroll_.Content(root_);
+        page_=Grid{}; ApplyStyle(page_,L"WsPage"); page_.Children().Append(scroll_); window_.Content(page_);
+    }
+    void ApplyLayoutClass(double width) {
+        bool wide=wide_?width>=820:width>=860;
+        if (wide==wide_) return;
+        wide_=wide;
+        auto columns=root_.ColumnDefinitions();
+        columns.GetAt(0).MaxWidth(wide?560:std::numeric_limits<double>::infinity());
+        columns.GetAt(1).Width(wide?GridLength{1,GridUnitType::Star}:GridLength{0,GridUnitType::Pixel});
+        root_.ColumnSpacing(wide?24:0); root_.RowSpacing(wide?0:24);
+        Grid::SetRow(right_,wide?0:1); Grid::SetColumn(right_,wide?1:0);
+    }
+    void PlaceWindow(HWND window) {
+        auto monitor=MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST);
+        MONITORINFO info{sizeof(info)};
+        if (!GetMonitorInfoW(monitor,&info)) return;
+        double scale=GetDpiForWindow(window)/96.0;
+        int available_width=info.rcWork.right-info.rcWork.left, available_height=info.rcWork.bottom-info.rcWork.top;
+        int margin=static_cast<int>(16*scale);
+        int width=std::max(1,std::min(static_cast<int>(1000*scale),available_width-2*margin));
+        int height=std::max(1,std::min(static_cast<int>(720*scale),available_height-2*margin));
+        SetWindowPos(window,nullptr,info.rcWork.left+(available_width-width)/2,info.rcWork.top+(available_height-height)/2,
+                     width,height,SWP_NOZORDER|SWP_NOACTIVATE);
+    }
+    void UpdateYarnSummary() {
+        auto color=color_.Color(); wchar_t hex[8]{};
+        swprintf_s(hex,L"#%02X%02X%02X",color.R,color.G,color.B);
+        yarn_hex_.Text(hex); yarn_swatch_.Background(Media::SolidColorBrush{color});
+        AutomationProperties::SetName(yarn_expander_,hstring(L"Base yarn color ")+hex+L", expand to edit");
+    }
+    void BuildImports() {
+        import_status_=TextBlock{}; import_status_.Text(L"Connecting to host…");
+        import_status_.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetName(import_status_,L"Personal import saved status and errors");
+        AutomationProperties::SetLiveSetting(import_status_,Automation::Peers::AutomationLiveSetting::Polite);
+        rules_=TextBox{}; rules_.Header(box_value(L"Declarative colorway rules (UTF-8)"));
+        rules_.AcceptsReturn(true); rules_.TextWrapping(TextWrapping::Wrap); rules_.MaxLength(65536);
+        rules_.MinHeight(120); rules_.MaxHeight(260);
+        AutomationProperties::SetName(rules_,L"Personal colorway rules editor");
+        rules_save_=Button{}; rules_save_.Content(box_value(L"Save rules"));
+        rules_import_=Button{}; rules_import_.Content(box_value(L"Import local rules file"));
+        rule_diagnostics_=TextBlock{}; rule_diagnostics_.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetName(rule_diagnostics_,L"Per-rule binding diagnostics");
+        saved_bindings_=TextBlock{}; saved_bindings_.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetName(saved_bindings_,L"Saved personal application bindings");
+        chart_name_=TextBox{}; chart_name_.Header(box_value(L"PNG semantic name")); chart_name_.MaxLength(63);
+        AutomationProperties::SetName(chart_name_,L"PNG semantic name");
+        charts_=ComboBox{}; charts_.Header(box_value(L"Imported charts and revisions"));
+        charts_.HorizontalAlignment(HorizontalAlignment::Stretch); charts_.PlaceholderText(L"Choose an imported chart");
+        AutomationProperties::SetName(charts_,L"Imported charts and revisions");
+        chart_summary_=TextBlock{}; chart_summary_.TextWrapping(TextWrapping::Wrap);
+        AutomationProperties::SetName(chart_summary_,L"Chosen and active imported chart");
+        AutomationProperties::SetLiveSetting(chart_summary_,Automation::Peers::AutomationLiveSetting::Polite);
+        chart_add_=Button{}; chart_add_.Content(box_value(L"Import PNG"));
+        chart_select_=Button{}; chart_select_.Content(box_value(L"Use selected chart"));
+        AutomationProperties::SetName(chart_select_,L"Use selected chart");
+        chart_plain_=Button{}; chart_plain_.Content(box_value(L"Clear imported chart"));
+        AutomationProperties::SetName(chart_plain_,L"Clear imported chart");
+        chart_plain_.Visibility(Visibility::Collapsed);
+        chart_replace_=Button{}; chart_replace_.Content(box_value(L"Replace PNG"));
+        chart_remove_=Button{}; chart_remove_.Content(box_value(L"Remove PNG"));
+        color_app_=ComboBox{}; color_app_.Header(box_value(L"Application identity for precise color edit"));
+        color_app_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        app_rgb_=TextBox{}; app_rgb_.Header(box_value(L"Application RGB (six hexadecimal digits)")); app_rgb_.MaxLength(6);
+        app_color_save_=Button{}; app_color_save_.Content(box_value(L"Save application color (chosen chart, or plain if none)"));
+        app_color_save_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        auto weak=get_weak();
+        charts_.SelectionChanged([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) {
+                if (!app->updating_imports_) ++app->chart_choice_revision_;
+                app->RefreshChartActions();
+            }
+        });
+        rules_.TextChanged([weak](auto const&,auto const&) {
+            if (auto app=weak.get(); app && !app->updating_imports_) app->rules_draft_.Edit();
+        });
+        rules_save_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->Dispatch(L"rules-save",[&] {
+                app->ChangeImport(contracts::SetRulesText{to_string(app->rules_.Text())});
+            });
+        });
+        rules_import_.Click([weak](auto const&,auto const&) { if (auto app=weak.get()) app->PickImport(0); });
+        chart_add_.Click([weak](auto const&,auto const&) { if (auto app=weak.get()) app->PickImport(1); });
+        chart_replace_.Click([weak](auto const&,auto const&) { if (auto app=weak.get()) app->PickImport(2); });
+        chart_select_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) {
+                auto id=app->SelectedChart();
+                if (id.empty() || !app->ChartById(id)) {
+                    app->import_status_.Text(L"Choose an imported chart first, then select Use selected chart."); return;
+                }
+                app->ChangeImport(contracts::SelectPng{std::move(id)});
+            }
+        });
+        chart_plain_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->ChangeImport(contracts::SelectPng{});
+        });
+        chart_remove_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) {
+                auto id=app->SelectedChart();
+                if (id.empty() || !app->ChartById(id)) {
+                    app->import_status_.Text(L"Choose an imported chart to remove."); return;
+                }
+                app->ChangeImport(contracts::RemovePng{std::move(id)});
+            }
+        });
+        app_color_save_.Click([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) app->Dispatch(L"application-color-save",[&] {
+                auto index=app->color_app_.SelectedIndex();
+                auto text=to_string(app->app_rgb_.Text()); std::uint32_t rgb=0;
+                if (index<0 || static_cast<std::size_t>(index)>=app->color_identities_.size() || text.size()!=6) {
+                    app->import_status_.Text(L"Choose a typed application identity and enter exactly six RGB digits."); return;
+                }
+                for (char c:text) {
+                    int digit=c>='0' && c<='9'?c-'0':c>='a' && c<='f'?c-'a'+10:c>='A' && c<='F'?c-'A'+10:-1;
+                    if (digit<0) { app->import_status_.Text(L"Application RGB needs six hexadecimal digits."); return; }
+                    rgb=(rgb<<4)|static_cast<std::uint32_t>(digit);
+                }
+                auto chart=app->SelectedChart();
+                app->ChangeImport(contracts::SetAppColor{app->color_identities_[index],rgb|0xff000000u,
+                    chart.empty()?std::nullopt:std::optional{std::move(chart)}});
+            });
+        });
+    }
+    contracts::ChartMetadata const* ChartById(std::string const& id) const {
+        if (!rendered_imports_) return nullptr;
+        auto found=std::ranges::find(rendered_imports_->charts,id,&contracts::ChartMetadata::id);
+        return found==rendered_imports_->charts.end()?nullptr:&*found;
+    }
+    static hstring ChartLabel(contracts::ChartMetadata const& chart) {
+        return to_hstring(chart.name)+L" · revision "+to_hstring(chart.revision);
+    }
+    void RefreshChartActions() {
+        auto chosen=SelectedChart();
+        auto const* chosen_chart=chosen.empty()?nullptr:ChartById(chosen);
+        std::string active=rendered_imports_?rendered_imports_->selected_id:std::string{};
+        auto const* active_chart=active.empty()?nullptr:ChartById(active);
+        auto actions=settings::ChartActions(imports_enabled_,chosen_chart!=nullptr,chosen==active,!active.empty());
+        chart_select_.IsEnabled(actions.use_chart);
+        chart_replace_.IsEnabled(actions.manage_chart);
+        chart_remove_.IsEnabled(actions.manage_chart);
+        chart_plain_.Visibility(active.empty()?Visibility::Collapsed:Visibility::Visible);
+        chart_plain_.IsEnabled(actions.clear_chart);
+        hstring summary=!rendered_imports_?hstring{L"Imported chart state is unavailable until the host connects."}:
+            active_chart?L"Active imported chart: "+ChartLabel(*active_chart):
+            active.empty()?hstring{L"No imported chart is active. Plain knit or the current design is in use."}:
+            hstring{L"The active imported chart is unavailable."};
+        if (chosen_chart && chosen!=active)
+            summary=summary+L"\nChosen: "+ChartLabel(*chosen_chart)+L" — not applied yet. Select “Use selected chart” to apply it.";
+        if (chart_summary_.Text()!=summary) chart_summary_.Text(summary);
+    }
+    void SelectChart(std::string const& id) {
+        auto count=charts_.Items().Size();
+        for (std::uint32_t index=0;index<count;++index)
+            if (to_string(unbox_value<hstring>(charts_.Items().GetAt(index).as<ComboBoxItem>().Tag()))==id) {
+                charts_.SelectedIndex(static_cast<int>(index)); return;
+            }
+    }
+    std::string SelectedChart() const {
+        auto item=charts_.SelectedItem();
+        return item?to_string(unbox_value<hstring>(item.as<ComboBoxItem>().Tag())):"";
+    }
+    void ChangeImport(contracts::ImportMutation mutation) {
+        if (closed_ || !session_) return;
+        if (draft_.Pending() || draft_.Current().pending) {
+            import_status_.Text(L"Another change is still saving. Wait for it to finish, then try again."); return;
+        }
+        auto kind=settings::RulesDraft::KindOf(mutation);
+        PendingChart chart{settings::ClassifyChartMutation(mutation)};
+        if (auto add=std::get_if<contracts::AddPng>(&mutation)) chart.name=add->name;
+        else if (auto replace=std::get_if<contracts::ReplacePng>(&mutation)) chart.id=replace->id;
+        else if (auto remove=std::get_if<contracts::RemovePng>(&mutation)) chart.id=remove->id;
+        else if (auto select=std::get_if<contracts::SelectPng>(&mutation)) chart.id=select->id;
+        if (rendered_imports_) chart.before=rendered_imports_->charts;
+        chart.choice_revision=chart_choice_revision_;
+        auto generation=session_->Import(draft_.Displayed(),std::move(mutation));
+        if (!generation) { import_status_.Text(L"Import not queued. Refresh the host connection before editing."); return; }
+        import_generation_=generation; rules_draft_.Begin(kind); pending_chart_=std::move(chart);
+        draft_.Begin(generation,draft_.Controls());
+        import_status_.Text(L"Validating and saving on the host…");
+        EnableImports(false);
+    }
+    fire_and_forget PickImport(unsigned kind) {
+        auto lifetime=get_strong();
+        try {
+            if (closed_ || picker_pending_ || draft_.Pending() || !draft_.Current().connected) co_return;
+            auto displayed=draft_.Displayed();
+            auto id=SelectedChart(); auto name=to_string(chart_name_.Text());
+            if (kind==2 && id.empty()) { import_status_.Text(L"Select an imported chart to replace explicitly."); co_return; }
+            if (kind==1 && name.empty()) { import_status_.Text(L"Enter a semantic chart name before importing."); co_return; }
+            picker_pending_=true; EnableImports(false);
+            Windows::Storage::Pickers::FileOpenPicker picker;
+            HWND owner=nullptr; check_hresult(window_.as<IWindowNative>()->get_WindowHandle(&owner));
+            check_hresult(picker.as<IInitializeWithWindow>()->Initialize(owner));
+            picker.FileTypeFilter().Append(kind==0?L".txt":L".png");
+            auto file=co_await picker.PickSingleFileAsync();
+            picker_pending_=false;
+            if (closed_) co_return;
+            EnableImports(draft_.Current().connected && !draft_.Pending());
+            if (!file) co_return;
+            if (displayed.server_instance!=draft_.Displayed().server_instance ||
+                displayed.configuration.revision!=draft_.Displayed().configuration.revision) {
+                import_status_.Text(L"Host changed while the picker was open. Select the file again."); co_return;
+            }
+            auto path=std::wstring(file.Path());
+            if (kind==0) ChangeImport(contracts::ReadRulesFile{std::move(path)});
+            else if (kind==1) ChangeImport(contracts::AddPng{std::move(name),std::move(path)});
+            else ChangeImport(contracts::ReplacePng{std::move(id),std::move(path),
+                name.empty()?std::nullopt:std::optional{std::move(name)}});
+        } catch (hresult_error const& error) {
+            picker_pending_=false;
+            if (!closed_) { import_status_.Text(L"Local file picker failed: "+error.message()); EnableImports(false); }
+        }
+    }
+    void EnableImports(bool enabled) {
+        enabled=enabled && !picker_pending_ && !presentation_failed_;
+        imports_enabled_=enabled;
+        for (auto const& button:{rules_save_,rules_import_,chart_add_,app_color_save_})
+            button.IsEnabled(enabled);
+        rules_.IsEnabled(enabled); charts_.IsEnabled(enabled); chart_name_.IsEnabled(enabled);
+        color_app_.IsEnabled(enabled); app_rgb_.IsEnabled(enabled);
+        RefreshChartActions();
+    }
+    struct PendingChart {
+        settings::ChartMutation kind=settings::ChartMutation::none;
+        std::string name,id;
+        std::vector<contracts::ChartMetadata> before;
+        std::uint64_t choice_revision{};
+    };
+    hstring ChartResult(PendingChart const& pending,contracts::ImportPreferences const& p,std::string const& highlighted,
+        hstring const& design) const {
+        auto find=[&](std::vector<contracts::ChartMetadata> const& charts,std::string const& id) {
+            auto found=std::ranges::find(charts,id,&contracts::ChartMetadata::id);
+            return found==charts.end()?nullptr:&*found;
+        };
+        using Kind=settings::ChartMutation;
+        auto apply=L" Select “Use selected chart” to apply it.";
+        if (pending.kind==Kind::add) {
+            auto const* chart=highlighted.empty()?nullptr:find(p.charts,highlighted);
+            return chart?L"Imported "+ChartLabel(*chart)+L". It is highlighted, not applied."+apply:
+                L"Imported "+to_hstring(pending.name)+L". Choose it in the list, then select “Use selected chart”.";
+        }
+        if (pending.kind==Kind::replace) {
+            auto const* chart=find(p.charts,pending.id);
+            if (!chart) return {};
+            return L"Replaced "+ChartLabel(*chart)+(p.selected_id==pending.id?hstring{L". It is active in the preview."}:
+                hstring{L". It is not applied."}+apply);
+        }
+        if (pending.kind==Kind::remove) {
+            auto const* chart=find(pending.before,pending.id);
+            return L"Removed "+(chart?to_hstring(chart->name):hstring{L"the imported chart"})+L".";
+        }
+        if (pending.kind==Kind::select) {
+            auto const* chart=find(p.charts,pending.id);
+            return p.selected_id==pending.id&&chart?L"Using imported chart "+ChartLabel(*chart)+L" in the preview.":
+                hstring{L"The imported chart selection was not retained by the host."};
+        }
+        if (pending.kind==Kind::clear)
+            return p.selected_id.empty()?L"Imported chart cleared. The selected design resumes: "+design+L".":
+                hstring{L"The host kept an imported chart selected."};
+        return {};
+    }
+    static hstring DesignName(contracts::Configuration const& configuration) {
+        switch (configuration.design_selection) {
+        case contracts::DesignSelection::by_app: return L"By app";
+        case contracts::DesignSelection::shared_zigzag: return L"Shared Zigzag";
+        case contracts::DesignSelection::original: {
+            auto theme=designs::ws_design_theme_by_id(configuration.design_id.c_str());
+            return theme?to_hstring(theme->name):hstring{L"Original design"};
+        }
+        default: return L"Plain knit";
+        }
+    }
+    void RenderImports(settings::ConnectionState const& state) {
+        bool settled=import_generation_ && state.settled_edit_generation>=import_generation_;
+        std::string highlight;
+        if (settled) {
+            import_generation_=0;
+            bool saved=state.status==contracts::Status::saved;
+            rules_draft_.Settle(saved);
+            auto pending=std::exchange(pending_chart_,PendingChart{});
+            if (saved && pending.kind!=settings::ChartMutation::none) {
+                auto const& after=state.configuration.imports;
+                highlight=settings::ChartToHighlight(pending.kind,pending.name,pending.id,pending.before,after.charts,
+                    chart_choice_revision_!=pending.choice_revision,saved);
+                import_result_=ChartResult(pending,after,highlight,DesignName(state.configuration));
+                import_result_revision_=state.configuration.revision;
+            }
+        }
+        auto const& p=state.configuration.imports;
+        if (!rendered_imports_ || *rendered_imports_!=p) {
+            updating_imports_=true;
+            if (!rules_draft_.Dirty()) rules_.Text(to_hstring(p.document));
+            auto selected=SelectedChart();
+            charts_.Items().Clear();
+            int selectedIndex=-1;
+            for (auto const& c:p.charts) {
+                ComboBoxItem item;
+                item.Content(box_value(ChartLabel(c)+(c.id==p.selected_id?L" · active":L"")));
+                item.Tag(box_value(to_hstring(c.id))); charts_.Items().Append(item);
+                if (c.id==selected) selectedIndex=static_cast<int>(charts_.Items().Size()-1);
+            }
+            charts_.SelectedIndex(selectedIndex);
+            std::wstring diagnostics;
+            for (std::size_t i=0;i<p.diagnostics.size();++i) {
+                auto const& d=p.diagnostics[i];
+                diagnostics+=L"Rule "+std::to_wstring(i+1)+L": "+
+                    (d.match==contracts::RuleMatch::matched?L"matched identity":d.match==contracts::RuleMatch::ambiguous?L"ambiguous — not bound":L"unmatched — not bound");
+                for (auto const& candidate:d.candidates) diagnostics+=L"\n  "+candidate.Key();
+                diagnostics+=L"\n";
+            }
+            rule_diagnostics_.Text(diagnostics.empty()?L"No imported rules.":diagnostics);
+            std::wstring bindings;
+            for (auto const& b:p.bindings) {
+                wchar_t rgb[8]{}; swprintf_s(rgb,L"#%06X",b.rule.base_argb&0xffffffu);
+                std::wstring source=b.explicit_edit?std::wstring(L"explicit edit"):
+                    L"prefix "+std::wstring(to_hstring(b.rule.original_prefix));
+                std::wstring chart=b.rule.chart_name?std::wstring(to_hstring(*b.rule.chart_name)):std::wstring(L"plain");
+                bindings+=b.application.Key()+L"\n  "+source+L" · "+rgb+L" · "+chart+L"\n";
+            }
+            saved_bindings_.Text(bindings.empty()?L"No saved personal bindings.":bindings);
+            personal_summary_.Text(std::to_wstring(p.charts.size())+(p.charts.size()==1?L" chart · ":L" charts · ")+
+                std::to_wstring(p.bindings.size())+(p.bindings.size()==1?L" saved binding":L" saved bindings"));
+            rendered_imports_=p; updating_imports_=false;
+        } else if (settled && !rules_draft_.Dirty()) {
+            updating_imports_=true; rules_.Text(to_hstring(p.document)); updating_imports_=false;
+        }
+        if (!highlight.empty()) { updating_imports_=true; SelectChart(highlight); updating_imports_=false; }
+        EnableImports(state.connected && state.configuration_authoritative && !draft_.Pending() && !state.pending);
+        if (import_generation_ || state.pending) import_status_.Text(L"Validating and saving on the host…");
+        else if (!state.import_failure.reason.empty())
+            import_status_.Text(L"Import rejected: "+to_hstring(state.import_failure.reason)+
+                (state.import_failure.line?L" · line "+std::to_wstring(state.import_failure.line):L"")+
+                L". Previous committed charts and colors remain active.");
+        else if (state.status==contracts::Status::saved) {
+            auto saved=L"Host-owned imports · saved revision "+std::to_wstring(state.configuration.revision);
+            if (!import_result_.empty() && import_result_revision_==state.configuration.revision)
+                import_status_.Text(import_result_+L" ("+hstring(saved)+L")");
+            else import_status_.Text(saved);
+        }
+        else import_status_.Text(state.detail);
     }
     void EnableApps(bool enabled) {
         enabled=enabled && presentation_ready_ && !presentation_failed_;
@@ -413,11 +869,11 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             AutomationProperties::SetName(toggle,label+L" sweater enabled");
             AutomationProperties::SetHelpText(toggle,row.identity.Key());
             panel.Children().Append(toggle);
-            auto presence=TextBlock{};
+            auto presence=TextBlock{}; StyleSecondary(presence);
             panel.Children().Append(presence);
             auto identity=TextBlock{}; identity.Text(row.identity.Key()); identity.TextWrapping(TextWrapping::Wrap);
-            identity.FontSize(12); panel.Children().Append(identity);
-            auto remove=Button{}; remove.Content(box_value(L"Remove saved choice"));
+            StyleSecondary(identity); panel.Children().Append(identity);
+            auto remove=Button{}; remove.Content(box_value(L"Remove saved choice")); remove.MinHeight(44);
             AutomationProperties::SetName(remove,L"Remove saved choice for "+label);
             remove.Visibility(Visibility::Collapsed); panel.Children().Append(remove);
             remove.Click([weak,key=row.identity](auto const&,auto const&) {
@@ -484,7 +940,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             apps_list_.Items().RemoveAtEnd(); app_diagnostics_.pop_back();
         }
         while (app_diagnostics_.size()<snapshot.unavailable.size()) {
-            auto diagnostic=TextBlock{}; diagnostic.TextWrapping(TextWrapping::Wrap);
+            auto diagnostic=TextBlock{}; diagnostic.TextWrapping(TextWrapping::Wrap); StyleSecondary(diagnostic);
             apps_list_.Items().Append(diagnostic); app_diagnostics_.push_back(diagnostic);
         }
         for (std::size_t index=0;index<snapshot.unavailable.size();++index) {
@@ -531,6 +987,22 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         bool changed=apps_draft_.Apply(state);
         if (changed && (!rendered_apps_ || *rendered_apps_!=apps_draft_.Controls())) DrawApps(apps_draft_.Controls());
         auto const& connection=apps_draft_.Current().connection;
+        if (changed) {
+            auto selected=color_app_.SelectedIndex();
+            std::optional<applications::AppIdentity> identity;
+            if (selected>=0 && static_cast<std::size_t>(selected)<color_identities_.size()) identity=color_identities_[selected];
+            std::vector<applications::AppIdentity> next;
+            for (auto const& row:apps_draft_.Controls().applications) next.push_back(row.identity);
+            if (next!=color_identities_) {
+                color_app_.Items().Clear(); color_identities_=std::move(next);
+                int index=0;
+                for (auto const& row:apps_draft_.Controls().applications) {
+                    color_app_.Items().Append(box_value(row.identity.Key()));
+                    if (identity && *identity==row.identity) color_app_.SelectedIndex(index);
+                    ++index;
+                }
+            }
+        }
         EnableApps(apps_draft_.CanInteract());
         std::wstring status=connection.detail;
         if (connection.connected) {
@@ -650,6 +1122,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         if (closed_) return;
         auto update=draft_.Apply(state);
         if (!update.accepted) return;
+        RenderImports(state);
         updating_=true;
         if (update.controls_changed && (!rendered_appearance_ ||
             !settings::SameAppearance(*rendered_appearance_,draft_.Controls()))) {
@@ -695,7 +1168,12 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         } else {
             preview_label=L"Committed preview · revision "+to_hstring(configuration.revision);
         }
-        if (configuration.design_selection==contracts::DesignSelection::by_app)
+        auto const& imported_selection=configuration.imports.selected_id;
+        if (!imported_selection.empty()) {
+            auto chart=std::ranges::find(configuration.imports.charts,imported_selection,&contracts::ChartMetadata::id);
+            preview_label=chart==configuration.imports.charts.end()?preview_label+L" · selected imported chart metadata unavailable":
+                L"Imported "+to_hstring(chart->name)+L" · revision "+to_hstring(chart->revision)+L" · "+preview_label;
+        } else if (configuration.design_selection==contracts::DesignSelection::by_app)
             preview_label=preview_label+L" · representative Finder palette; actual apps differ";
         else if (configuration.design_selection==contracts::DesignSelection::shared_zigzag)
             preview_label=preview_label+L" · representative yarn; each app uses its own icon colors";
@@ -748,6 +1226,13 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     TextBlock preview_status_{nullptr},rows_label_{nullptr};
     TextBlock width_label_{nullptr},status_{nullptr};
     Button reset_{nullptr};
+    ResourceDictionary styles_{nullptr};
+    Grid page_{nullptr},root_{nullptr};
+    StackPanel left_{nullptr},right_{nullptr},plain_group_{nullptr};
+    Expander yarn_expander_{nullptr},personal_expander_{nullptr};
+    Border yarn_swatch_{nullptr};
+    TextBlock yarn_hex_{nullptr},saved_bindings_{nullptr},personal_summary_{nullptr};
+    bool wide_{true};
     Button apps_all_on_{nullptr},apps_all_off_{nullptr};
     ToggleSwitch apps_default_{nullptr};
     ListView apps_list_{nullptr};
@@ -773,6 +1258,21 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     std::uint64_t preview_generation_=0;
     std::optional<contracts::Configuration> preview_configuration_;
     settings::DraftState draft_;
+    TextBox rules_{nullptr},chart_name_{nullptr},app_rgb_{nullptr};
+    TextBlock import_status_{nullptr},rule_diagnostics_{nullptr};
+    Button rules_save_{nullptr},rules_import_{nullptr},chart_add_{nullptr},chart_select_{nullptr},
+        chart_replace_{nullptr},chart_remove_{nullptr},chart_plain_{nullptr},app_color_save_{nullptr};
+    TextBlock chart_summary_{nullptr};
+    PendingChart pending_chart_;
+    hstring import_result_;
+    std::uint64_t import_result_revision_{},chart_choice_revision_{};
+    bool imports_enabled_{};
+    ComboBox charts_{nullptr},color_app_{nullptr};
+    std::vector<applications::AppIdentity> color_identities_;
+    std::optional<contracts::ImportPreferences> rendered_imports_;
+    std::uint64_t import_generation_{};
+    bool updating_imports_{},picker_pending_{};
+    settings::RulesDraft rules_draft_;
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {

@@ -108,6 +108,23 @@ void Schema3Migration(const std::filesystem::path& root) {
         original.eligibility.Apply(mutation));
     Check(storage.Save(original)==0,"Prepare isolated framed disk fixture through production writer");
     auto schema3=Bytes(storage.File());
+    std::uint32_t frameLength=0;
+    for (unsigned i=0;i<4;++i) frameLength|=static_cast<unsigned char>(schema3[12+8+i])<<(8*i);
+    std::size_t offset=12+frame_size;
+    while (offset<12+frameLength) {
+        std::uint32_t tag=0,size=0;
+        for (unsigned i=0;i<4;++i) {
+            tag|=static_cast<unsigned char>(schema3[offset+i])<<(8*i);
+            size|=static_cast<unsigned char>(schema3[offset+4+i])<<(8*i);
+        }
+        if (tag==6) {
+            schema3.erase(schema3.begin()+offset,schema3.begin()+offset+8+size);
+            frameLength-=8+size; break;
+        }
+        offset+=8+size;
+    }
+    schema3.resize(12+frameLength+4);
+    Put(schema3,12+8,frameLength); Put(schema3,8,schema3.size());
     Put(schema3,4,3); Put(schema3,12+4,4,2); Put(schema3,12+64,3);
     WriteRecord(storage.File(),schema3);
     const auto unchanged=Bytes(storage.File());
@@ -126,14 +143,14 @@ void Schema3Migration(const std::filesystem::path& root) {
     bad=unchanged; Put(bad,4,4); WriteRecord(storage.File(),bad);
     Check(storage.Load().state==configuration::StorageState::corrupt,
         "Outer schema4 cannot disguise a protocol4/schema3 frame");
-    bad=unchanged; Put(bad,4,5); WriteRecord(storage.File(),bad);
+    bad=unchanged; Put(bad,4,configuration_schema+1); WriteRecord(storage.File(),bad);
     const auto future=Bytes(storage.File());
     Check(storage.Load().state==configuration::StorageState::newer_schema && storage.Save({})!=0 &&
         Bytes(storage.File())==future,"Newer disk schema is preserved until explicit recovery");
     WriteRecord(storage.File(),unchanged);
     auto next=original; ++next.revision; next.design_selection=DesignSelection::shared_zigzag;
-    Check(storage.Save(next)==0 && storage.Load().configuration==next && Bytes(storage.File())[4]==4,
-        "First successful semantic mutation durably upgrades schema3 to schema4");
+    Check(storage.Save(next)==0 && storage.Load().configuration==next && Bytes(storage.File())[4]==5,
+        "First successful semantic mutation durably upgrades schema3 to schema5");
 }
 struct Observed {
     std::mutex mutex;

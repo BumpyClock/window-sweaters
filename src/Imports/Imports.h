@@ -125,6 +125,7 @@ struct FileImport {
 // Absolute drive paths only, fixed/removable local disks, no reparse traversal.
 // Reads a bounded, stable ordinary file without writes or execution.
 Result<FileImport> ImportPngFile(std::wstring_view absolute_path);
+Result<std::string> ImportRulesFile(std::wstring_view absolute_path);
 
 class ImportedChart final {
 public:

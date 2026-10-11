@@ -192,6 +192,7 @@ contracts::Message Exchange(std::wstring const& endpoint, std::filesystem::path 
         response.request_id!=request.request_id || response.client!=request.client ||
         contracts::EmptyIdentity(response.server) ||
         response.response_to!=request.operation ||
+        (request.operation==contracts::Operation::imports && response.import_edit!=request.import_edit) ||
         (request.operation!=contracts::Operation::snapshot && request.operation!=contracts::Operation::applications_snapshot && response.server!=request.server &&
          response.status!=contracts::Status::wrong_instance) ||
         (request.operation!=contracts::Operation::snapshot && request.operation!=contracts::Operation::applications_snapshot && response.client_lease!=request.client_lease) ||

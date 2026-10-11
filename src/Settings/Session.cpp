@@ -81,6 +81,7 @@ struct Session::Impl {
     std::uint64_t request_id=0;
     std::uint64_t last_edit_generation=0;
     bool stop=false,ever_connected=false,launch_attempted=false;
+    bool import_busy=false;
     std::thread worker;
     ConnectionState view;
     Message last_snapshot;
@@ -97,6 +98,7 @@ struct Session::Impl {
         view.pending=false;
         std::lock_guard lock(mutex);
         desired.reset(); view.settled_edit_generation=last_edit_generation;
+        import_busy=false;
     }
     void Run() noexcept {
         for (;;) {
@@ -138,6 +140,8 @@ struct Session::Impl {
                             if (command.request.server==commit.server && command.request.client_lease==commit.lease &&
                                 command.displayed==commit.before) {
                                 command.request.configuration.revision=commit.after.revision;
+                                command.request.configuration.eligibility=commit.after.eligibility;
+                                command.request.configuration.imports=commit.after.imports;
                                 command.displayed=commit.after;
                                 commit.last_used=++own_clock;
                                 break;
@@ -150,9 +154,39 @@ struct Session::Impl {
                     if (Stopped()) return;
                     view.pending=true; view.detail=L"Saving…"; Publish();
                     auto result=transport.exchange(in_flight->request,cancel.get());
+                    if (in_flight->request.operation==Operation::imports &&
+                        (result.operation!=Operation::response || result.response_to!=Operation::imports ||
+                            result.import_edit!=in_flight->request.import_edit || result.client!=client ||
+                            result.request_id!=in_flight->request.request_id ||
+                            (result.server!=in_flight->request.server && result.status!=Status::wrong_instance) ||
+                            result.client_lease!=in_flight->request.client_lease))
+                        throw std::runtime_error("Invalid import acknowledgement");
                     auto acknowledged=in_flight->request.operation==Operation::reset
                         ? Configuration{} : in_flight->request.configuration;
+                    if (in_flight->request.operation==Operation::reset)
+                        acknowledged.imports.high_water=in_flight->displayed.imports.high_water;
+                    else if (in_flight->request.operation==Operation::mutate) {
+                        acknowledged.eligibility=in_flight->displayed.eligibility;
+                        acknowledged.imports=in_flight->displayed.imports;
+                        if (acknowledged.design_selection!=in_flight->displayed.design_selection ||
+                            acknowledged.design_id!=in_flight->displayed.design_id)
+                            acknowledged.imports.selected_id.clear();
+                    }
                     acknowledged.revision=in_flight->request.configuration.revision+1;
+                    if (in_flight->request.operation==Operation::imports) {
+                        auto unchanged=result.configuration;
+                        unchanged.imports=in_flight->request.configuration.imports;
+                        unchanged.revision=in_flight->request.configuration.revision;
+                        auto expected=in_flight->request.configuration;
+                        if (std::holds_alternative<SelectPng>(in_flight->request.import_edit)) {
+                            expected.design_selection=DesignSelection::plain; expected.design_id.clear();
+                        }
+                        if (result.status==Status::saved &&
+                            (unchanged!=expected || result.configuration.revision!=acknowledged.revision ||
+                                result.import_failure.code || !result.import_failure.reason.empty()))
+                            throw std::runtime_error("Import acknowledgement changed unrelated settings");
+                        acknowledged=result.configuration;
+                    }
                     if (result.status==Status::saved && result.server==in_flight->request.server &&
                         result.client_lease==in_flight->request.client_lease &&
                         in_flight->request.configuration.revision!=UINT64_MAX &&
@@ -171,6 +205,7 @@ struct Session::Impl {
                         } else own_commits.push_back(transition);
                     }
                     view.pending=false; view.status=result.status; view.error=result.error;
+                    view.import_failure=result.import_failure;
                     view.settled_edit_generation=std::max(view.settled_edit_generation,in_flight->edit_generation);
                     if (result.server!=last_snapshot.server || result.configuration.revision>=view.configuration.revision) {
                         view.configuration=result.configuration; last_snapshot=result;
@@ -179,6 +214,7 @@ struct Session::Impl {
                             (result.status==Status::storage_error && view.configuration_authoritative);
                     }
                     in_flight.reset();
+                    { std::lock_guard lock(mutex); import_busy=false; }
                     if (result.status==Status::conflict || result.status==Status::wrong_instance ||
                         result.status==Status::client_expired) DiscardRequests();
                     if (result.status==Status::wrong_instance || result.status==Status::client_expired) {
@@ -234,10 +270,25 @@ std::uint64_t Session::Change(ConnectionState const& displayed,Configuration con
     request.operation=Operation::mutate; request.client=impl_->client;
     request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
     std::lock_guard lock(impl_->mutex);
+    if (impl_->import_busy) return 0;
     auto generation=++impl_->last_edit_generation;
     impl_->desired=Impl::Desired{request,displayed.configuration,generation};
     impl_->due=std::chrono::steady_clock::now()+std::chrono::milliseconds(150);
     impl_->wake.notify_one();
+    return generation;
+}
+std::uint64_t Session::Import(ConnectionState const& displayed,ImportMutation mutation) {
+    if (!displayed.connected || !displayed.configuration_authoritative || !displayed.client_lease ||
+        EmptyIdentity(displayed.server_instance)) return 0;
+    Message request; request.operation=Operation::imports; request.configuration=displayed.configuration;
+    request.client=impl_->client; request.server=displayed.server_instance; request.client_lease=displayed.client_lease;
+    request.import_edit=std::move(mutation);
+    try { (void)Encode(request); } catch (std::exception const&) { return 0; }
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->stop || impl_->import_busy || impl_->last_edit_generation>displayed.settled_edit_generation) return 0;
+    auto generation=++impl_->last_edit_generation;
+    impl_->desired=Impl::Desired{std::move(request),displayed.configuration,generation};
+    impl_->import_busy=true; impl_->due=std::chrono::steady_clock::now(); impl_->wake.notify_one();
     return generation;
 }
 std::uint64_t Session::Reset(ConnectionState const& displayed) {

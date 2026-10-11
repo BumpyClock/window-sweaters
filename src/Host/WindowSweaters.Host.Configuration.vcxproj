@@ -29,6 +29,11 @@
   </ItemDefinitionGroup>
   <!-- The same configuration implementation has separate CRT ownership and object paths for Host and Settings. -->
   <ItemGroup>
+    <ClCompile Include="..\Configuration\ImportState.cpp" />
+    <ClCompile Include="..\Imports\Rules.cpp" />
+    <ClCompile Include="..\Imports\Png.cpp" />
+    <ClCompile Include="..\Imports\Deflate.cpp" />
+    <ClCompile Include="..\Imports\Catalogue.cpp"><ObjectFileName>$(IntDir)ImportsCatalogue.obj</ObjectFileName></ClCompile>
     <ClCompile Include="..\Configuration\Storage.cpp" />
     <ClCompile Include="..\Configuration\Pipe.cpp" />
     <ClCompile Include="..\Configuration\ConfigurationServer.cpp" />

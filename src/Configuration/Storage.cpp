@@ -9,6 +9,7 @@ namespace window_sweaters::configuration {
 namespace {
 constexpr std::size_t legacy_disk_size = 32;
 constexpr std::size_t disk_size = 120;
+constexpr std::size_t maximum_disk_bytes = imports::maximum_catalogue_bytes + contracts::maximum_payload_bytes + 65536;
 std::uint32_t Crc(std::span<std::byte const> bytes) noexcept {
     std::uint32_t crc=0xffffffff;
     for (auto byte : bytes) {
@@ -64,11 +65,11 @@ LoadedConfiguration Storage::Load() const noexcept {
             result.state=StorageState::newer_schema; return result;
         }
         if (read<8 || size.QuadPart<legacy_disk_size ||
-            size.QuadPart>static_cast<LONGLONG>(contracts::maximum_payload_bytes+16)) {
+            size.QuadPart>static_cast<LONGLONG>(maximum_disk_bytes)) {
             result.state=StorageState::corrupt; return result;
         }
         auto schema=Get(header,4,4);
-        if ((schema==3 || schema==4) &&
+        if ((schema==3 || schema==4 || schema==5) &&
             (read!=12 || Get(header,8,4)!=static_cast<std::uint64_t>(size.QuadPart))) {
             result.state=StorageState::corrupt; return result;
         }
@@ -79,29 +80,74 @@ LoadedConfiguration Storage::Load() const noexcept {
             result.state=StorageState::io_error; result.error=GetLastError(); return result;
         }
         if (read!=bytes.size()) { result.state=StorageState::corrupt; return result; }
-        if (schema==3 || schema==4) {
+        if (schema==3 || schema==4 || schema==5) {
             contracts::Message decoded;
             if (Get(bytes,0,4)!=0x31435357 ||
                 bytes.size()<12+contracts::frame_size+16+4 ||
                 Get(bytes,bytes.size()-4,4)!=Crc(std::span(bytes).first(bytes.size()-4))) {
                 result.state=StorageState::corrupt; return result;
             }
-            // Only disk schema3 migrates protocol4. Network clients must speak protocol5.
-            if (schema==3) {
-                if (Get(bytes,12+4,2)!=4 || Get(bytes,12+64,4)!=3 ||
-                    Get(bytes,12+88,4)>static_cast<unsigned>(contracts::DesignSelection::by_app)) {
-                    result.state=StorageState::corrupt; return result;
-                }
-                Put(bytes,12+4,contracts::protocol_version,2);
-                Put(bytes,12+64,contracts::configuration_schema,4);
-            } else if (Get(bytes,12+64,4)!=schema) {
+            const auto frame_length=Get(bytes,12+8,4);
+            if (frame_length>contracts::maximum_payload_bytes || frame_length>bytes.size()-16 ||
+                frame_length<contracts::frame_size+16) {
                 result.state=StorageState::corrupt; return result;
             }
-            if (!contracts::Decode(std::span(bytes).subspan(12,bytes.size()-16),decoded) ||
+            std::vector<std::byte> frame(bytes.begin()+12,bytes.begin()+12+static_cast<std::size_t>(frame_length));
+            if (schema<5) {
+                if (Get(frame,4,2)!=(schema==3?4u:5u) || Get(frame,64,4)!=schema ||
+                    frame_length!=bytes.size()-16 ||
+                    (schema==3 && Get(frame,88,4)>static_cast<unsigned>(contracts::DesignSelection::by_app))) {
+                    result.state=StorageState::corrupt; return result;
+                }
+                Put(frame,4,contracts::protocol_version,2);
+                Put(frame,64,contracts::configuration_schema,4);
+                contracts::payload::Writer empty;
+                contracts::payload::Imports(empty,{});
+                const auto offset=frame.size(); frame.resize(offset+8);
+                Put(frame,offset,6,4); Put(frame,offset+4,empty.bytes.size(),4);
+                frame.insert(frame.end(),empty.bytes.begin(),empty.bytes.end());
+                Put(frame,8,frame.size(),4);
+            } else if (Get(frame,64,4)!=schema) {
+                result.state=StorageState::corrupt; return result;
+            }
+            if (!contracts::Decode(frame,decoded) ||
                 decoded.operation!=contracts::Operation::snapshot || decoded.request_id ||
                 !contracts::EmptyIdentity(decoded.client) || !contracts::EmptyIdentity(decoded.server) ||
                 decoded.client_lease || decoded.error || decoded.status!=contracts::Status::saved) {
                 result.state=StorageState::corrupt; return result;
+            }
+            if (schema==5) {
+                contracts::payload::Reader reader(std::span<const std::byte>(bytes).subspan(
+                    12+static_cast<std::size_t>(frame_length),bytes.size()-16-static_cast<std::size_t>(frame_length)));
+                imports::StoredCatalogue stored;
+                auto rules=imports::ParseRules(decoded.configuration.imports.document);
+                auto parsed=std::get_if<imports::ParsedRules>(&rules);
+                std::uint64_t high{},count{};
+                if (!parsed || !reader.Number(high,8) || !reader.Number(count) || count>imports::maximum_effective_charts) {
+                    result.state=StorageState::corrupt; return result;
+                }
+                stored.rules=*parsed; stored.revision_high_water=high;
+                for (std::size_t i=0;i<count;++i) {
+                    imports::StoredChart c; std::uint64_t flags{},corner{},cuff{},length{};
+                    if (!contracts::payload::Utf8(reader,c.id,80) || !contracts::payload::Utf8(reader,c.name,63) ||
+                        !contracts::payload::Utf8(reader,c.revision,71) || !reader.Number(c.content_revision,8) ||
+                        !reader.Number(flags) || !reader.Number(corner) || !reader.Number(cuff) ||
+                        !reader.Number(length) || !length || length>imports::maximum_png_bytes ||
+                        length>reader.bytes.size()-reader.offset) {
+                        result.state=StorageState::corrupt; return result;
+                    }
+                    c.material={static_cast<std::uint32_t>(flags),static_cast<std::uint32_t>(corner),static_cast<std::uint32_t>(cuff)};
+                    c.encoded_png.reserve(static_cast<std::size_t>(length));
+                    for (std::size_t j=0;j<length;++j)
+                        c.encoded_png.push_back(std::to_integer<std::uint8_t>(reader.bytes[reader.offset++]));
+                    stored.charts.push_back(std::move(c));
+                }
+                auto restored=imports::RestoreCatalogue(stored);
+                auto catalogue=std::get_if<imports::ImportCatalogue>(&restored);
+                if (!reader.Done() || !catalogue || !ValidImportState(decoded.configuration.imports,*catalogue)) {
+                    result.state=StorageState::corrupt; return result;
+                }
+                result.catalogue=std::make_shared<const imports::ImportCatalogue>(std::move(*catalogue));
             }
             result.configuration=std::move(decoded.configuration); return result;
         }
@@ -153,9 +199,44 @@ LoadedConfiguration Storage::Load() const noexcept {
     return result;
 }
 DWORD Storage::Save(contracts::Configuration const& value, bool explicit_reset) const noexcept {
+    try {
+        auto loaded=Load();
+        if (!explicit_reset) return Save(value,loaded.catalogue);
+        imports::StoredCatalogue empty;
+        empty.revision_high_water=loaded.catalogue->RevisionHighWater();
+        auto restored=imports::RestoreCatalogue(empty);
+        auto catalogue=std::make_shared<const imports::ImportCatalogue>(
+            std::get<imports::ImportCatalogue>(std::move(restored)));
+        auto reset=value; reset.imports={}; DescribeCatalogue(reset.imports,*catalogue);
+        return Save(reset,catalogue,true);
+    } catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+}
+DWORD Storage::Save(contracts::Configuration const& value, CatalogueSnapshot const& catalogue, bool explicit_reset) const noexcept {
     std::filesystem::path staged;
     try {
-        if (!contracts::Valid(value)) return ERROR_INVALID_DATA;
+        if (!contracts::Valid(value) || !catalogue || !ValidImportState(value.imports,*catalogue)) return ERROR_INVALID_DATA;
+        auto stored=imports::StoreCatalogue(*catalogue);
+        if (std::holds_alternative<imports::Error>(stored)) return ERROR_INVALID_DATA;
+        contracts::Message record; record.configuration=value;
+        auto payload=contracts::Encode(record);
+        std::vector<std::byte> bytes(12);
+        bytes.insert(bytes.end(),payload.begin(),payload.end());
+        contracts::payload::Writer charts(maximum_disk_bytes);
+        auto const& data=std::get<imports::StoredCatalogue>(stored);
+        charts.Number(*data.revision_high_water,8); charts.Number(data.charts.size());
+        for (auto const& c:data.charts) {
+            contracts::payload::Utf8(charts,c.id,80); contracts::payload::Utf8(charts,c.name,63);
+            contracts::payload::Utf8(charts,c.revision,71); charts.Number(c.content_revision,8);
+            charts.Number(c.material.flags); charts.Number(c.material.corner_argb); charts.Number(c.material.cuff_argb);
+            charts.Number(c.encoded_png.size());
+            if (c.encoded_png.size()>charts.limit-charts.bytes.size()) return ERROR_INVALID_DATA;
+            auto encoded=std::as_bytes(std::span(c.encoded_png));
+            charts.bytes.insert(charts.bytes.end(),encoded.begin(),encoded.end());
+        }
+        bytes.insert(bytes.end(),charts.bytes.begin(),charts.bytes.end()); bytes.resize(bytes.size()+4);
+        if (bytes.size()>maximum_disk_bytes) return ERROR_INVALID_DATA;
+        Put(bytes,0,0x31435357,4); Put(bytes,4,value.schema,4); Put(bytes,8,bytes.size(),4);
+        Put(bytes,bytes.size()-4,Crc(std::span(bytes).first(bytes.size()-4)),4);
         auto existing=Load();
         if (existing.state==StorageState::io_error) return existing.error;
         if (existing.state!=StorageState::ready && !explicit_reset) return ERROR_INVALID_DATA;
@@ -173,12 +254,6 @@ DWORD Storage::Save(contracts::Configuration const& value, bool explicit_reset) 
             Handle handle(CreateFileW(staged.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,
                                       FILE_ATTRIBUTE_NORMAL|FILE_FLAG_WRITE_THROUGH,nullptr));
             if (!handle) return GetLastError();
-            contracts::Message record; record.configuration=value;
-            auto payload=contracts::Encode(record);
-            std::vector<std::byte> bytes(12);
-            bytes.insert(bytes.end(),payload.begin(),payload.end()); bytes.resize(bytes.size()+4);
-            Put(bytes,0,0x31435357,4); Put(bytes,4,value.schema,4); Put(bytes,8,bytes.size(),4);
-            Put(bytes,bytes.size()-4,Crc(std::span(bytes).first(bytes.size()-4)),4);
             if (!WriteFile(handle.get(),bytes.data(),static_cast<DWORD>(bytes.size()),&written,nullptr) ||
                 written!=bytes.size() || !FlushFileBuffers(handle.get())) {
                 auto failure=GetLastError();

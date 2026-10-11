@@ -12,7 +12,7 @@ schema-1 settings acquire that appearance default on read-only migration.
 Existing schema-2 material choices, including explicit Pattern knit, stay unchanged.
 
 Original charts use their authored material/stitches/corners/cuffs. Those plain
-controls are disabled while an original/by-app/shared-Zigzag design is selected. Raised plain
+controls are hidden while an original/by-app/shared-Zigzag design is selected. Raised plain
 material uses stockinette; returning to Pattern knit restores the retained plain
 stitch. By-app preview is explicitly a **Finder example**, not an application
 resolver. The host owns actual app resolution and application of these settings.
@@ -51,8 +51,40 @@ A fresh admitted snapshot after host restart or client-lease expiry clears the
 transient expiry status and confirms its complete configuration. A later
 disconnect therefore retains the renewed host's latest appearance, not a
 previous instance's values. Publication/edit/confirmation metadata is local to
-Settings; protocol 5 preserves this local ordering contract while schema 4 adds
-the distinct shared mode and retains persisted eligibility.
+Settings; protocol 6 preserves this local ordering contract while schema 5 adds
+owned personal imports and retains the existing shared mode and eligibility.
+
+## Preview-first layout
+
+The redesigned native window groups connection/recovery status, the production
+preview, pause, and width before appearance, applications, and personal designs.
+A stable Grid switches between wide two-column and compact single-column layouts
+inside one ScrollViewer. Controls are not reparented during resizing.
+The initial window fits the current monitor's work area; there is no minimum
+size that forces it beyond a small or high-DPI display.
+
+Cards use Fluent theme resources and native controls rather than a separate
+hard-coded palette. The yarn color picker is an Expander with a color swatch and
+hex summary. Personal-design errors remain outside the collapsed import controls.
+The imported-chart preview identifies the asset name and revision; By app and
+Shared Zigzag remain explicitly representative.
+
+Rule diagnostics distinguish an identity match from an applied binding.
+Only the separately displayed saved bindings are the host's winning
+longest-prefix or explicit application choices. Ambiguous and unmatched rules
+are not silently applied.
+
+Importing a PNG highlights its newly saved chart without applying it.
+The imported-chart list uses a nonsemantic placeholder; Use selected chart
+requires a known asset and reports the active name and revision. Clear imported
+chart clears the manual override and the host selects Plain knit; its status
+names the resulting committed design.
+Unsaved rule text survives chart and application-color saves, failed document
+saves, and older acknowledgments received after newer text edits.
+
+Debug/Release compilation and Session/Apps checks are not visual qualification.
+Native light/dark/high-contrast output, compact layout, tab order, and resizing
+with focused application controls require inspection of the redesigned window.
 
 ## Applications
 

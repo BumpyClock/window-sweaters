@@ -1,5 +1,6 @@
 #pragma once
 #include "..\Contracts\Protocol.h"
+#include "ImportState.h"
 #include <filesystem>
 
 namespace window_sweaters::configuration {
@@ -8,12 +9,15 @@ struct LoadedConfiguration {
     StorageState state = StorageState::ready;
     contracts::Configuration configuration{};
     DWORD error = ERROR_SUCCESS;
+    CatalogueSnapshot catalogue=std::make_shared<const imports::ImportCatalogue>();
 };
 class Storage {
 public:
     explicit Storage(std::filesystem::path directory);
     LoadedConfiguration Load() const noexcept;
     DWORD Save(contracts::Configuration const& value, bool explicit_reset = false) const noexcept;
+    DWORD Save(contracts::Configuration const& value, CatalogueSnapshot const& catalogue,
+        bool explicit_reset = false) const noexcept;
     std::filesystem::path File() const { return directory_ / L"configuration.bin"; }
     std::filesystem::path Directory() const { return directory_; }
 private:

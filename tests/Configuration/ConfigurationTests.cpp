@@ -17,6 +17,7 @@ int RunIconModeTests(std::filesystem::path const& directory);
 int RunAppearanceTests(std::filesystem::path const& directory);
 int RunApplicationConfigurationTests(std::filesystem::path const& directory);
 int RunAppsSessionTests(std::filesystem::path const& directory);
+int RunImportsTests(std::filesystem::path const& directory);
 namespace {
 int checks=0;
 void Require(bool value,char const* label) {
@@ -315,12 +316,15 @@ int wmain(int argc,wchar_t** argv) {
             checks+=RunApplicationConfigurationTests(directory)+RunAppsSessionTests(directory);
         else if (argc==2 && std::wstring_view(argv[1])==L"--icon-mode-only")
             checks+=RunIconModeTests(directory);
+        else if (argc==2 && std::wstring_view(argv[1])==L"--imports-only")
+            checks+=RunImportsTests(directory);
         else {
             StorageCases(directory); IpcCases(directory); RecoveryIpc(directory); ClientLeaseCases(directory);
             checks+=RunSessionTests(directory); checks+=RunAppearanceTests(directory);
             checks+=RunApplicationConfigurationTests(directory);
             checks+=RunAppsSessionTests(directory);
             checks+=RunIconModeTests(directory);
+            checks+=RunImportsTests(directory);
         }
         std::filesystem::remove_all(directory);
         std::cout<<"PASS "<<checks<<" configuration/storage/real-pipe assertions\n"; return 0;

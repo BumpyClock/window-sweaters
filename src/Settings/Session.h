@@ -22,6 +22,7 @@ struct ConnectionState {
     std::uint64_t publication_sequence=0;
     std::uint64_t settled_edit_generation=0;
     bool configuration_authoritative=false;
+    contracts::ImportFailure import_failure;
     std::wstring detail=L"Connecting to the host…";
 };
 struct SessionTransport {
@@ -54,6 +55,7 @@ public:
     std::uint64_t Change(ConnectionState const& displayed,bool paused,float width);
     std::uint64_t Change(ConnectionState const& displayed,contracts::Configuration const& appearance);
     std::uint64_t Reset(ConnectionState const& displayed);
+    std::uint64_t Import(ConnectionState const& displayed,contracts::ImportMutation mutation);
     void RequestStop() noexcept;
     void Stop() noexcept;
 private:

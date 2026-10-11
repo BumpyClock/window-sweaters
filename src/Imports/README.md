@@ -1,9 +1,10 @@
 # Native personal imports
 
-This is the bounded, declarative module for issue #11, not a completed settings
-feature. It does not open settings, mutate applications, execute a startup
-script, write configuration, elevate, or retain an unchecked external reference.
-The immutable `Designs` catalogue is read-only.
+This bounded, declarative module supplies the personal-design feature in Settings.
+The host's configuration worker validates candidates and commits their owned
+contents; this module does not open Settings, execute scripts, write configuration,
+elevate, or retain unchecked external references. The immutable `Designs`
+catalogue is read-only.
 
 ## Provenance and compatibility
 
@@ -164,8 +165,11 @@ there is no broad exception catch or success fallback in production imports.
    Reject stale host/metadata generations and failed writes using the existing
    owner contract; retain the previous committed catalogue and rendered chart.
 
-The module supplies no host serialization schema, IPC message changes, settings
-controls, renderer mutation, user-configuration writes, or startup behavior.
+The configuration layer supplies schema-5/protocol-6 serialization, typed
+mutations and immutable owned snapshots. Native Settings uses those operations
+for rule text, PNG add/select/replace/remove, and explicit application colors.
+The renderer consumes copied literal chart cells and persisted content revisions.
+Startup behavior remains separate.
 Consumers link the SDK's `windowscodecs.lib`, `ole32.lib`, and `bcrypt.lib`,
 and the project-reference dependencies `Applications` and `Designs`.
 
@@ -203,10 +207,12 @@ omitted-chart plain, global-pattern override, preserved PNG color policy,
 and the exact stable-ID/numeric-revision adapter. They do not execute an icon
 worker or mutate any application.
 
-These establish native codec, local-file, and pure-model behavior only.
-Settings-to-host mutation, durable writes/restart, reconnect/deduplication,
-tile/cache integration, live automatic-icon precedence, and visual parity
-remain acceptance work. Issue #11 is not complete without those integrations.
+The module checks establish native codec, local-file, and pure-model behavior.
+Separate configuration/Session tests cover authenticated mutations, atomic saves,
+restart, acknowledged edit chaining, and persistent revision history. Hidden
+Host checks cover target/asset invalidation and icon/manual/personal precedence.
+Actual Settings interaction and visual import verification remain separate gates
+in `docs\parity.md`.
 
 Measured on Windows x64 build `10.0.26300.0`, Visual Studio v145/MSVC
 `14.51.36231`, SDK `10.0.26100.0`: focused Debug and Release builds completed

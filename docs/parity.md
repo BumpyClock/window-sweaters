@@ -15,11 +15,11 @@ This ledger tracks [issue #1](https://github.com/BumpyClock/window-sweaters/issu
 | [#8](https://github.com/BumpyClock/window-sweaters/issues/8) | Persistent application identity and exclusions | Host-owned persistence and native Apps controls integrated and independently reviewed | Computer Use verified per-app changes, default-off overrides, persistence across new PID/HWND, all-off before first rendering, and retained exact-control focus without the former viewport jump |
 | [#9](https://github.com/BumpyClock/window-sweaters/issues/9) | Verified Windows mappings and By App precedence | Per-target host resolution and bounded preview tracking integrated and independently reviewed | Clean Debug/Release: 487 Host checks, 616 adapter checks, 43 appearance comparisons, and 12 tracking scenarios plus hidden native tracking; Computer Use verified distinct Word/Excel sweaters and manual override |
 | [#10](https://github.com/BumpyClock/window-sweaters/issues/10) | Icon-derived colors, stable fallback, shared Zigzag | Host worker/resolver integration and distinct persisted mode independently reviewed | Clean Debug/Release: 558 Host, 619 adapter, and 1,279 configuration checks pass; positive native sampling and two Shared Zigzag restarts verified; earlier selection rejection remains unexplained |
-| [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Native import model independently reviewed; host/UI persistence pending | Debug/Release: 1,618 checks pass, including removal/reimport revision safety; real restart qualification pending |
+| [#11](https://github.com/BumpyClock/window-sweaters/issues/11) | Personal colorway rules and validated PNG charts | Host-owned storage, renderer/resolver and redesigned Settings integrated and independently reviewed | Final Debug/Release: 1,625 configuration assertions; 95 import scenarios and 641 hidden Host assertions; direct Computer Use verified selected personal-cu preview and live border |
 | [#12](https://github.com/BumpyClock/window-sweaters/issues/12) | Physical geometry, mixed DPI, Snap, clipping | Geometry and GPU corner policy integrated and independently reviewed | 1,645 focused geometry checks and actual GPU rounded-mask readback pass; normal fixture corners inspected at 100%; physical mixed-monitor matrix pending |
 | [#13](https://github.com/BumpyClock/window-sweaters/issues/13) | Desktop, session, and power visibility | Public-API visibility and host wiring independently reviewed | Ten native/model groups pass; current-desktop tool-window publication verified; actual switching/lock/sleep transitions pending |
 | [#14](https://github.com/BumpyClock/window-sweaters/issues/14) | Shared-device loss and generation-safe recovery | Bounded shared-device recovery integrated and independently reviewed | Injected real D3D/DComp reconstruction verified through Computer Use, with stable target and reused CPU yarn; actual driver reset remains unverified |
-| [#15](https://github.com/BumpyClock/window-sweaters/issues/15) | Bounded perimeter rendering and idle/movement invariants | Bounded preparation independently reviewed; four-surface host publication implemented | 23 native tests, 382 assertions pass per configuration; aggregate live compositor budgets pending |
+| [#15](https://github.com/BumpyClock/window-sweaters/issues/15) | Bounded perimeter rendering and idle/movement invariants | Bounded preparation independently reviewed; four-surface host publication implemented | Current Release preparation checks: 26 tests, 431 assertions; aggregate live compositor budgets pending |
 | [#16](https://github.com/BumpyClock/window-sweaters/issues/16) | Reversible packaged startup and resilient tray/shutdown | Native StartupTask controller independently reviewed; settings/tray persistence pending | State/cancellation checks pass; installed-package startup and Explorer restart pending |
 | [#17](https://github.com/BumpyClock/window-sweaters/issues/17) | Native MSIX and Microsoft Store preparation | In progress under the user's Store scope change | Development identity only; Partner Center identity, packaged execution, and Store submission pending |
 | [#18](https://github.com/BumpyClock/window-sweaters/issues/18) | Cross-feature parity and final qualification | Pending | Not release-qualified |
@@ -146,6 +146,64 @@ D3D/DirectComposition resources. The device generation advanced, the old overlay
 was replaced, the full target lifetime stayed unchanged, the current sweater
 returned, and CPU yarn-generation count remained constant. This does not claim
 an actual driver reset.
+
+## Current local working-source build
+
+The earlier original-catalogue build did not include the Windows-authored
+Store, Zed, and GitHub Copilot designs. The current source contains 55
+designs and an exact measured standalone GitHub Copilot path mapping.
+Resolver checks pass 604 assertions, including those mappings and literal palettes;
+application identity checks pass 728 assertions. These are model checks, not a
+live demonstration of every additional Windows design.
+
+The first local build overlapped other source edits and is not a frozen-source
+qualification. A transient renderer compilation failure involved the new ring
+shading variable; the current source has the corrected `tube` name. The requested
+updated artifact includes that new tube lighting. Its pixel changes require fresh
+visual qualification; earlier upstream-image metrics describe the older renderer.
+
+A restored Microsoft Store frame was rejected because its ordinary
+captioned `ApplicationFrameWindow` includes `WS_POPUP`. A narrow eligibility
+correction is committed as `f0ba646`, without admitting arbitrary popup windows
+or weakening the application-owner metadata gate.
+
+## Personal imports and Settings redesign
+
+Schema 5 and protocol 6 add bounded personal import metadata and a host-owned
+stored catalogue. Atomically stored PNG contents, exact application bindings and
+the catalogue revision high-water mark survive restart and final-chart removal.
+The native UI supports local rules files/text, chart add/select/replace/remove,
+and explicit application colors. Personal PNG colors remain literal.
+
+Review identified and corrected startup snapshot inconsistency, acknowledged
+edit-chain loss after selected-PNG clearing/reset, and unnecessary rerendering
+of unrelated manually styled owners. Retained review cleared those corrections.
+Final Debug/Release configuration checks pass 1,625 assertions; the corrected
+hidden Host checks pass 641 assertions. Model/hidden checks remain separate from
+desktop evidence.
+
+The Fluent-native redesign places status and preview before appearance,
+applications and personal designs. Stable containers adapt inside one scrolling
+root without reparenting controls. Imported previews identify the asset and
+revision; automatic-mode previews stay representative. A reviewed RulesDraft
+guard preserves unsaved rule text across unrelated import saves and newer edits
+across older acknowledgments.
+
+Direct Computer Use in a child agent inspected the exact reviewed Release
+Settings and matching import Host. Selecting personal-cu and Use selected chart
+committed revision 4 with asset ID
+`imported:sha256:32c2b9a728047b7e11e6f06d8c3983e1b731d29fa01b3d85b3e91c033db8f0f3`.
+The preview and live border both showed the literal pink/green chart, with zero
+appearance/render errors. The wide 1000×720 and maximized layouts were observed.
+Compact resizing was interrupted by user input. Alternate themes, physical input,
+and this manual import's restart persistence remain unverified.
+
+The direct tool reported a successful Close click without closing the Settings
+window. No WM_CLOSE receipt was established, so this is not proof of an
+application shutdown defect. The native system-menu attempt also exposed no
+Close action. The user then closed the isolated Settings window; process
+observation confirmed all test apps exited. No process kill or shell-input
+workaround was used.
 
 ## Native application exclusions
 

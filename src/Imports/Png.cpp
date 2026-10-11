@@ -393,8 +393,13 @@ Result<DecodedChart> DecodePng(std::span<const std::uint8_t> encoded) {
     });
 }
 
-Result<FileImport> ImportPngFile(std::wstring_view path) {
-    return detail::CheckedAllocation<FileImport>([&]() -> Result<FileImport> {
+namespace {
+struct LocalBytes {
+    std::vector<std::uint8_t> bytes;
+    LocalFileIdentity identity;
+};
+Result<LocalBytes> ReadLocalFile(std::wstring_view path, std::size_t maximum, bool allow_empty=false) {
+    return detail::CheckedAllocation<LocalBytes>([&]() -> Result<LocalBytes> {
         if (path.starts_with(L"\\\\"))
             return Error{ErrorCode::RemotePath, "UNC and device paths are not accepted"};
         if (!DrivePath(path) || path.size() <= 3 || path.size() > 32760 ||
@@ -442,9 +447,9 @@ Result<FileImport> ImportPngFile(std::wstring_view path) {
         }
         if (before.standard.DeletePending || before.standard.Directory)
             return Error{ErrorCode::NotOrdinaryFile, "Import file is being deleted or is a directory"};
-        if (before.standard.EndOfFile.QuadPart <= 0 ||
-            before.standard.EndOfFile.QuadPart > static_cast<LONGLONG>(maximum_png_bytes))
-            return Error{ErrorCode::EncodedLimit, "Import file must contain 1 byte..2 MiB"};
+        if (before.standard.EndOfFile.QuadPart < (allow_empty?0:1) ||
+            before.standard.EndOfFile.QuadPart > static_cast<LONGLONG>(maximum))
+            return Error{ErrorCode::EncodedLimit, "Import file exceeds its encoded byte limit"};
         auto& file = pinned.back();
         std::vector<wchar_t> final_path(32768);
         const auto final_length = GetFinalPathNameByHandleW(file.Get(), final_path.data(),
@@ -473,12 +478,29 @@ Result<FileImport> ImportPngFile(std::wstring_view path) {
         if (!SnapshotFile(file.Get(), after)) return FileError("Cannot revalidate import file identity");
         if (received || !SameFile(before, after))
             return Error{ErrorCode::FileChanged, "Import file identity or content metadata changed during read"};
-        auto decoded = DecodePng(bytes);
-        if (const auto* error = std::get_if<Error>(&decoded)) return *error;
         LocalFileIdentity identity{before.identity.VolumeSerialNumber, {}};
         std::copy(std::begin(before.identity.FileId.Identifier), std::end(before.identity.FileId.Identifier),
             identity.file_id.begin());
-        return FileImport{std::get<DecodedChart>(std::move(decoded)), identity};
+        return LocalBytes{std::move(bytes), identity};
+    });
+}
+}
+Result<FileImport> ImportPngFile(std::wstring_view path) {
+    return detail::CheckedAllocation<FileImport>([&]() -> Result<FileImport> {
+        auto read=ReadLocalFile(path,maximum_png_bytes);
+        if (auto error=std::get_if<Error>(&read)) return *error;
+        auto& local=std::get<LocalBytes>(read);
+        auto decoded=DecodePng(local.bytes);
+        if (auto error=std::get_if<Error>(&decoded)) return *error;
+        return FileImport{std::get<DecodedChart>(std::move(decoded)),local.identity};
+    });
+}
+Result<std::string> ImportRulesFile(std::wstring_view path) {
+    return detail::CheckedAllocation<std::string>([&]() -> Result<std::string> {
+        auto read=ReadLocalFile(path,maximum_rules_bytes,true);
+        if (auto error=std::get_if<Error>(&read)) return *error;
+        auto& bytes=std::get<LocalBytes>(read).bytes;
+        return std::string(bytes.begin(),bytes.end());
     });
 }
 

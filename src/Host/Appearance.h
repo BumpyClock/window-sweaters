@@ -4,12 +4,14 @@
 #include "..\Colorways\Resolver.h"
 #include "..\Knitting\KnitTile.h"
 #include "..\Integration\IconAppearance.h"
+#include "..\Integration\ImportedAppearance.h"
 #include <stdexcept>
 #include <utility>
 
 namespace window_sweaters::host {
 
-inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration) {
+inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,
+    const integration::ImportedAppearance* imported=nullptr) {
     if (!contracts::Valid(configuration)) throw std::invalid_argument("Invalid host appearance configuration");
     knitting::TileSpec tile;
     tile.bandDip = configuration.border_width_dip;
@@ -17,11 +19,15 @@ inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configu
     tile.gauge.rows = configuration.stitch_rows;
     tile.stitch = static_cast<knitting::Stitch>(configuration.stitch_style);
     tile.material = static_cast<knitting::Material>(configuration.material_style);
-    if (configuration.design_selection == contracts::DesignSelection::original) {
+    if (!configuration.imports.selected_id.empty()) {
+        tile.chart=imported?imported->Find(configuration.imports.selected_id):nullptr;
+        if (!tile.chart) throw std::invalid_argument("Selected imported chart is unavailable");
+    } else if (configuration.design_selection == contracts::DesignSelection::original) {
         const auto theme = designs::ws_design_theme_by_id(configuration.design_id.c_str());
         const auto chart = theme ? designs::ws_design_chart_by_name(theme->chart_name) : nullptr;
         if (!chart) throw std::invalid_argument("Host design chart is unavailable");
-        tile.chart = knitting::MakeDesignChart(*chart, theme->id);
+        tile.chart=imported?imported->Named(chart->name):nullptr;
+        if (!tile.chart) tile.chart = knitting::MakeDesignChart(*chart, theme->id);
     }
     return knitting::NormalizeTileSpec(std::move(tile));
 }
@@ -46,10 +52,10 @@ private:
 };
 
 inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& configuration,
-    const colorways::ResolutionResult& resolution) {
-    if (!contracts::PerApplication(configuration.design_selection))
+    const colorways::ResolutionResult& resolution, const integration::ImportedAppearance* imported=nullptr) {
+    if (!contracts::PerApplication(configuration.design_selection) && !imported)
         throw std::invalid_argument("Automatic appearance requires per-application configuration");
-    auto tile = MakeAppearance(configuration);
+    auto tile = MakeAppearance(configuration,imported);
     if (const auto* error = std::get_if<colorways::ResolutionError>(&resolution))
         throw AppearanceResolutionError(*error);
     const auto& resolved = std::get<colorways::ResolvedAppearance>(resolution);
@@ -69,7 +75,9 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
         const auto* chart = designs::ws_design_chart_by_name(authored->name.c_str());
         if (!chart || authored->name.find('\0') != std::string::npos)
             throw AppearanceResolutionError(colorways::ResolutionError::UnknownChart);
-        if (resolved.chart_colors == colorways::ChartColorPolicy::GeneratedContrast) {
+        if (imported && imported->Named(authored->name)) {
+            tile.chart=imported->Named(authored->name);
+        } else if (resolved.chart_colors == colorways::ChartColorPolicy::GeneratedContrast) {
             if (!resolved.contrast_argb)
                 throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
             tile.chart = integration::MakeGeneratedChart(authored->name, *resolved.contrast_argb);
@@ -80,6 +88,10 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
         if (resolved.chart_colors != colorways::ChartColorPolicy::GeneratedContrast || !resolved.contrast_argb)
             throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
         tile.chart = integration::MakeGeneratedChart("zigzag", *resolved.contrast_argb);
+    } else if (const auto* personal=std::get_if<colorways::PersonalChart>(&resolved.pattern)) {
+        if (resolved.chart_colors!=colorways::ChartColorPolicy::PreservePersonalPixels || !imported ||
+            !(tile.chart=imported->Find(personal->id,personal->revision)))
+            throw AppearanceResolutionError(colorways::ResolutionError::InvalidPersonalChart);
     } else if (!std::holds_alternative<colorways::PlainPattern>(resolved.pattern) ||
                resolved.chart_colors != colorways::ChartColorPolicy::NoChart) {
         throw std::invalid_argument("Host personal pattern adaptation is unavailable");
@@ -90,14 +102,29 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
 inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,
     const applications::AppIdentity& application, const colorways::WindowsInstallRoots& roots,
     const std::optional<colorways::AutomaticAppearance>& automatic = {},
-    std::span<const colorways::PersonalRule> personal = {}) {
-    if (!contracts::PerApplication(configuration.design_selection))
-        return MakeAppearance(configuration);
+    std::span<const colorways::PersonalRule> personal = {},
+    const integration::ImportedAppearance* imported=nullptr) {
+    const bool per_app=contracts::PerApplication(configuration.design_selection);
+    if (!per_app && (!imported || imported->Personal().empty()))
+        return MakeAppearance(configuration,imported);
+    if (imported) personal=imported->Personal();
     colorways::ResolverSettings settings;
-    if (configuration.design_selection == contracts::DesignSelection::shared_zigzag)
+    if (!configuration.imports.selected_id.empty()) {
+        auto chart=imported?imported->Find(configuration.imports.selected_id):nullptr;
+        if (!chart) throw AppearanceResolutionError(colorways::ResolutionError::InvalidPersonalChart);
+        settings.global_pattern=colorways::PersonalChart{chart->semanticId,chart->contentRevision};
+    } else if (configuration.design_selection == contracts::DesignSelection::original)
+        settings.design=colorways::SelectedTheme{configuration.design_id};
+    else if (configuration.design_selection == contracts::DesignSelection::plain)
+        settings.global_pattern=colorways::PlainPattern{};
+    else if (configuration.design_selection == contracts::DesignSelection::shared_zigzag)
         settings.global_pattern = colorways::ZigzagPattern{};
-    return MakeByAppAppearance(configuration,
-        colorways::ResolveAppearance(&application, settings, personal, roots, automatic));
+    auto resolved=colorways::ResolveAppearance(&application,settings,personal,roots,automatic);
+    if (!per_app)
+        if (auto appearance=std::get_if<colorways::ResolvedAppearance>(&resolved);
+            appearance && appearance->color_source!=colorways::ColorSource::Personal)
+            appearance->base_argb=configuration.yarn_argb;
+    return MakeByAppAppearance(configuration,resolved,imported);
 }
 
 }

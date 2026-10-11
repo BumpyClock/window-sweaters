@@ -46,7 +46,7 @@ Configuration Original(char const* id) {
     return value;
 }
 void DomainAndFrames() {
-    Check(configuration_schema==4 && protocol_version==5 && frame_size==176,"Appearance and eligibility use bounded schema4/protocol5");
+    Check(configuration_schema==5 && protocol_version==6 && frame_size==176,"Appearance, eligibility and imports use bounded schema5/protocol6");
     auto defaults=settings::MakeAppearance(Configuration{});
     Check(Configuration{}.material_style==MaterialStyle::raised &&
           defaults.material==knitting::Material::Raised && defaults.stitch==knitting::Stitch::Stockinette,

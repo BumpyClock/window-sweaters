@@ -61,13 +61,15 @@ inline bool BoundedPreferences(applications::EligibilityPreferences const& prefe
 namespace payload {
 class Writer {
 public:
+    explicit Writer(std::size_t maximum=maximum_payload_bytes):limit(maximum) {}
+    const std::size_t limit;
     std::vector<std::byte> bytes;
     void Number(std::uint64_t value,std::size_t count=4) {
-        if (count>maximum_payload_bytes-bytes.size()) throw std::length_error("Payload exceeds aggregate bound");
+        if (count>limit-bytes.size()) throw std::length_error("Payload exceeds aggregate bound");
         for (std::size_t i=0;i<count;++i) bytes.push_back(std::byte((value>>(8*i))&255));
     }
     void Text(std::wstring const& text,std::size_t maximum=32767) {
-        if (text.size()>maximum || text.size()*2+4>maximum_payload_bytes-bytes.size())
+        if (text.size()>maximum || text.size()*2+4>limit-bytes.size())
             throw std::length_error("Text exceeds payload bound");
         Number(text.size());
         for (wchar_t unit:text) Number(static_cast<std::uint16_t>(unit),2);

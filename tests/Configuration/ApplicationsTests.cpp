@@ -101,7 +101,7 @@ void MigrationAndBounds(std::filesystem::path const& root) {
     Check(!Decode(malformed,decoded),"Oversized section rejected before allocation");
     malformed=encoded; malformed[184]=std::byte{2};
     Check(!Decode(malformed,decoded),"Non-boolean persisted preference rejected");
-    message.operation=static_cast<Operation>(7);
+    message.operation=static_cast<Operation>(8);
     Check(!Decode(Encode(message),decoded),"Unsupported operation is rejected");
     applications::EligibilityMutation duplicate;
     auto identity=Path(L"C:\\Apps\\player.exe");
@@ -327,6 +327,63 @@ void PresentationContracts() {
         "Native viewport restore policy retains exact user offset when a saved-choice button changes layout");
     Check(settings::PreservedViewportOffset(244,120)==120 && settings::PreservedViewportOffset(244,0)==0,
         "Native viewport restore clamps only when removed content reduces available scroll extent");
+    {
+        using Kind=settings::RulesDraft::Kind;
+        Check(settings::RulesDraft::KindOf(contracts::SetRulesText{})==Kind::save_text &&
+            settings::RulesDraft::KindOf(contracts::ReadRulesFile{})==Kind::read_file &&
+            settings::RulesDraft::KindOf(contracts::SelectPng{})==Kind::other &&
+            settings::RulesDraft::KindOf(contracts::RemovePng{})==Kind::other,
+            "Only rules mutations are classified as rules-document mutations");
+        settings::RulesDraft draft;
+        draft.Edit(); draft.Begin(Kind::other); draft.Settle(true);
+        Check(draft.Dirty(),"Successful chart, selection or app-color mutation preserves unsaved rules text");
+        draft.Begin(Kind::save_text); draft.Settle(false);
+        Check(draft.Dirty(),"Rejected rules save retains unsaved rules text");
+        draft.Begin(Kind::save_text); draft.Settle(true);
+        Check(!draft.Dirty(),"Saved SetRulesText settles the rules draft");
+        draft.Edit(); draft.Begin(Kind::save_text); draft.Edit(); draft.Settle(true);
+        Check(draft.Dirty(),"Newer rules edit survives an older rules-save acknowledgment");
+        draft.Begin(Kind::read_file); draft.Settle(true);
+        Check(!draft.Dirty(),"Saved explicit rules-file import replaces the rules draft");
+        draft.Edit(); draft.Settle(true);
+        Check(draft.Dirty(),"Settlement without a queued rules mutation cannot clear the draft");
+    }
+    {
+        using Kind=settings::ChartMutation;
+        auto actions=settings::ChartActions(true,false,false,false);
+        Check(!actions.use_chart && !actions.manage_chart && !actions.clear_chart,
+            "Placeholder choice cannot queue Use selected chart, replace or remove");
+        actions=settings::ChartActions(true,true,false,false);
+        Check(actions.use_chart && actions.manage_chart && !actions.clear_chart,
+            "A known chosen chart enables Use selected chart without exposing Clear imported chart");
+        actions=settings::ChartActions(true,true,true,true);
+        Check(!actions.use_chart && actions.clear_chart,
+            "An already active chart needs no Use selected chart and keeps explicit Clear imported chart");
+        actions=settings::ChartActions(false,true,false,true);
+        Check(!actions.use_chart && !actions.manage_chart && !actions.clear_chart,
+            "Pending or unauthoritative state disables every chart action");
+        auto chart=[](char const* id,char const* name) { return contracts::ChartMetadata{id,name,"h",1,2,2}; };
+        std::vector<contracts::ChartMetadata> before{chart("old","old")},after{chart("old","old"),chart("new","personal-cu")};
+        Check(settings::ClassifyChartMutation(contracts::SelectPng{})==Kind::clear &&
+            settings::ClassifyChartMutation(contracts::SelectPng{"new"})==Kind::select &&
+            settings::ClassifyChartMutation(contracts::AddPng{})==Kind::add &&
+            settings::ClassifyChartMutation(contracts::RemovePng{})==Kind::remove &&
+            settings::ClassifyChartMutation(contracts::SetRulesText{})==Kind::none,
+            "Empty SelectPng is the explicit clear action and no other mutation is a chart selection");
+        Check(settings::ChartToHighlight(Kind::add,"personal-cu","",before,after,false,true)=="new",
+            "Acknowledged AddPng highlights the added asset by its exact ack identity");
+        Check(settings::ChartToHighlight(Kind::add,"renamed","",before,after,false,true)=="new",
+            "A single newly acknowledged asset is highlighted even if the host normalized its name");
+        Check(settings::ChartToHighlight(Kind::add,"personal-cu","",before,after,true,true).empty(),
+            "A newer user combo choice is never replaced by the add highlight");
+        Check(settings::ChartToHighlight(Kind::add,"personal-cu","",before,after,false,false).empty() &&
+            settings::ChartToHighlight(Kind::select,"","new",before,after,false,true).empty() &&
+            settings::ChartToHighlight(Kind::clear,"","",before,after,false,true).empty(),
+            "Highlight never follows a rejected add or an explicit select or clear");
+        Check(settings::ChartToHighlight(Kind::replace,"","old",before,after,false,true)=="old" &&
+            settings::ChartToHighlight(Kind::replace,"","gone",before,after,false,true).empty(),
+            "Acknowledged ReplacePng highlights only an asset still present");
+    }
     rows={rowA}; edits=settings::ReconcileApplicationItems(keys,rows);
     Check(edits.size()==1 && edits[0].change==settings::AppItemChange::remove && edits[0].index==1,
         "Removing another saved choice cannot reconstruct the surviving focused app row");

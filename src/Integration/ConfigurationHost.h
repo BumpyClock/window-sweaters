@@ -51,6 +51,8 @@ public:
     void Quit() noexcept;
     HostStatus Status() const;
     contracts::Configuration Snapshot() const;
+    configuration::CommittedState OwnedSnapshot() const;
+    std::optional<configuration::CommittedState> PollOwnedSnapshot(std::uint64_t observed_revision) const;
     std::uint64_t Revision() const;
     std::uint64_t EligibilityRevision(applications::AppIdentity const& identity) const;
     std::optional<contracts::Configuration> PollSnapshot(std::uint64_t observed_revision) const;

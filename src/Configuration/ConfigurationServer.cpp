@@ -18,6 +18,7 @@ struct ConfigurationServer::Impl {
         endpoint(EndpointName(options.endpoint_suffix)), server(NewIdentity()), local_client(NewIdentity()) {
         auto loaded=storage.Load();
         committed=loaded.configuration; storage_state=loaded.state; storage_error=loaded.error;
+        catalogue=std::move(loaded.catalogue);
         deduplicated.reserve(257);
         leases.reserve(maximum_client_leases);
         if (options.expected_settings_path.empty()) options.expected_settings_path=SiblingExecutable(L"WindowSweaters.Settings.exe");
@@ -54,6 +55,7 @@ struct ConfigurationServer::Impl {
     std::vector<ClientLease> leases;
     std::uint64_t last_lease = 0, lease_clock = 0, local_highest_committed = 0;
     Configuration committed{};
+    CatalogueSnapshot catalogue;
     std::vector<applications::RunningApplicationWindow> application_windows;
     ApplicationsSnapshot application_snapshot;
     std::optional<std::uint64_t> application_revision;
@@ -175,7 +177,7 @@ struct ConfigurationServer::Impl {
         if (!Valid(request.configuration) || request.request_id==0 || EmptyIdentity(request.client) ||
             request.status!=Status::saved ||
             (request.operation!=Operation::mutate && request.operation!=Operation::reset &&
-                request.operation!=Operation::eligibility))
+                request.operation!=Operation::eligibility && request.operation!=Operation::imports))
             return {Status::invalid,current.configuration};
         if (request.server!=server) return {Status::wrong_instance,current.configuration};
         // Only an explicit snapshot handshake admits a client; retired tokens never revive.
@@ -198,12 +200,44 @@ struct ConfigurationServer::Impl {
         if (current.configuration.revision==std::numeric_limits<std::uint64_t>::max())
             return {Status::invalid,current.configuration};
         Configuration next=request.operation==Operation::reset?Configuration{}:request.configuration;
-        if (request.operation==Operation::mutate) next.eligibility=current.configuration.eligibility;
+        auto next_catalogue=catalogue;
+        if (request.operation==Operation::mutate) {
+            next.eligibility=current.configuration.eligibility;
+            next.imports=current.configuration.imports;
+            if (next.design_selection!=current.configuration.design_selection || next.design_id!=current.configuration.design_id)
+                next.imports.selected_id.clear();
+        }
+        if (request.operation==Operation::reset) {
+            imports::StoredCatalogue empty; empty.revision_high_water=catalogue->RevisionHighWater();
+            auto restored=imports::RestoreCatalogue(empty);
+            next_catalogue=std::make_shared<const imports::ImportCatalogue>(
+                std::get<imports::ImportCatalogue>(std::move(restored)));
+            DescribeCatalogue(next.imports,*next_catalogue);
+        }
         if (request.operation==Operation::eligibility) {
             auto applied=current.configuration.eligibility.Apply(request.eligibility);
             auto preferences=std::get_if<applications::EligibilityPreferences>(&applied);
             if (!preferences || !BoundedPreferences(*preferences)) return {Status::invalid,current.configuration};
             next=current.configuration; next.eligibility=std::move(*preferences);
+        }
+        if (request.operation==Operation::imports) {
+            std::vector<applications::AppMetadata> metadata;
+            for (auto const& window:application_windows)
+                if (window.metadata)
+                    if (auto known=std::get_if<applications::AppMetadata>(window.metadata.get())) metadata.push_back(*known);
+            lease_lock.unlock();
+            auto prepared=PrepareImport(current.configuration.imports,next_catalogue,request.import_edit,metadata);
+            if (auto failure=std::get_if<imports::Error>(&prepared))
+                return {Status::invalid,current.configuration,failure->native_error,
+                    {static_cast<std::uint32_t>(failure->code)+1,static_cast<std::uint32_t>(failure->line),std::string(failure->reason)}};
+            auto candidate=std::get<ImportCandidate>(std::move(prepared));
+            next=current.configuration; next.imports=std::move(candidate.preferences); next_catalogue=std::move(candidate.catalogue);
+            if (std::holds_alternative<SelectPng>(request.import_edit)) {
+                next.design_selection=DesignSelection::plain; next.design_id.clear();
+            }
+            lease_lock.lock();
+            if (!local && !FindLease(request)) return {Status::client_expired,current.configuration};
+            if (stopping) return {Status::shutting_down,current.configuration};
         }
         if (pause_width_only) {
             next=current.configuration;
@@ -217,7 +251,7 @@ struct ConfigurationServer::Impl {
         CommittedRequest record{request.client,request.client_lease,request.request_id,std::move(wire),
             {Status::saved,next},charge};
         lease_lock.unlock();
-        auto error=storage.Save(next,request.operation==Operation::reset);
+        auto error=storage.Save(next,next_catalogue,request.operation==Operation::reset);
         if (error!=ERROR_SUCCESS) return {Status::storage_error,current.configuration,error};
         {
             std::lock_guard lock(mutex);
@@ -225,6 +259,7 @@ struct ConfigurationServer::Impl {
                 if (committed.eligibility.Allows(identity)!=next.eligibility.Allows(identity))
                     revision=next.revision;
             committed=std::move(next); storage_state=StorageState::ready; storage_error=ERROR_SUCCESS;
+            catalogue=std::move(next_catalogue);
             if (local) local_highest_committed=request.request_id;
             else if (auto active=FindLease(request)) active->highest_committed=request.request_id;
         }
@@ -289,6 +324,7 @@ struct ConfigurationServer::Impl {
                             response.request_id=request.request_id; response.client=request.client; response.server=server;
                             response.client_lease=request.client_lease; response.configuration=result.configuration;
                             response.error=result.error;
+                            response.import_edit=request.import_edit; response.import_failure=result.import_failure;
                         }
                         bytes=Encode(response);
                         if (Transfer(pipe.get(),bytes.data(),static_cast<DWORD>(bytes.size()),true,stop.get())) {
@@ -332,6 +368,9 @@ void ConfigurationServer::Stop() noexcept {
     impl_->running=false;
 }
 Configuration ConfigurationServer::Snapshot() const { return impl_->SnapshotResult().configuration; }
+CommittedState ConfigurationServer::OwnedSnapshot() const {
+    std::lock_guard lock(impl_->mutex); return {impl_->committed,impl_->catalogue};
+}
 std::uint64_t ConfigurationServer::Revision() const {
     std::lock_guard lock(impl_->mutex); return impl_->committed.revision;
 }
@@ -381,6 +420,12 @@ std::future<MutationResult> ConfigurationServer::SubmitEligibility(applications:
     Message request; request.operation=Operation::eligibility; request.server=impl_->server;
     request.client=impl_->local_client; request.request_id=++impl_->local_request;
     request.configuration.revision=expected_revision; request.eligibility=std::move(mutation);
+    return impl_->Enqueue(request);
+}
+std::future<MutationResult> ConfigurationServer::SubmitImport(ImportMutation mutation,std::uint64_t revision) {
+    Message request; request.operation=Operation::imports; request.server=impl_->server;
+    request.client=impl_->local_client; request.request_id=++impl_->local_request;
+    request.configuration.revision=revision; request.import_edit=std::move(mutation);
     return impl_->Enqueue(request);
 }
 }
