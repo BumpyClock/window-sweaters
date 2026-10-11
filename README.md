@@ -31,7 +31,8 @@ The build script accepts `-MSBuild <path>` for other Visual Studio editions or i
 After both Release builds, `.\scripts\package.ps1 -Architectures x64,ARM64 -Bundle`
 produces an unsigned development bundle. It validates matching architecture
 payloads and source/build receipts. See [packaging](packaging/README.md) for
-Partner Center identity setup. Signing, certificate trust, installation and
+Partner Center identity setup and Visual Studio F5/Ctrl+F5 of
+`WindowSweaters.Package`. Signing, certificate trust, installation and
 Store submission remain separate operations.
 
 To iterate on chart designs, `python scripts\preview-designs.py` renders the Windows-authored themes as flat labelled strips to `out\design-preview.png`. Pass theme IDs to select themes, or `--all` for the whole catalogue. It shows chart cells only; the Knitting tests write knitted renders to `tests\Knitting\outputs`.

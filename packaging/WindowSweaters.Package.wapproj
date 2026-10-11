@@ -48,7 +48,7 @@
     <PackageDisplayName Condition="'$(PackageChannel)' == 'Store'">Window Sweaters</PackageDisplayName>
     <PackageStage>$(IntermediateOutputPath)stage\</PackageStage>
     <AppxPackageDir>$(MSBuildThisFileDirectory)artifacts\$(PackageChannel)\$(PackageVersion)\$(Platform)\</AppxPackageDir>
-    <DoNotLaunchApp>true</DoNotLaunchApp>
+    <DoNotLaunchApp Condition="'$(BuildingInsideVisualStudio)' != 'true'">true</DoNotLaunchApp>
   </PropertyGroup>
   <Import Project="$(StoreIdentityProps)" Condition="'$(PackageChannel)' == 'Store' and Exists('$(StoreIdentityProps)')" />
   <ItemGroup>
@@ -74,8 +74,16 @@
     <Error Condition="'$(AppxPackageSigningEnabled)' != 'false'" Text="This project creates unsigned artifacts only. Signing and installation are separate, explicitly authorized steps." />
     <Error Condition="'$(AppxBundle)' != 'Never'" Text="WAP PRI splitting cannot preserve this self-contained runtime's indexes. Use scripts\package.ps1 -Bundle for a validated MakeAppx bundle of the WAP-generated MSIX." />
   </Target>
-  <Target Name="PrepareWindowSweatersPayload" BeforeTargets="AssignTargetPaths" DependsOnTargets="ValidateWindowSweatersPackage">
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Prepare-Package.ps1&quot; -Stage &quot;$(PackageStage).&quot; -MSBuild &quot;$(MSBuildBinPath)\MSBuild.exe&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -PublisherDisplayName &quot;$(PackagePublisherDisplayName)&quot; -DisplayName &quot;$(PackageDisplayName)&quot; -Version &quot;$(PackageVersion)&quot; -Channel &quot;$(PackageChannel)&quot; -StoreIdentityProps &quot;$(StoreIdentityProps)&quot; -Platform &quot;$(Platform)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot;" />
+  <Target Name="BuildWindowSweatersForVisualStudio" Condition="'$(BuildingInsideVisualStudio)' == 'true'" DependsOnTargets="ValidateWindowSweatersPackage">
+    <PropertyGroup>
+      <NativeBuildOutputRoot>$([System.IO.Path]::GetFullPath('$(NativeOutputRoot)').TrimEnd('\'))</NativeBuildOutputRoot>
+      <DefaultNativeBuildOutputRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\out').TrimEnd('\'))</DefaultNativeBuildOutputRoot>
+      <NativeBuildOutputArgument Condition="'$(NativeBuildOutputRoot)' != '$(DefaultNativeBuildOutputRoot)'">-NativeOutputRoot &quot;$(NativeBuildOutputRoot)&quot;</NativeBuildOutputArgument>
+    </PropertyGroup>
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\build.ps1&quot; -Configuration Release -Platform &quot;$(Platform)&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; $(NativeBuildOutputArgument)" />
+  </Target>
+  <Target Name="PrepareWindowSweatersPayload" BeforeTargets="AssignTargetPaths" DependsOnTargets="ValidateWindowSweatersPackage;BuildWindowSweatersForVisualStudio">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Prepare-Package.ps1&quot; -Stage &quot;$(PackageStage).&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -PublisherDisplayName &quot;$(PackagePublisherDisplayName)&quot; -DisplayName &quot;$(PackageDisplayName)&quot; -Version &quot;$(PackageVersion)&quot; -Channel &quot;$(PackageChannel)&quot; -StoreIdentityProps &quot;$(StoreIdentityProps)&quot; -Platform &quot;$(Platform)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot;" />
     <ItemGroup>
       <Content Include="$(PackageStage)**\*" Exclude="$(PackageStage)AppxManifest.xml" />
       <Content Update="@(Content)">

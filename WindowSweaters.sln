@@ -2,6 +2,12 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.0.0.0
 MinimumVisualStudioVersion = 10.0.40219.1
+Project("{C7167F0D-BC9F-4E6E-AFE1-012C56B48DB5}") = "WindowSweaters.Package", "packaging\WindowSweaters.Package.wapproj", "{3BF239C2-7D56-456A-973C-40DAB1CC4B51}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A4910D43-DFB1-4575-81BA-712E17D064E6} = {A4910D43-DFB1-4575-81BA-712E17D064E6}
+		{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63} = {14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}
+	EndProjectSection
+EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Host", "src\Host\WindowSweaters.Host.vcxproj", "{A4910D43-DFB1-4575-81BA-712E17D064E6}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Host.Configuration", "src\Host\WindowSweaters.Host.Configuration.vcxproj", "{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}"
@@ -35,8 +41,6 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RenderQueueTests", "tests\Rendering\RenderQueueTests.vcxproj", "{156DB83C-1A93-4AD1-AD5C-F306A678D64E}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GraphicsRecoveryTests", "tests\Rendering\GraphicsRecoveryTests.vcxproj", "{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}"
-EndProject
-Project("{C7167F0D-BC9F-4E6E-AFE1-012C56B48DB5}") = "WindowSweaters.Package", "packaging\WindowSweaters.Package.wapproj", "{3BF239C2-7D56-456A-973C-40DAB1CC4B51}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Startup", "src\Startup\WindowSweaters.Startup.vcxproj", "{1451D687-A040-4E36-81E4-5D6229B769BB}"
 EndProject
@@ -124,7 +128,11 @@ Global
 		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|ARM64.ActiveCfg = Release|ARM64
 		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|ARM64.Build.0 = Release|ARM64
 		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|ARM64.ActiveCfg = Release|ARM64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|ARM64.Build.0 = Release|ARM64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|ARM64.Deploy.0 = Release|ARM64
 		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|ARM64.ActiveCfg = Release|ARM64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|ARM64.Build.0 = Release|ARM64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|ARM64.Deploy.0 = Release|ARM64
 		{A4910D43-DFB1-4575-81BA-712E17D064E6}.Debug|x64.ActiveCfg = Debug|x64
 		{A4910D43-DFB1-4575-81BA-712E17D064E6}.Debug|x64.Build.0 = Debug|x64
 		{A4910D43-DFB1-4575-81BA-712E17D064E6}.Release|x64.ActiveCfg = Release|x64
@@ -192,8 +200,12 @@ Global
 		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Debug|x64.Build.0 = Debug|x64
 		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|x64.ActiveCfg = Release|x64
 		{C9DAF0EB-4A9E-47BF-98D5-1A5E965C7143}.Release|x64.Build.0 = Release|x64
-		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|x64.ActiveCfg = Debug|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|x64.ActiveCfg = Release|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|x64.Build.0 = Release|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Debug|x64.Deploy.0 = Release|x64
 		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|x64.ActiveCfg = Release|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|x64.Build.0 = Release|x64
+		{3BF239C2-7D56-456A-973C-40DAB1CC4B51}.Release|x64.Deploy.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

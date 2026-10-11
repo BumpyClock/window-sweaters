@@ -1,9 +1,12 @@
 # Window Sweaters MSIX packaging
 
-This Windows Application Packaging Project consumes **already built**
+This Windows Application Packaging Project consumes
 `out\x64\Release\WindowSweaters.Host.exe` and
 `out\<Platform>\Release\WindowSweaters.Settings.exe`, where Platform is `x64`
-or `ARM64`. It does not rebuild, run or install the apps. Build each native
+or `ARM64`.
+
+Command-line MSBuild and `scripts\package.ps1` use those prebuilt Release
+artifacts. They do not rebuild, run, or install the apps. Build each native
 architecture with the repository script first.
 
 ```powershell
@@ -19,11 +22,37 @@ Or use Visual Studio 2026 Enterprise MSBuild directly:
   .\packaging\WindowSweaters.Package.wapproj /t:Build /p:Configuration=Release /p:Platform=x64
 ```
 
+That command-line WAP build still skips launch (`DoNotLaunchApp` is true
+outside Visual Studio).
+
 Required tools: DesktopBridge/WAP targets, native v145 tools/redist, and Windows
 SDK **10.0.26100.0** MakeAppx and Manifest Tool. The manifest targets Windows 11
 desktop **10.0.22000.0**, with native x64 and ARM64 payloads. App SDK **2.5.1** and C++/WinRT
 **2.0.240405.15** come from the Settings project's pinned native package references.
 No packaging NuGet dependency is added.
+
+## Visual Studio startup
+
+`WindowSweaters.Package` is the first project in `WindowSweaters.sln`, so a
+fresh Visual Studio open treats it as the startup project. If this machine
+already saved a different startup project, right-click
+`WindowSweaters.Package` and choose **Set as Startup Project** once.
+
+The packaging project is Release-only. Solution `Debug|x64` and `Debug|ARM64`
+map it to `Release|x64` and `Release|ARM64`. That mapping is intentional; it is
+not a missing Debug configuration. Build and Deploy are enabled for those
+mappings so F5 and Ctrl+F5 (**Start Without Debugging**) can build, deploy, and
+launch the package.
+
+Inside Visual Studio, `PrepareWindowSweatersPayload` first runs
+`scripts\build.ps1 -Configuration Release` for the active platform to refresh
+the native build receipt, then stages the package. Visual Studio does not set
+`DoNotLaunchApp`, so F5/Ctrl+F5 start Settings (`EntryPointExe` is
+`WindowSweaters.Settings.exe`).
+
+F5/Ctrl+F5 deploy uses Windows Developer Mode and local package deployment.
+That path is separate from signed artifact distribution. It does not sign,
+trust a certificate, or prove Store-installed execution.
 
 ## Development versus Store
 
