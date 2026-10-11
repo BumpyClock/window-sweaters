@@ -56,6 +56,33 @@ std::uint64_t ProcessStart(DWORD pid, NativeQueryFailure* failure = nullptr) noe
     return start;
 }
 
+bool IntegrityRank(HANDLE process, DWORD& rank) noexcept {
+    HANDLE token{};
+    if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return false;
+    alignas(TOKEN_MANDATORY_LABEL) BYTE buffer[128];
+    DWORD size{};
+    const bool read = GetTokenInformation(token, TokenIntegrityLevel, buffer, sizeof(buffer), &size) != FALSE;
+    if (read) {
+        const PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer)->Label.Sid;
+        rank = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+    }
+    CloseHandle(token);
+    return read;
+}
+
+bool OutranksHost(DWORD pid) noexcept {
+    static const DWORD hostRank = [] {
+        DWORD rank{};
+        return IntegrityRank(GetCurrentProcess(), rank) ? rank : MAXDWORD;
+    }();
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return false;
+    DWORD rank{};
+    const bool read = IntegrityRank(process, rank);
+    CloseHandle(process);
+    return !read || rank > hostRank;
+}
+
 std::uint64_t ObservedIdentity(DWORD threadId, const wchar_t* className) noexcept {
     std::uint64_t hash = 14695981039346656037ULL;
     hash = (hash ^ threadId) * 1099511628211ULL;
@@ -234,6 +261,7 @@ Observation WindowTracker::Query(HWND hwnd, NativeQueryFailure* failure) {
         {rect.left, rect.top, rect.right, rect.bottom}, dpi, ordinary,
         IsWindowVisible(hwnd) != FALSE, IsIconic(hwnd) != FALSE, cloaked != 0,
         IsZoomed(hwnd) != FALSE, fullscreen, (extendedStyle & WS_EX_TOPMOST) != 0,
+        ordinary && OutranksHost(pid),
     };
 }
 

@@ -53,7 +53,7 @@ host; closing Settings leaves decoration running.
 
 Exterior borders are intentionally hidden for minimized, maximized, fullscreen,
 off-desktop, locked, and uncertain targets. Restore a window to ordinary size to
-see its sweater. An isolated `--preview-target` launch decorates only its selected
+see its sweater. Elevated (higher-integrity) windows are not decorated because Windows blocks z-ordering against them. An isolated `--preview-target` launch decorates only its selected
 lifetimes, not every application; it is separate from normal no-argument launch.
 
 Native knitting, settings, exclusions, and app resolution are connected and have

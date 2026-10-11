@@ -124,7 +124,9 @@ root qualifies only as an `ApplicationFrameWindow` or with a full system frame
 (`WS_SYSMENU | WS_THICKFRAME`), as Steam's `SDL_app` window has.
 Child, tool, no-activate, owned popup/dialog, menu, tooltip, shell desktop/taskbar,
 host/overlay/settings, excluded-PID/class, and production fixture-helper windows
-are unsupported. Inaccessible or incomplete identity/geometry queries are
+are unsupported. Windows of higher-integrity (elevated) processes are not decorated
+because Windows blocks z-ordering against them; the host compares its own token
+integrity level with the target's, so an elevated host still decorates them. Inaccessible or incomplete identity/geometry queries are
 uncertain, not evidence of death. Hidden, minimized, cloaked, maximized, and
 monitor-covering fullscreen windows are suppressed.
 
