@@ -2,11 +2,21 @@
 #include "NativeGeometry.h"
 
 #include <dwmapi.h>
+#include <ShellScalingApi.h>
+
+#pragma comment(lib, "shcore.lib")
 
 namespace window_sweaters::geometry {
 namespace {
 PhysicalRect Physical(const RECT& rect) noexcept {
     return {rect.left, rect.top, rect.right, rect.bottom};
+}
+
+// System-aware and unaware windows report system DPI; DWM scales them to their monitor.
+UINT EffectiveDpi(HWND window, DPI_AWARENESS awareness, HMONITOR monitor) noexcept {
+    if (awareness == DPI_AWARENESS_PER_MONITOR_AWARE) return GetDpiForWindow(window);
+    UINT x{}, y{};
+    return SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &x, &y)) ? x : 0;
 }
 
 struct NativeCornerFacts {
@@ -74,11 +84,10 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
                                      DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
         return QueryFailure{QueryStatus::CallerNotPerMonitorV2};
-    // GetDpiForWindow reports system DPI for unaware/system-aware windows, not monitor scale.
     const auto awareness = GetWindowDpiAwarenessContext(window);
     if (!awareness) return QueryFailure{QueryStatus::InvalidWindow};
-    if (GetAwarenessFromDpiAwarenessContext(awareness) != DPI_AWARENESS_PER_MONITOR_AWARE)
-        return QueryFailure{QueryStatus::TargetNotPerMonitorAware};
+    const auto targetAwareness = GetAwarenessFromDpiAwarenessContext(awareness);
+    if (targetAwareness == DPI_AWARENESS_INVALID) return QueryFailure{QueryStatus::InvalidWindow};
     DWORD process{};
     const DWORD thread = GetWindowThreadProcessId(window, &process);
     if (!thread || !process) return QueryFailure{QueryStatus::InvalidWindow};
@@ -91,10 +100,10 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     const auto target = Physical(bounds);
     if (target.Width() <= 0 || target.Height() <= 0)
         return QueryFailure{QueryStatus::InvalidNativeData};
-    const UINT dpi = GetDpiForWindow(window);
-    if (!dpi) return QueryFailure{QueryStatus::DpiFailed};
     const HMONITOR monitor = MonitorFromRect(&bounds, MONITOR_DEFAULTTONULL);
     if (!monitor) return QueryFailure{QueryStatus::MonitorUnavailable};
+    const UINT dpi = EffectiveDpi(window, targetAwareness, monitor);
+    if (!dpi) return QueryFailure{QueryStatus::DpiFailed};
     MONITORINFO info{sizeof(info)};
     SetLastError(ERROR_SUCCESS);
     if (!GetMonitorInfoW(monitor, &info))
@@ -126,7 +135,7 @@ WindowQuery QueryWindowGeometry(HWND window) noexcept {
     RECT finalBounds{};
     hr = DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &finalBounds, sizeof(finalBounds));
     if (FAILED(hr)) return QueryFailure{QueryStatus::FrameBoundsFailed, hr};
-    const UINT finalDpi = GetDpiForWindow(window);
+    const UINT finalDpi = EffectiveDpi(window, targetAwareness, monitor);
     if (!finalDpi) return QueryFailure{QueryStatus::DpiFailed};
     MONITORINFO finalInfo{sizeof(finalInfo)};
     SetLastError(ERROR_SUCCESS);

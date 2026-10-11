@@ -3,6 +3,7 @@
 #include "..\..\src\Geometry\NativeGeometry.h"
 
 #include <dwmapi.h>
+#include <ShellScalingApi.h>
 
 #include <array>
 #include <cmath>
@@ -525,6 +526,19 @@ void HiddenNativeFixtureContract() {
         }
         Check(DestroyWindow(window) != FALSE, "own hidden fixture is destroyed");
     }
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+    const auto systemAware = CreateWindowExW(0, name, L"Geometry contract", WS_OVERLAPPEDWINDOW,
+                                             100, 100, 640, 400, nullptr, nullptr, instance, nullptr);
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    Check(systemAware != nullptr, "own hidden system-aware fixture");
+    const auto legacy = QueryWindowGeometry(systemAware);
+    Check(std::holds_alternative<WindowFacts>(legacy), "system-aware targets such as Task Manager are queried");
+    UINT monitorDpi{}, unused{};
+    Check(SUCCEEDED(GetDpiForMonitor(MonitorFromWindow(systemAware, MONITOR_DEFAULTTONEAREST),
+                                     MDT_EFFECTIVE_DPI, &monitorDpi, &unused)) &&
+          std::get<WindowFacts>(legacy).dpi == monitorDpi,
+          "system-aware targets use their monitor DPI, not the system DPI");
+    Check(DestroyWindow(systemAware) != FALSE, "own hidden system-aware fixture is destroyed");
     Check(UnregisterClassW(name, instance) != FALSE, "own fixture class is unregistered");
     Check(SetThreadDpiAwarenessContext(previous) != nullptr, "fixture restores its thread awareness context");
 }

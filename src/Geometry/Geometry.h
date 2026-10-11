@@ -44,7 +44,7 @@ struct WindowFacts {
 };
 
 enum class QueryStatus : std::uint8_t {
-    InvalidWindow, CallerNotPerMonitorV2, TargetNotPerMonitorAware,
+    InvalidWindow, CallerNotPerMonitorV2,
     FrameBoundsFailed, DpiFailed, MonitorUnavailable, MonitorInfoFailed,
     PlacementFailed, CornerPreferenceFailed, InvalidNativeData, ChangedDuringQuery,
     StyleFailed, RegionFailed, NonClientRenderingFailed
