@@ -119,17 +119,17 @@ void Persistence(std::filesystem::path const& root) {
         auto configured=server.SubmitLocal(byApp).get();
         auto personal=integration::ImportedAppearance(configured.configuration.imports,server.OwnedSnapshot().catalogue);
         auto app=host::MakeAppearance(configured.configuration,uniqueIdentity,{},colorways::AutomaticAppearance{
-            0xff445566u,0xffeeeeeeu,"zigzag"},{},&personal);
+            0xff445566u,0xffeeeeeeu,0xffedae49u},{},&personal);
         Check(app.baseArgb==0xff113355u && app.chart && app.chart->semanticId==stable &&
             app.chart->argbCells[0]==0xff1357a9u,"Personal bound chart and color override icon proposal with literal PNG RGB");
         auto player=Edit(server,Observe(server,rules),SetAppColor{playerIdentity,0xff214365u,{}});
         auto plain=integration::ImportedAppearance(player.configuration.imports,server.OwnedSnapshot().catalogue);
         auto plainApp=host::MakeAppearance(player.configuration,playerIdentity,{},colorways::AutomaticAppearance{
-            0xff777777u,0xffeeeeeeu,"zigzag"},{},&plain);
+            0xff777777u,0xffeeeeeeu,0xffedae49u},{},&plain);
         Check(plainApp.baseArgb==0xff214365u && !plainApp.chart,"Typed per-app color omission binds explicit PlainPattern, not icon fallback");
         auto shared=player.configuration; shared.design_selection=DesignSelection::shared_zigzag;
         auto sharedTile=host::MakeAppearance(shared,uniqueIdentity,{},colorways::AutomaticAppearance{
-            0xff445566u,0xffeeeeeeu,"zigzag"},{},&plain);
+            0xff445566u,0xffeeeeeeu,0xffedae49u},{},&plain);
         Check(sharedTile.baseArgb==0xff113355u && sharedTile.chart && sharedTile.chart->semanticId=="automatic-zigzag" &&
             sharedTile.chart->argbCells[0]!=0xff1357a9u,"Shared Zigzag global priority retains personal base color but uses generated contrast");
         auto manualPlain=player.configuration; manualPlain.design_selection=DesignSelection::plain;

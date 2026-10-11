@@ -47,9 +47,11 @@ void SaltAndPreview() {
     const auto& second=std::get<icon_yarn::IconInput>(b);
     Check(lower==upper && first.canonicalAppIdentity==second.canonicalAppIdentity,
         "Ordinal-equal executable identities have identical kind-prefixed UTF8 motif salts");
+    icon_yarn::IconPixels icon{};
+    icon.fill({51,119,221,255});
     Check(first.canonicalAppIdentity.starts_with("exe:") &&
-        icon_yarn::StableMotif(first.canonicalAppIdentity)==icon_yarn::StableMotif(second.canonicalAppIdentity),
-        "Canonical motif is independent of image case and process lifetime");
+        icon_yarn::SamplePalette(icon,first.canonicalAppIdentity)==icon_yarn::SamplePalette(icon,second.canonicalAppIdentity),
+        "Canonical motif seed is independent of image case and process lifetime");
     const auto packageA=*applications::AppIdentity::FromPackagedAumid(L"PrivateApp_8wekyb3d8bbwe!App");
     const auto packageB=*applications::AppIdentity::FromPackagedAumid(L"PrivateApp_8wekyb3d8bbwe!app");
     Check(std::get<icon_yarn::IconInput>(integration::MakeIconInput(packageA,{})).canonicalAppIdentity !=
@@ -61,12 +63,13 @@ void SaltAndPreview() {
     const auto longIdentity=Exe(L"C:\\"+std::wstring(4100,L'a')+L".exe");
     Check(std::holds_alternative<icon_yarn::Fallback>(integration::MakeIconInput(longIdentity,{})),
         "Overbound UTF8 identity is reported, never salted with a truncated key");
-    Check(!integration::AutomaticProposal(first,icon_yarn::Fallback{icon_yarn::FallbackReason::IconUnavailable}),
+    Check(!integration::AutomaticProposal(icon_yarn::Fallback{icon_yarn::FallbackReason::IconUnavailable}),
         "Typed unavailable icon leaves resolver stable fallback, never a false color");
-    const auto proposal=integration::AutomaticProposal(first,icon_yarn::SampledPalette{0xff769cc0u,0xfff6f0deu});
-    Check(proposal && proposal->base_argb==0xff769cc0u &&
-        *proposal->chart_name==icon_yarn::MotifName(icon_yarn::StableMotif(first.canonicalAppIdentity)),
-        "Sampled proposal carries exact sample and stable generated motif");
+    const auto proposal=integration::AutomaticProposal(icon_yarn::SampledPalette{0xff769cc0u,0xfff6f0deu,0xffedae49u,
+        std::string(icon_yarn::DiamondGlyph(6)),77u});
+    Check(proposal && proposal->base_argb==0xff769cc0u && proposal->contrast_argb==0xfff6f0deu &&
+        proposal->accent_argb==0xffedae49u && proposal->seed==77u && proposal->glyph==icon_yarn::DiamondGlyph(6),
+        "Sampled proposal carries the exact sampled yarns, glyph and seed");
     auto process=applications::ResolveMetadata(applications::PackagedAumid{packageA.Key()},
         applications::ExecutablePath{L"C:\\Private\\App.exe"});
     const auto& metadata=std::get<applications::AppMetadata>(process);

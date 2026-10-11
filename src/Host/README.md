@@ -71,10 +71,12 @@ yarn may look nearly solid from a distance.
 The host and Settings preview use the same production knitting core. In By-app
 mode, each validated owner resolves through the reviewed Windows identity
 mappings. Authored charts retain their literal palettes and finishing flags.
-Unmatched owners initially use the resolver's stable identity-based Wool color
-and plain pattern, then may acquire locally sampled colors and a stable
-Zigzag, Picnic, or Twinkle motif. Explicit plain or original design selection
-preserves the saved manual appearance instead of applying app rules.
+Unmatched owners initially knit a generated diamond motif on the resolver's
+stable identity-based Wool color. When the local icon sample completes, they
+switch to a motif and three yarns generated from that icon (see
+`src\IconYarn\README.md`). Charted borders use stockinette and raised material,
+so the saved stitch and material apply only to plain borders. Explicit plain
+or original design selection preserves the saved manual appearance instead of applying app rules.
 The Settings Finder image remains a labelled example, not the selected owner's
 actual appearance.
 

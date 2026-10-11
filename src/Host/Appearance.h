@@ -77,10 +77,6 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
             throw AppearanceResolutionError(colorways::ResolutionError::UnknownChart);
         if (imported && imported->Named(authored->name)) {
             tile.chart=imported->Named(authored->name);
-        } else if (resolved.chart_colors == colorways::ChartColorPolicy::GeneratedContrast) {
-            if (!resolved.contrast_argb)
-                throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
-            tile.chart = integration::MakeGeneratedChart(authored->name, *resolved.contrast_argb);
         } else if (resolved.chart_colors == colorways::ChartColorPolicy::LiteralAuthored) {
             tile.chart = knitting::MakeDesignChart(*chart, themeId.empty() ? authored->name : themeId);
         } else throw std::invalid_argument("Unsupported authored chart color policy");
@@ -88,6 +84,12 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
         if (resolved.chart_colors != colorways::ChartColorPolicy::GeneratedContrast || !resolved.contrast_argb)
             throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
         tile.chart = integration::MakeGeneratedChart("zigzag", *resolved.contrast_argb);
+    } else if (const auto* generated = std::get_if<colorways::GeneratedPattern>(&resolved.pattern)) {
+        if (resolved.chart_colors != colorways::ChartColorPolicy::GeneratedContrast ||
+            !resolved.contrast_argb || !resolved.accent_argb)
+            throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
+        tile.chart = integration::MakeMotifChart(generated->seed, generated->glyph,
+            *resolved.contrast_argb, *resolved.accent_argb);
     } else if (const auto* personal=std::get_if<colorways::PersonalChart>(&resolved.pattern)) {
         if (resolved.chart_colors!=colorways::ChartColorPolicy::PreservePersonalPixels || !imported ||
             !(tile.chart=imported->Find(personal->id,personal->revision)))

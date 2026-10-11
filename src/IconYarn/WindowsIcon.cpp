@@ -493,7 +493,7 @@ std::optional<std::wstring> BestLogoAsset(const std::wstring& declared) {
     return best;
 }
 
-PaletteResult SamplePackageLogo(const std::wstring& executable, std::stop_token stop,
+PaletteResult SamplePackageLogo(const std::wstring& executable, std::string_view identity, std::stop_token stop,
                                 std::chrono::steady_clock::time_point deadline) {
     auto root = Parent(executable);
     for (unsigned depth = 0; depth < 4 && !root.empty(); ++depth, root = Parent(root)) {
@@ -520,7 +520,7 @@ PaletteResult SamplePackageLogo(const std::wstring& executable, std::stop_token 
         auto pixels = PixelsFromPng(*bytes);
         if (const auto failure = std::get_if<Fallback>(&pixels)) return *failure;
         if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
-        return SamplePalette(std::get<IconPixels>(pixels));
+        return SamplePalette(std::get<IconPixels>(pixels), identity);
     }
     return Fallback{FallbackReason::IconUnavailable};
 }
@@ -622,7 +622,7 @@ PaletteResult SampleIconResource(const IconInput& input, std::stop_token stop,
     auto pixels = PixelsFromOwnedIcon(icon.Get());
     if (const auto failure = std::get_if<Fallback>(&pixels)) return *failure;
     if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
-    return SamplePalette(std::get<IconPixels>(pixels));
+    return SamplePalette(std::get<IconPixels>(pixels), input.canonicalAppIdentity);
 }
 
 }
@@ -636,7 +636,7 @@ PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
         failure->reason == FallbackReason::DeadlineExceeded ||
         failure->reason == FallbackReason::UnsupportedSource ||
         failure->reason == FallbackReason::SourceTooLarge) return result;
-    auto logo = SamplePackageLogo(input.executablePath, stop, deadline);
+    auto logo = SamplePackageLogo(input.executablePath, input.canonicalAppIdentity, stop, deadline);
     return std::holds_alternative<SampledPalette>(logo) ? logo : result;
 }
 

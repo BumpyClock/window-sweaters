@@ -56,6 +56,10 @@ void ResolutionError(const colorways::ResolutionResult& result, colorways::Resol
     }
     throw std::runtime_error("Resolution error became a successful appearance");
 }
+bool Generated(const knitting::TileSpec& tile) {
+    return tile.chart && tile.chart->semanticId.starts_with("generated-") && tile.chart->height == 6 &&
+        tile.chart->appearance.flags == 48;
+}
 template<class Function>
 void Rejected(Function function) {
     try {
@@ -204,15 +208,15 @@ void NormalizationAndFallback() {
     for (const auto path : {L"C:\\Tools\\chrome.exe", L"C:\\Program Files\\Google\\Chrome Beta\\Application\\chrome.exe",
                            L"C:\\Program Files\\Microsoft VS Code Insiders\\Code.exe",
                            L"C:\\Program Files\\Google\\Chrome\\Application\\chrome-helper.exe"}) {
-        Check(!host::MakeAppearance(configuration, Executable(path), roots).chart,
+        Check(Generated(host::MakeAppearance(configuration, Executable(path), roots)),
             "Basename/helper/channel resemblance never supplies an authored chart");
     }
     for (const auto aumid : {L"msteams_8wekyb3d8bbwe!MSTeams", L"MSTeams_8wekyb3d8bbwe!Helper",
                             L"MSTeams_aaaaaaaaaaaaa!MSTeams", L"Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe!App"}) {
-        Check(!host::MakeAppearance(configuration, Package(aumid), roots).chart,
+        Check(Generated(host::MakeAppearance(configuration, Package(aumid), roots)),
             "Package case, application, publisher and channel must match supported identity exactly");
     }
-    Check(!host::MakeAppearance(configuration, chrome, {}).chart,
+    Check(Generated(host::MakeAppearance(configuration, chrome, {})),
         "Failed trusted-root lookup does not guess a mapped install");
     auto relocatedRoots = roots;
     relocatedRoots.program_files = L"D:\\Programs\\";
@@ -220,9 +224,9 @@ void NormalizationAndFallback() {
     Check(cache.Get(host::MakeAppearance(configuration, relocated, relocatedRoots)) == mapped,
         "Caller-cached relocated OS root controls exact mapping without hard-coded drive");
     const auto fallback = host::MakeAppearance(configuration, unknown, roots);
-    Check(!fallback.chart && fallback.baseArgb == 0xff7c9885u &&
-          fallback.stitch == knitting::Stitch::Garter && fallback.material == knitting::Material::Plain,
-        "Unknown validated identity uses literal stable Wool fallback and saved plain stitch/material");
+    Check(Generated(fallback) && fallback.baseArgb == 0xff7c9885u &&
+          fallback.stitch == knitting::Stitch::Stockinette && fallback.material == knitting::Material::Raised,
+        "Unknown validated identity knits a stable generated motif on the literal Wool fallback");
     const auto before = cache.Get(fallback);
     configuration.revision = 77;
     configuration.yarn_argb = 0xffabcdefu;
@@ -238,7 +242,7 @@ void NormalizationAndFallback() {
     auto metadata = applications::ResolveMetadata(applications::PackagedAumid{L"UnrelatedApp_8wekyb3d8bbwe!App"},
         applications::ExecutablePath{L"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"});
     const auto& owner = std::get<applications::AppMetadata>(metadata);
-    Check(!host::MakeAppearance(configuration, owner.Identity(), roots).chart,
+    Check(Generated(host::MakeAppearance(configuration, owner.Identity(), roots)),
         "Packaged owner identity wins over its mapped executable basename alias");
     const applications::MetadataResult unavailable = applications::MetadataUnavailable{
         applications::UnavailableReason::AccessDenied, applications::QueryStage::ApplicationId, ERROR_ACCESS_DENIED};
@@ -284,13 +288,19 @@ void ResolverBoundaryAndFinishing() {
         "Shared Zigzag adapts the winning authored provisional base with derived contrast");
     rules[0].pattern = colorways::PersonalChart{"valid-but-no-asset-adapter", 1};
     Rejected([&] { (void)host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&chrome, {}, rules, roots)); });
-    tile = host::MakeByAppAppearance(configuration,
-        colorways::ResolveAppearance(&unknown, {}, {}, roots, colorways::AutomaticAppearance{0xff112233u, {}, "twinkle"}));
-    Check(tile.chart && tile.chart->semanticId == "automatic-twinkle" && tile.chart->argbCells[14] ==
-        colorways::ZigzagContrast(0xff112233u), "Automatic motif adapts the sampled base and contrast");
+    const colorways::AutomaticAppearance icon{0xff112233u, 0xfff6f0deu, 0xffedae49u, 0x1234567u, ".aaa.aabaa..b...aaa.a...a"};
+    tile = host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&unknown, {}, {}, roots, icon));
+    const auto motif = icon_yarn::GenerateMotif(icon.seed, icon.glyph);
+    bool literal = Generated(tile) && tile.chart->semanticId == "generated-19088743" && tile.baseArgb == icon.base_argb &&
+        tile.chart->width == motif[0].size();
+    for (std::size_t y = 0; literal && y < motif.size(); ++y)
+        for (std::size_t x = 0; x < motif[y].size(); ++x)
+            literal &= tile.chart->argbCells[y * motif[y].size() + x] ==
+                (motif[y][x] == 'a' ? icon.contrast_argb : motif[y][x] == 'b' ? icon.accent_argb : 0u);
+    Check(literal, "Icon-seeded motif knits sampled contrast and accent over base sentinels");
     auto shared = configuration;
     shared.design_selection = contracts::DesignSelection::shared_zigzag;
-    const colorways::AutomaticAppearance sample{0xff769cc0u, 0xfff6f0deu, "picnic"};
+    const colorways::AutomaticAppearance sample{0xff769cc0u, 0xfff6f0deu, 0xffedae49u, 7, {}};
     std::array<colorways::PersonalRule, 1> personal{{{unknown, {{0xff112233u}, {}}, {}}}};
     tile = host::MakeAppearance(shared, unknown, roots, sample, personal);
     Check(tile.baseArgb == 0xff112233u && tile.chart->semanticId == "automatic-zigzag" &&

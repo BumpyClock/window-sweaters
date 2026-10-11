@@ -675,7 +675,7 @@ void ResolverPrecedenceTest() {
     const std::array personal{colorways::PersonalRule{
         binding.application, {binding.rule.base_argb, {}},
         colorways::PersonalChart{asset.Id(), asset.ContentRevision()}}};
-    const colorways::AutomaticAppearance sample{0xff998877, 0xff556677, {}};
+    const colorways::AutomaticAppearance sample{0xff998877, 0xff556677, 0xff334455, 1, {}};
     const auto appearance = [](const colorways::ResolutionResult& result) {
         Check(std::holds_alternative<colorways::ResolvedAppearance>(result), "Imported bound rule is accepted by production resolver");
         return std::get<colorways::ResolvedAppearance>(result);

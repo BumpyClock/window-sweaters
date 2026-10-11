@@ -31,7 +31,12 @@ struct PersonalChart {
     std::uint64_t revision{};
     bool operator==(const PersonalChart&) const = default;
 };
-using PatternChoice = std::variant<PlainPattern, ZigzagPattern, AuthoredChart, PersonalChart>;
+struct GeneratedPattern {
+    std::uint32_t seed{};
+    std::string glyph;
+    bool operator==(const GeneratedPattern&) const = default;
+};
+using PatternChoice = std::variant<PlainPattern, ZigzagPattern, AuthoredChart, PersonalChart, GeneratedPattern>;
 
 struct ByAppDesign {};
 struct SelectedTheme { std::string id; };
@@ -52,16 +57,19 @@ struct PersonalRule {
 };
 struct AutomaticAppearance {
     std::uint32_t base_argb{};
-    std::optional<std::uint32_t> contrast_argb;
-    std::optional<std::string> chart_name;
+    std::uint32_t contrast_argb{};
+    std::uint32_t accent_argb{};
+    std::uint32_t seed{};
+    std::string glyph;
 };
 
 enum class ColorSource { Personal, SelectedTheme, AuthoredApplication, AutomaticSample, StableFallback };
-enum class PatternSource { GlobalSelection, SelectedTheme, Personal, AuthoredApplication, AutomaticSample, PlainFallback };
+enum class PatternSource { GlobalSelection, SelectedTheme, Personal, AuthoredApplication, AutomaticSample, GeneratedFallback, PlainFallback };
 enum class ChartColorPolicy { NoChart, LiteralAuthored, GeneratedContrast, PreservePersonalPixels };
 struct ResolvedAppearance {
     std::uint32_t base_argb;
     std::optional<std::uint32_t> contrast_argb;
+    std::optional<std::uint32_t> accent_argb;
     PatternChoice pattern;
     ColorSource color_source;
     PatternSource pattern_source;

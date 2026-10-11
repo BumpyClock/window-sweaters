@@ -32,6 +32,8 @@
   <ItemGroup>
     <ClCompile Include="Resolver.cpp" />
     <ClCompile Include="WindowsMappings.cpp" />
+    <ClCompile Include="..\IconYarn\IconMotif.cpp" />
+    <ClCompile Include="..\IconYarn\IconPalette.cpp" />
     <ClInclude Include="Resolver.h" />
     <ClInclude Include="WindowsMappings.h" />
   </ItemGroup>

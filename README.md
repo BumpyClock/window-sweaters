@@ -47,7 +47,7 @@ decoration, actual resize suppresses it until settlement, and hidden/minimized
 windows can recover without losing their lifetime.
 
 Open Settings from the tray and select **By app** for authored Windows mappings
-and icon-derived colors, or **Shared Zigzag** for one motif with per-app colors.
+and patterns generated from each other app's icon, or **Shared Zigzag** for one motif with per-app colors.
 Manual original designs remain selectable. Settings saves choices through the
 host; closing Settings leaves decoration running.
 

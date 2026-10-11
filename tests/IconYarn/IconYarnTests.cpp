@@ -38,82 +38,69 @@ IconPixels Solid(PremultipliedRgba8 pixel) {
     return pixels;
 }
 
-double Lightness(std::uint32_t color) {
-    const unsigned r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
-    return (std::max({r, g, b}) + std::min({r, g, b})) / 510.0;
+constexpr std::uint32_t FixtureBase = 0xffc04c4cu, FixtureContrast = 0xffda9595u, FixtureAccent = 0xff6f462du;
+bool IsFixture(const SampledPalette& palette) {
+    return palette.baseArgb == FixtureBase && palette.contrastArgb == FixtureContrast &&
+           palette.accentArgb == FixtureAccent && palette.glyph == DiamondGlyph(palette.glyph.size() == 25 ? 5 : 6);
+}
+
+template<class Paint> IconPixels Draw(Paint paint) {
+    IconPixels pixels{};
+    for (int y = 0; y < 48; ++y)
+        for (int x = 0; x < 48; ++x) pixels[y * 48 + x] = paint(x, y);
+    return pixels;
+}
+
+PremultipliedRgba8 Badge(int x, int y) {
+    const int dx = 2 * x - 47, dy = 2 * y - 47;
+    if (dx * dx + dy * dy > 1600) return {};
+    if ((x - 30) * (x - 30) + (y - 14) * (y - 14) <= 16) return {250, 150, 30, 255};
+    if (std::abs(dx) <= 8 || std::abs(dy) <= 8) return {245, 245, 245, 255};
+    return {40, 90, 200, 255};
+}
+
+PremultipliedRgba8 Grey(int x, int y) {
+    return x >= 8 && x < 40 && y >= 8 && y < 40 ? PremultipliedRgba8{128, 128, 128, 255} : PremultipliedRgba8{};
+}
+
+PremultipliedRgba8 Stripes(int x, int y) {
+    if (x >= 20 && x < 28 && y >= 10 && y < 38) return {30, 30, 30, 255};
+    return y < 16 ? PremultipliedRgba8{220, 40, 60, 255} : y < 32 ? PremultipliedRgba8{40, 160, 90, 255}
+                                                         : PremultipliedRgba8{240, 200, 40, 255};
 }
 
 void Sampling() {
-    Failure(SamplePalette({}), FallbackReason::InvalidPixels);
-    Failure(SamplePalette(Solid({255, 0, 0, 217})), FallbackReason::InvalidPixels);
-    Failure(SamplePalette(Solid({})), FallbackReason::InsufficientColorCoverage);
-    Failure(SamplePalette(Solid({136, 136, 136, 255})), FallbackReason::InsufficientColorCoverage);
-    Failure(SamplePalette(Solid({40, 40, 60, 255})), FallbackReason::InsufficientColorCoverage);
-    Failure(SamplePalette(Solid({58, 58, 42, 255})), FallbackReason::InsufficientColorCoverage);
-    Failure(SamplePalette(Solid({24, 0, 0, 255})), FallbackReason::InsufficientColorCoverage);
-    Failure(SamplePalette(Solid({216, 0, 0, 216})), FallbackReason::InsufficientColorCoverage);
-    Require(Palette(SamplePalette(Solid({217, 0, 0, 217}))) ==
-            SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "alpha217 unpremultiplication");
-    Require(Palette(SamplePalette(Solid({255, 0, 0, 255}))) ==
-            SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "literal softened red palette");
-    Require(Palette(SamplePalette(Solid({238, 0, 0, 238}))).baseArgb == 0xffc04b4bu,
-            "premultiplied red has same histogram bin");
-    Require(Palette(SamplePalette(Solid({51, 119, 221, 255}))) ==
-            SampledPalette{0xff6685b4u, 0xfff6f0deu}, "literal softened blue palette");
-
-    auto coverage = Solid({80, 80, 80, 255});
+    constexpr std::string_view id = "exe:Example";
+    Failure(SamplePalette({}, id), FallbackReason::InvalidPixels);
+    Failure(SamplePalette(Solid({255, 0, 0, 217}), id), FallbackReason::InvalidPixels);
+    Failure(SamplePalette(Solid({}), id), FallbackReason::InsufficientColorCoverage);
+    Failure(SamplePalette(Solid({100, 0, 0, 127}), id), FallbackReason::InsufficientColorCoverage);
+    auto coverage = Solid({});
     std::fill_n(coverage.begin(), 37, PremultipliedRgba8{255, 149, 0, 255});
-    Failure(SamplePalette(coverage), FallbackReason::InsufficientColorCoverage);
-    coverage[37] = {255, 149, 0, 255};
-    Require(Palette(SamplePalette(coverage)).baseArgb == 0xffc0894bu,
-            "38 orange pixels commit color;4096bin floor quantization");
+    Failure(SamplePalette(coverage, id), FallbackReason::InsufficientColorCoverage);
+    coverage[37] = {128, 75, 0, 128};
+    Require(std::holds_alternative<SampledPalette>(SamplePalette(coverage, id)), "38 pixels at alpha 128 commit color");
+    Require(Palette(SamplePalette(Solid({217, 0, 0, 217}), id)) == Palette(SamplePalette(Solid({255, 0, 0, 255}), id)),
+            "premultiplied alpha is divided out before bucketing");
+    Require(Palette(SamplePalette(Solid({136, 136, 136, 255}), id)).baseArgb == 0xff8d8d8du,
+            "grey icons keep a neutral base yarn");
 
-    Require(Soften(0xffff0000u) == 0xffc04b4bu, "literal softening");
-    Require(Soften(0xffaaffaau) == 0xff95d995u, "lightness .72 clamp");
-    Require(Soften(0xff000000u) == 0xff5d3b3bu, "saturation .22/lightness .30 clamps");
+    Require(Palette(SamplePalette(Draw(Badge), "exe:C:\\PROGRAM FILES\\BADGE\\BADGE.EXE")) ==
+            SampledPalette{0xff5770a8u, 0xffb8b8b8u, 0xff684a27u, "..aa....aab.aaaaaaaaaaaa..aa....aa..", 0xe2acd194u},
+            "badge icon matches icongen.py with a 6x6 glyph");
+    Require(Palette(SamplePalette(Draw(Badge), "aumid:Fixture!Badge")) ==
+            SampledPalette{0xff5770a8u, 0xffb8b8b8u, 0xff684a27u, "..a....ab.aaaaa..a....a..", 0xd807adceu},
+            "identity picks the glyph side and seed");
+    Require(Palette(SamplePalette(Draw(Grey), "aumid:Fixture!Grey")) ==
+            SampledPalette{0xff868686u, 0xffb8b8b8u, 0xff62533au, std::string(DiamondGlyph(5)), 0x7b2b77e6u},
+            "single-colour icon falls back to the diamond glyph and derived yarns");
+    Require(Palette(SamplePalette(Draw(Stripes), "exe:C:\\\xc3\x89LAN\\STRIPES.EXE")) ==
+            SampledPalette{0xffbfac62u, 0xff4c4c4cu, 0xff773a41u, "bbbbbbbbbbbbaaaaaaaaaaaa............", 0xe38465f3u},
+            "UTF-8 identity bytes seed the stripes icon");
     Require(ZigzagContrast(0xff9d9d9du) == 0xfff6f0deu, "Zigzag below .62");
     Require(ZigzagContrast(0xff9f9f9fu) == 0xff5c5c5cu, "Zigzag above .62");
     Require(ZigzagContrast(0xffffffffu) == 0xffbcbcbcu, "white Zigzag contrast");
-    const auto pastel = Palette(SamplePalette(Solid({170, 255, 170, 255})));
-    Require(pastel.baseArgb == 0xff95d995u &&
-            Lightness(pastel.baseArgb) - Lightness(pastel.contrastArgb) >= .20,
-            "light pastel needs deeper contrast, not cream");
-
-    auto colors = Solid({255, 0, 0, 255});
-    std::fill_n(colors.begin() + 1700, 604, PremultipliedRgba8{0, 0, 68, 255});
-    Require(Palette(SamplePalette(colors)) == SampledPalette{0xffc04b4bu, 0xff272771u},
-            "raw lightness-separated accent survives softening");
-    std::fill_n(colors.begin() + 1700, 604, PremultipliedRgba8{0, 0, 136, 255});
-    Require(Palette(SamplePalette(colors)).contrastArgb == 0xfff6f0deu,
-            "contrast rechecked after softening compresses raw difference");
-    auto tie = Solid({255, 0, 0, 255});
-    std::fill_n(tie.begin(), 1152, PremultipliedRgba8{0, 255, 0, 255});
-    Require(Palette(SamplePalette(tie)) == SampledPalette{0xff4bc04bu, 0xfff6f0deu},
-            "equal counts choose ascending histogram bin deterministically");
-    auto wrap = Solid({255, 0, 0, 255});
-    std::fill_n(wrap.begin() + 1400, 500, PremultipliedRgba8{255, 0, 17, 255});
-    std::fill_n(wrap.begin() + 1900, 300, PremultipliedRgba8{0, 255, 0, 255});
-    std::fill_n(wrap.begin() + 2200, 104, PremultipliedRgba8{0, 0, 68, 255});
-    Require(Palette(SamplePalette(wrap)) == SampledPalette{0xffc04b4bu, 0xff272771u},
-            "circular hue separation reserves third candidate for real contrast");
-
-    for (unsigned r = 17; r < 256; r += 34)
-        for (unsigned g = 17; g < 256; g += 34)
-            for (unsigned b = 17; b < 256; b += 34) {
-                auto grid = Solid({static_cast<std::uint8_t>(r), static_cast<std::uint8_t>(g),
-                                   static_cast<std::uint8_t>(b), 255});
-                std::fill_n(grid.begin(), 500, PremultipliedRgba8{17, 51, 119, 255});
-                const auto result = SamplePalette(grid);
-                if (const auto palette = std::get_if<SampledPalette>(&result))
-                    Require(std::abs(Lightness(palette->baseArgb) -
-                                     Lightness(palette->contrastArgb)) >= .195,
-                            "final byte-quantized contrast grid");
-            }
-    Require(StableMotif("exe:Example") == Motif::Zigzag, "persistent identity literal motif");
-    Require(StableMotif("exe:example") == Motif::Picnic, "motif FNV is case-sensitive");
-    Require(MotifName(Motif::Zigzag) == "zigzag" && MotifName(Motif::Twinkle) == "twinkle",
-            "authored motif names");
-    std::cout << "PASS portable sampling, alpha, coverage, faint-gray, contrast and motif\n";
+    std::cout << "PASS portable sampling, alpha, coverage, icongen palette and glyph parity\n";
 }
 
 bool Isolated(const MotifRows& rows) {
@@ -515,7 +502,7 @@ void PackageLogo() {
     package.Write(L"Assets\\Logo.scale-200.png", bytes(BlueLogoPng, sizeof BlueLogoPng));
     package.Write(L"Assets\\Other.png", bytes(BlueLogoPng, sizeof BlueLogoPng));
     const auto deadline = [] { return std::chrono::steady_clock::now() + 10s; };
-    const auto red = Palette(SamplePalette(Solid({192, 32, 32, 255})));
+    const auto red = Palette(SamplePalette(Solid({192, 32, 32, 255}), "aumid:Fixture!App"));
     Require(Palette(SampleExecutableIcon({"aumid:Fixture!App", 1, package.Path() + L"\\App.exe"}, {}, deadline())) == red,
             "packaged app without an exe icon samples its own unplated manifest logo");
     std::stop_source stop;
@@ -539,7 +526,7 @@ void PaddedExecutable(const std::wstring& ownPath) {
     };
     TempFile plain;
     plain.Write(image);
-    Require(Palette(sample(plain)) == SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "unpadded PE copy extraction");
+    Require(IsFixture(Palette(sample(plain))), "unpadded PE copy extraction");
     const auto baseline = ExecutableBytesRead();
     Require(baseline > 0 && baseline < 4u * 1024 * 1024, "extraction reads bounded ranges");
 
@@ -547,7 +534,7 @@ void PaddedExecutable(const std::wstring& ownPath) {
     padded.resize(56u * 1024 * 1024, '\x5a');
     TempFile large;
     large.Write(padded);
-    Require(Palette(sample(large)) == SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "heavily padded PE extraction");
+    Require(Palette(sample(large)) == Palette(sample(plain)), "heavily padded PE extraction");
     Require(ExecutableBytesRead() == baseline, "bytes read do not scale with file size");
 
     padded.resize(64u * 1024 * 1024 + 1, '\x5a');
@@ -584,8 +571,8 @@ void Native() {    Require(std::get<Fallback>(PixelsFromOwnedIcon(nullptr)).reas
     Require(std::any_of(pixels->begin(), pixels->end(), [](const auto& p) { return p.a == 0; }) &&
             std::any_of(pixels->begin(), pixels->end(), [](const auto& p) { return p.a == 255; }),
             "WIC preserves transparent corner and opaque yarn");
-    const auto nativePalette = Palette(SamplePalette(*pixels));
-    Require(nativePalette.baseArgb == 0xffc04b4bu,
+    const auto nativePalette = Palette(SamplePalette(*pixels, "exe:OwnFixture"));
+    Require(IsFixture(nativePalette),
             "native icon outputs portable premultiplied red");
     for (const bool legacy : {false, true}) {
         const HICON memory = MemoryIcon(legacy);
@@ -593,7 +580,7 @@ void Native() {    Require(std::get<Fallback>(PixelsFromOwnedIcon(nullptr)).reas
         DestroyIcon(memory);
         const auto bitmap = std::get_if<IconPixels>(&copied);
         Require(bitmap != nullptr, "owned legacy/alpha conversion");
-        Require(Palette(SamplePalette(*bitmap)).baseArgb == 0xffc04b4bu,
+        Require(Palette(SamplePalette(*bitmap, "exe:OwnFixture")).baseArgb == FixtureBase,
                 "native partial alpha or legacy mask must not darken yarn");
         const auto transparent = std::count_if(bitmap->begin(), bitmap->end(),
                                                [](const auto& p) { return p.a == 0; });
@@ -612,13 +599,14 @@ void Native() {    Require(std::get<Fallback>(PixelsFromOwnedIcon(nullptr)).reas
     auto neutral = PixelsFromOwnedIcon(monochrome);
     DestroyIcon(monochrome);
     Require(std::holds_alternative<IconPixels>(neutral), "native monochrome conversion");
-    Failure(SamplePalette(std::get<IconPixels>(neutral)), FallbackReason::InsufficientColorCoverage);
+    Require(Palette(SamplePalette(std::get<IconPixels>(neutral), "exe:Mono")).baseArgb == 0xffb8b8b8u,
+            "monochrome icon samples neutral yarn");
     std::array<wchar_t, 4096> path{};
     const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     Require(length && length < path.size(), "own executable path bounded");
     const IconInput own{"exe:OwnFixture", 1, std::wstring(path.data(), length)};
-    Require(Palette(SampleExecutableIcon(own, {}, std::chrono::steady_clock::now() + 3s)) ==
-            SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "bounded own executable PE icon extraction");
+    Require(Palette(SampleExecutableIcon(own, {}, std::chrono::steady_clock::now() + 3s)) == nativePalette,
+            "bounded own executable PE icon extraction");
     auto missing = own;
     missing.executablePath += L".unavailable-icon-fixture";
     Failure(SampleExecutableIcon(missing, {}, std::chrono::steady_clock::now() + 1s),
@@ -652,9 +640,9 @@ int wmain(int argc, wchar_t** argv) {
     try {
         if (argc == 3 && std::wstring_view(argv[1]) == L"--fixture-icon") {
             const IconInput fixture{"exe:KnownColorFixture", 0, argv[2]};
-            Require(Palette(SampleExecutableIcon(fixture, {}, std::chrono::steady_clock::now() + 500ms)) ==
-                SampledPalette{0xffc04b4bu, 0xfff6f0deu}, "ordinary fixture executable must contain the known colorful PE icon");
-            std::cout << "PASS ordinary Fixture PE icon: base=0xffc04b4b contrast=0xfff6f0de; 500ms bound, no GUI\n";
+            Require(IsFixture(Palette(SampleExecutableIcon(fixture, {}, std::chrono::steady_clock::now() + 500ms))),
+                "ordinary fixture executable must contain the known colorful PE icon");
+            std::cout << "PASS ordinary Fixture PE icon: base=0xffc04c4c diamond glyph; 500ms bound, no GUI\n";
             return 0;
         }
         if (argc != 1) {

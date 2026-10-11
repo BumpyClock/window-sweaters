@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <variant>
 
@@ -20,8 +21,11 @@ struct PremultipliedRgba8 {
 using IconPixels = std::array<PremultipliedRgba8, IconPixelCount>;
 
 struct SampledPalette {
-    std::uint32_t baseArgb;
-    std::uint32_t contrastArgb;
+    std::uint32_t baseArgb{};
+    std::uint32_t contrastArgb{};
+    std::uint32_t accentArgb{};
+    std::string glyph;
+    std::uint32_t seed{};
     bool operator==(const SampledPalette&) const = default;
 };
 
@@ -47,13 +51,9 @@ struct Fallback {
 using PaletteResult = std::variant<SampledPalette, Fallback>;
 using PixelResult = std::variant<IconPixels, Fallback>;
 
-PaletteResult SamplePalette(std::span<const PremultipliedRgba8> pixels) noexcept;
-std::uint32_t Soften(std::uint32_t opaqueArgb) noexcept;
+// Persistent canonical kind-prefixed UTF-8 identity only, never PID, title, display name or executable basename.
+PaletteResult SamplePalette(std::span<const PremultipliedRgba8> pixels, std::string_view canonicalAppIdentity);
+std::uint32_t FallbackAccent(std::uint32_t baseArgb, std::uint32_t contrastArgb) noexcept;
 std::uint32_t ZigzagContrast(std::uint32_t opaqueArgb) noexcept;
-
-// Persistent canonical kind-prefixed UTF-8 identity only, never PID, title, display name or executable basename; FNV is case-sensitive.
-enum class Motif { Zigzag, Picnic, Twinkle };
-Motif StableMotif(std::string_view canonicalAppIdentity) noexcept;
-std::string_view MotifName(Motif motif) noexcept;
 
 }

@@ -18,8 +18,8 @@ stitch. By-app preview is explicitly a **Finder example**, not an application
 resolver. The host owns actual app resolution and application of these settings.
 Shared Zigzag has its own persisted selection and a fixed representative-yarn
 preview. The live host samples each eligible app's local executable icon.
-Mapped By app owners keep their authored palettes; unmapped owners may acquire
-stable icon-derived Zigzag, Picnic, or Twinkle. Shared Zigzag uses each app's
+Mapped By app owners keep their authored palettes; unmapped owners knit a
+stable pattern generated from their icon. Shared Zigzag uses each app's
 winning base yarn and derives contrast from that base. Neither representative
 preview claims to show the selected application's icon or live border.
 
