@@ -112,6 +112,15 @@ allowances, not allocator/process-wide memory. The bounded gate is separate
 There are no foreign window messages, shell-extension calls, screenshot APIs or
 application-content capture. The executable is read as PE data, never loaded as code.
 
+Packaged apps usually keep their icon as PNG assets, not in the executable. When the
+PE icon is missing or unusable, the reader looks for `AppxManifest.xml` in the
+executable's folder and up to three parents. It takes the `Square44x44Logo` of the
+`Application` whose `Executable` matches, or else the package `<Logo>`, and picks the
+`altform-unplated` variant nearest 48px. It skips `altform-lightunplated` and
+`contrast-*` variants because they recolour the brand. The manifest (1 MiB) and the
+PNG (256 KiB, 256x256) use the same path, reparse and size rules as the executable.
+Only the system PNG decoder is used.
+
 The native reader restricts paths to fixed local drives, rejects reparse paths,
 verifies the opened final path, rejects DOS device names, and bounds source files to
 64 MiB. PE directory storage is capped at 1 MiB, sections at 96, each traversed

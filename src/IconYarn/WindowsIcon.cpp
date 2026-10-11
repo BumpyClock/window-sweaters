@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -344,6 +345,187 @@ bool BoundedImage(std::span<const std::uint8_t> bytes) noexcept {
 
 }
 
+namespace {
+PixelResult ScalePremultiplied(IWICImagingFactory* factory, IWICBitmapSource* premultiplied) {
+    ComPtr<IWICBitmapScaler> scaler;
+    WICPixelFormatGUID format{};
+    HRESULT status = factory->CreateBitmapScaler(&scaler);
+    if (SUCCEEDED(status)) status = scaler->Initialize(premultiplied, static_cast<UINT>(IconSide),
+        static_cast<UINT>(IconSide), WICBitmapInterpolationModeFant);
+    if (SUCCEEDED(status)) status = scaler->GetPixelFormat(&format);
+    if (SUCCEEDED(status) && format != GUID_WICPixelFormat32bppPBGRA) status = E_INVALIDARG;
+    IconPixels pixels{};
+    static_assert(sizeof(PremultipliedRgba8) == 4);
+    if (SUCCEEDED(status)) status = scaler->CopyPixels(nullptr, static_cast<UINT>(IconSide * 4),
+        static_cast<UINT>(sizeof pixels), reinterpret_cast<BYTE*>(pixels.data()));
+    if (FAILED(status))
+        return Fallback{FallbackReason::DecodeFailed, static_cast<std::uint32_t>(status)};
+    // Byte swap, not WIC RGBA conversion: WIC unpremultiplies and re-premultiplies, losing a byte at partial alpha.
+    for (auto& pixel : pixels) std::swap(pixel.r, pixel.b);
+    return pixels;
+}
+
+PixelResult PixelsFromPng(std::span<const std::uint8_t> bytes) {
+    Apartment apartment;
+    if (FAILED(apartment.Status()) && apartment.Status() != RPC_E_CHANGED_MODE)
+        return Fallback{FallbackReason::DecodeFailed, static_cast<std::uint32_t>(apartment.Status())};
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT status = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&factory));
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapDecoder> decoder;
+    ComPtr<IWICBitmapFrameDecode> frame;
+    ComPtr<IWICFormatConverter> converter;
+    UINT width = 0, height = 0;
+    if (SUCCEEDED(status)) status = factory->CreateStream(&stream);
+    if (SUCCEEDED(status)) status = stream->InitializeFromMemory(const_cast<BYTE*>(bytes.data()),
+        static_cast<DWORD>(bytes.size()));
+    if (SUCCEEDED(status)) status = factory->CreateDecoder(GUID_ContainerFormatPng, nullptr, &decoder);
+    if (SUCCEEDED(status)) status = decoder->Initialize(stream.Get(), WICDecodeMetadataCacheOnDemand);
+    if (SUCCEEDED(status)) status = decoder->GetFrame(0, &frame);
+    if (SUCCEEDED(status)) status = frame->GetSize(&width, &height);
+    if (SUCCEEDED(status) && (!width || width > MaximumIconSide || !height || height > MaximumIconSide))
+        return Fallback{FallbackReason::SourceTooLarge};
+    if (SUCCEEDED(status)) status = factory->CreateFormatConverter(&converter);
+    if (SUCCEEDED(status)) status = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom);
+    if (FAILED(status))
+        return Fallback{FallbackReason::DecodeFailed, static_cast<std::uint32_t>(status)};
+    return ScalePremultiplied(factory.Get(), converter.Get());
+}
+
+std::wstring Parent(std::wstring_view path) {
+    const auto slash = path.rfind(L'\\');
+    return std::wstring(path.substr(0, slash == std::wstring_view::npos || slash < 3 ? 0 : slash));
+}
+
+bool SameText(std::wstring_view a, std::wstring_view b) noexcept {
+    return CompareStringOrdinal(a.data(), static_cast<int>(a.size()), b.data(),
+                                static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+}
+
+std::wstring Widen(std::string_view text) {
+    const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                         static_cast<int>(text.size()), nullptr, 0);
+    std::wstring result(static_cast<std::size_t>(std::max(size, 0)), L'\0');
+    if (size > 0) MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                      static_cast<int>(text.size()), result.data(), size);
+    return result;
+}
+
+std::string_view Attribute(std::string_view element, std::string_view name) {
+    for (std::size_t at = element.find(name); at != std::string_view::npos; at = element.find(name, at + 1)) {
+        const auto quote = at + name.size();
+        const bool separated = !at || element[at - 1] == ' ' || element[at - 1] == '\n' ||
+                               element[at - 1] == '\t' || element[at - 1] == '\r';
+        if (!separated || element.substr(quote, 2) != "=\"") continue;
+        const auto end = element.find('"', quote + 2);
+        if (end != std::string_view::npos) return element.substr(quote + 2, end - quote - 2);
+    }
+    return {};
+}
+
+std::optional<std::wstring> ManifestLogo(std::string_view manifest, std::wstring_view relativeExecutable) {
+    std::string_view chosen;
+    for (std::size_t at = manifest.find("<Application "); at != std::string_view::npos;
+         at = manifest.find("<Application ", at + 1)) {
+        const auto end = manifest.find("</Application>", at);
+        const auto block = manifest.substr(at, end == std::string_view::npos ? end : end - at);
+        if (chosen.empty()) chosen = block;
+        if (SameText(Widen(Attribute(block.substr(0, block.find('>')), "Executable")), relativeExecutable)) {
+            chosen = block;
+            break;
+        }
+    }
+    auto logo = Attribute(chosen, "Square44x44Logo");
+    if (logo.empty()) {
+        const auto start = manifest.find("<Logo>");
+        const auto end = start == std::string_view::npos ? start : manifest.find("</Logo>", start);
+        if (end == std::string_view::npos) return std::nullopt;
+        logo = manifest.substr(start + 6, end - start - 6);
+    }
+    auto result = Widen(logo);
+    std::replace(result.begin(), result.end(), L'/', L'\\');
+    if (result.empty() || result.size() > 512) return std::nullopt;
+    return result;
+}
+
+// Prefer unplated art near 48px; light-theme and high-contrast variants recolor the brand.
+std::optional<std::wstring> BestLogoAsset(const std::wstring& declared) {
+    const auto folder = Parent(declared);
+    if (folder.empty()) return std::nullopt;
+    const auto file = std::wstring_view(declared).substr(folder.size() + 1);
+    const auto dot = file.rfind(L'.');
+    if (dot == std::wstring_view::npos) return std::nullopt;
+    const auto stem = file.substr(0, dot), extension = file.substr(dot);
+    WIN32_FIND_DATAW found{};
+    const auto pattern = folder + L"\\" + std::wstring(stem) + L"*" + std::wstring(extension);
+    const HANDLE search = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &found,
+                                           FindExSearchNameMatch, nullptr, 0);
+    if (search == INVALID_HANDLE_VALUE) return std::nullopt;
+    std::optional<std::wstring> best;
+    int bestScore = std::numeric_limits<int>::min();
+    unsigned visited = 0;
+    do {
+        if (found.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        const std::wstring_view name(found.cFileName);
+        if (name.size() < file.size() || !SameText(name.substr(0, stem.size()), stem) ||
+            !SameText(name.substr(name.size() - extension.size()), extension)) continue;
+        auto qualifiers = name.substr(stem.size(), name.size() - stem.size() - extension.size());
+        if (!qualifiers.empty() && qualifiers.front() != L'.') continue;
+        bool unplated = false, rejected = false;
+        int side = 44;
+        while (!qualifiers.empty()) {
+            qualifiers.remove_prefix(1);
+            const auto next = qualifiers.find_first_of(L"_.");
+            const auto token = qualifiers.substr(0, next);
+            qualifiers = next == std::wstring_view::npos ? std::wstring_view{} : qualifiers.substr(next);
+            if (token.starts_with(L"targetsize-")) side = _wtoi(std::wstring(token.substr(11)).c_str());
+            else if (token.starts_with(L"scale-")) side = 44 * _wtoi(std::wstring(token.substr(6)).c_str()) / 100;
+            else if (SameText(token, L"altform-unplated")) unplated = true;
+            else if (token.starts_with(L"altform-") || token.starts_with(L"contrast-")) rejected = true;
+        }
+        if (rejected || side <= 0 || side > static_cast<int>(MaximumIconSide)) continue;
+        const int score = (unplated ? 1000 : 0) - (side >= 48 ? side - 48 : 4 * (48 - side));
+        if (score > bestScore) { bestScore = score; best = folder + L"\\" + std::wstring(name); }
+    } while (++visited < 256 && FindNextFileW(search, &found));
+    FindClose(search);
+    return best;
+}
+
+PaletteResult SamplePackageLogo(const std::wstring& executable, std::stop_token stop,
+                                std::chrono::steady_clock::time_point deadline) {
+    auto root = Parent(executable);
+    for (unsigned depth = 0; depth < 4 && !root.empty(); ++depth, root = Parent(root)) {
+        auto opened = OpenExecutable(root + L"\\AppxManifest.xml", stop, deadline);
+        if (const auto failure = std::get_if<Fallback>(&opened)) {
+            if (failure->reason == FallbackReason::Cancelled || failure->reason == FallbackReason::DeadlineExceeded)
+                return *failure;
+            continue;
+        }
+        auto& manifestFile = *std::get<std::unique_ptr<Source>>(opened);
+        const auto manifest = manifestFile.Read(0, manifestFile.Size());
+        if (!manifest)
+            return manifestFile.Failure() ? *manifestFile.Failure() : Fallback{FallbackReason::SourceTooLarge};
+        const auto logo = ManifestLogo(std::string_view(reinterpret_cast<const char*>(manifest->data()),
+            manifest->size()), std::wstring_view(executable).substr(root.size() + 1));
+        const auto asset = logo ? BestLogoAsset(root + L"\\" + *logo) : std::nullopt;
+        if (!asset) return Fallback{FallbackReason::IconUnavailable};
+        auto image = OpenExecutable(*asset, stop, deadline);
+        if (const auto failure = std::get_if<Fallback>(&image)) return *failure;
+        auto& imageFile = *std::get<std::unique_ptr<Source>>(image);
+        if (imageFile.Size() > MaximumImageBytes) return Fallback{FallbackReason::SourceTooLarge};
+        const auto bytes = imageFile.Read(0, imageFile.Size());
+        if (!bytes) return imageFile.Failure() ? *imageFile.Failure() : Fallback{FallbackReason::InvalidResource};
+        auto pixels = PixelsFromPng(*bytes);
+        if (const auto failure = std::get_if<Fallback>(&pixels)) return *failure;
+        if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
+        return SamplePalette(std::get<IconPixels>(pixels));
+    }
+    return Fallback{FallbackReason::IconUnavailable};
+}
+}
+
 PixelResult PixelsFromOwnedIcon(HICON icon) {
     if (!icon) return Fallback{FallbackReason::IconUnavailable};
     IconBitmaps bitmaps;
@@ -391,28 +573,16 @@ PixelResult PixelsFromOwnedIcon(HICON icon) {
     if (SUCCEEDED(status)) status = factory->CreateBitmapFromMemory(width, imageHeight,
         GUID_WICPixelFormat32bppPBGRA, width * 4, static_cast<UINT>(raw.size()),
         raw.data(), &premultiplied);
-    ComPtr<IWICBitmapScaler> scaler;
-    if (SUCCEEDED(status)) status = factory->CreateBitmapScaler(&scaler);
-    if (SUCCEEDED(status)) status = scaler->Initialize(premultiplied.Get(), static_cast<UINT>(IconSide),
-        static_cast<UINT>(IconSide), WICBitmapInterpolationModeFant);
-    if (SUCCEEDED(status)) status = scaler->GetPixelFormat(&format);
-    if (SUCCEEDED(status) && format != GUID_WICPixelFormat32bppPBGRA) status = E_INVALIDARG;
-    IconPixels pixels{};
-    static_assert(sizeof(PremultipliedRgba8) == 4);
-    if (SUCCEEDED(status)) status = scaler->CopyPixels(nullptr, static_cast<UINT>(IconSide * 4),
-        static_cast<UINT>(sizeof pixels), reinterpret_cast<BYTE*>(pixels.data()));
     if (FAILED(status))
         return Fallback{FallbackReason::DecodeFailed, static_cast<std::uint32_t>(status)};
-    // Byte swap, not WIC RGBA conversion: WIC unpremultiplies and re-premultiplies, losing a byte at partial alpha.
-    for (auto& pixel : pixels) std::swap(pixel.r, pixel.b);
-    return pixels;
+    return ScalePremultiplied(factory.Get(), premultiplied.Get());
 }
 
 std::uint64_t ExecutableBytesRead() noexcept { return bytesRead; }
 
-PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
-                                  std::chrono::steady_clock::time_point deadline) {
-    bytesRead = 0;
+namespace {
+PaletteResult SampleIconResource(const IconInput& input, std::stop_token stop,
+                                 std::chrono::steady_clock::time_point deadline) {
     if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
     auto opened = OpenExecutable(input.executablePath, stop, deadline);
     if (const auto failure = std::get_if<Fallback>(&opened)) return *failure;
@@ -453,6 +623,21 @@ PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
     if (const auto failure = std::get_if<Fallback>(&pixels)) return *failure;
     if (auto interrupted = Interrupted(stop, deadline)) return *interrupted;
     return SamplePalette(std::get<IconPixels>(pixels));
+}
+
+}
+
+PaletteResult SampleExecutableIcon(const IconInput& input, std::stop_token stop,
+                                  std::chrono::steady_clock::time_point deadline) {
+    bytesRead = 0;
+    auto result = SampleIconResource(input, stop, deadline);
+    const auto* failure = std::get_if<Fallback>(&result);
+    if (!failure || failure->reason == FallbackReason::Cancelled ||
+        failure->reason == FallbackReason::DeadlineExceeded ||
+        failure->reason == FallbackReason::UnsupportedSource ||
+        failure->reason == FallbackReason::SourceTooLarge) return result;
+    auto logo = SamplePackageLogo(input.executablePath, stop, deadline);
+    return std::holds_alternative<SampledPalette>(logo) ? logo : result;
 }
 
 }

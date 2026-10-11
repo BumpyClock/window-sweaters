@@ -8,6 +8,8 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 using namespace window_sweaters::icon_yarn;
 using namespace std::chrono_literals;
@@ -398,6 +400,83 @@ private:
     std::wstring path_;
 };
 
+constexpr unsigned char RedLogoPng[] = {
+    0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52,0x00,0x00,0x00,
+    0x30,0x00,0x00,0x00,0x30,0x08,0x06,0x00,0x00,0x00,0x57,0x02,0xf9,0x87,0x00,0x00,0x00,0x45,0x49,
+    0x44,0x41,0x54,0x78,0xda,0xed,0xcf,0x31,0x0d,0x00,0x00,0x08,0x03,0x30,0xa4,0xcc,0xbf,0x0a,0x9c,
+    0x81,0x05,0x5e,0x92,0x1e,0x15,0xd0,0xea,0x64,0x3e,0x2b,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+    0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+    0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x81,0x6b,0x60,0x01,0x06,0x63,0xf8,0x00,0x4c,0xf2,0x04,0xf1,
+    0x00,0x00,0x00,0x00,0x49,0x45,0x4e,0x44,0xae,0x42,0x60,0x82
+};
+constexpr unsigned char BlueLogoPng[] = {
+    0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52,0x00,0x00,0x00,
+    0x30,0x00,0x00,0x00,0x30,0x08,0x06,0x00,0x00,0x00,0x57,0x02,0xf9,0x87,0x00,0x00,0x00,0x45,0x49,
+    0x44,0x41,0x54,0x78,0xda,0xed,0xcf,0x31,0x0d,0x00,0x00,0x08,0x03,0x30,0xa4,0xcc,0xbf,0x0a,0x9c,
+    0x81,0x05,0x5e,0x92,0x1e,0x15,0xd0,0x4a,0x7a,0x3e,0x2b,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+    0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+    0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x81,0x6b,0x60,0x01,0xc5,0xaf,0xf8,0x00,0x42,0x02,0x77,0xf1,
+    0x00,0x00,0x00,0x00,0x49,0x45,0x4e,0x44,0xae,0x42,0x60,0x82
+};
+
+class TempDirectory final {
+public:
+    TempDirectory() {
+        TempFile reserved;
+        path_ = reserved.Path() + L".d";
+        Require(CreateDirectoryW(path_.c_str(), nullptr) &&
+                CreateDirectoryW((path_ + L"\\Assets").c_str(), nullptr), "temp package fixture directory");
+    }
+    ~TempDirectory() {
+        for (const auto& file : written_) DeleteFileW(file.c_str());
+        RemoveDirectoryW((path_ + L"\\Assets").c_str());
+        RemoveDirectoryW(path_.c_str());
+    }
+    const std::wstring& Path() const noexcept { return path_; }
+    void Write(const std::wstring& relative, std::string_view bytes) {
+        const auto file = path_ + L"\\" + relative;
+        std::ofstream output(file, std::ios::binary | std::ios::trunc);
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        Require(output.good(), "write temp package fixture");
+        written_.push_back(file);
+    }
+private:
+    std::wstring path_;
+    std::vector<std::wstring> written_;
+};
+
+void PackageLogo() {
+    const auto bytes = [](const unsigned char* data, std::size_t size) {
+        return std::string_view(reinterpret_cast<const char*>(data), size);
+    };
+    TempDirectory package;
+    package.Write(L"App.exe", "not a PE image");
+    package.Write(L"Other.exe", "not a PE image");
+    package.Write(L"AppxManifest.xml",
+        "<Package><Applications>"
+        "<Application Id=\"Other\" Executable=\"Other.exe\"><uap:VisualElements Square44x44Logo=\"Assets\\Other.png\"/></Application>"
+        "<Application Id=\"App\" Executable=\"App.exe\"><uap:VisualElements Square44x44Logo=\"Assets\\Logo.png\"/></Application>"
+        "</Applications></Package>");
+    package.Write(L"Assets\\Logo.targetsize-48_altform-unplated.png", bytes(RedLogoPng, sizeof RedLogoPng));
+    package.Write(L"Assets\\Logo.altform-lightunplated_targetsize-48.png", bytes(BlueLogoPng, sizeof BlueLogoPng));
+    package.Write(L"Assets\\Logo.targetsize-48_altform-unplated_contrast-white.png", bytes(BlueLogoPng, sizeof BlueLogoPng));
+    package.Write(L"Assets\\Logo.scale-200.png", bytes(BlueLogoPng, sizeof BlueLogoPng));
+    package.Write(L"Assets\\Other.png", bytes(BlueLogoPng, sizeof BlueLogoPng));
+    const auto deadline = [] { return std::chrono::steady_clock::now() + 10s; };
+    const auto red = Palette(SamplePalette(Solid({192, 32, 32, 255})));
+    Require(Palette(SampleExecutableIcon({"aumid:Fixture!App", 1, package.Path() + L"\\App.exe"}, {}, deadline())) == red,
+            "packaged app without an exe icon samples its own unplated manifest logo");
+    std::stop_source stop;
+    stop.request_stop();
+    Failure(SampleExecutableIcon({"aumid:Fixture!App", 1, package.Path() + L"\\App.exe"}, stop.get_token(), deadline()),
+            FallbackReason::Cancelled);
+    TempDirectory unpackaged;
+    unpackaged.Write(L"App.exe", "not a PE image");
+    Failure(SampleExecutableIcon({"exe:Fixture", 1, unpackaged.Path() + L"\\App.exe"}, {}, deadline()),
+            FallbackReason::InvalidResource);
+    std::cout << "PASS packaged manifest logo fallback prefers unplated art and rejects light/contrast variants\n";
+}
+
 void PaddedExecutable(const std::wstring& ownPath) {
     std::ifstream source(ownPath, std::ios::binary);
     std::vector<char> image((std::istreambuf_iterator<char>(source)), std::istreambuf_iterator<char>());
@@ -536,6 +615,7 @@ int wmain(int argc, wchar_t** argv) {
         Pressure();
         Cancellation();
         Native();
+        PackageLogo();
         std::cout << "PASS IconYarn contract\n";
         return 0;
     } catch (const std::exception& error) {

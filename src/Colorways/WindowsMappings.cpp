@@ -186,7 +186,7 @@ constexpr auto coverage = std::to_array<ThemeCoverage>({
     {"windows-terminal", WindowsCoverage::Mapped, "Stable packaged Terminal only; Preview, Canary and unpackaged builds unmapped."},
     {"notepad", WindowsCoverage::Mapped, "Packaged Windows 11 Notepad AUMID only; legacy System32\\notepad.exe unmapped."},
     {"windows-settings", WindowsCoverage::Mapped, "Exact Settings package AUMID only; Control Panel and settings dialogs hosted by other processes unmapped."},
-    {"task-manager", WindowsCoverage::Mapped, "Exact %windir%\\System32\\Taskmgr.exe only; an elevated Task Manager may refuse owner metadata."},
+    {"task-manager", WindowsCoverage::Mapped, "Exact %windir%\\System32\\Taskmgr.exe only; administrators get an elevated Task Manager, and a non-elevated host cannot stack an overlay against it."},
     {"visual-studio", WindowsCoverage::Mapped, "Default 2022 and 2026 (18) Community, Professional and Enterprise paths only; Preview, Build Tools and custom paths unmapped."},
 });
 
