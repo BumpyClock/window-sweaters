@@ -3,10 +3,6 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 18.0.0.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{C7167F0D-BC9F-4E6E-AFE1-012C56B48DB5}") = "WindowSweaters.Package", "packaging\WindowSweaters.Package.wapproj", "{3BF239C2-7D56-456A-973C-40DAB1CC4B51}"
-	ProjectSection(ProjectDependencies) = postProject
-		{A4910D43-DFB1-4575-81BA-712E17D064E6} = {A4910D43-DFB1-4575-81BA-712E17D064E6}
-		{14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63} = {14222688-A5CE-4E4E-9EE6-8E7C6C5A6E63}
-	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Host", "src\Host\WindowSweaters.Host.vcxproj", "{A4910D43-DFB1-4575-81BA-712E17D064E6}"
 EndProject
@@ -44,6 +40,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GraphicsRecoveryTests", "te
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Startup", "src\Startup\WindowSweaters.Startup.vcxproj", "{1451D687-A040-4E36-81E4-5D6229B769BB}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WindowSweaters.Startup.Settings", "src\Startup\WindowSweaters.Startup.Settings.vcxproj", "{104FAD28-395C-4B46-88E6-62CC4371A8E5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -52,6 +50,14 @@ Global
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Debug|x64.ActiveCfg = Debug|x64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Debug|x64.Build.0 = Debug|x64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Release|x64.ActiveCfg = Release|x64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Release|x64.Build.0 = Release|x64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Debug|ARM64.Build.0 = Debug|ARM64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Release|ARM64.ActiveCfg = Release|ARM64
+		{104FAD28-395C-4B46-88E6-62CC4371A8E5}.Release|ARM64.Build.0 = Release|ARM64
 		{1451D687-A040-4E36-81E4-5D6229B769BB}.Debug|x64.ActiveCfg = Debug|x64
 		{1451D687-A040-4E36-81E4-5D6229B769BB}.Debug|x64.Build.0 = Debug|x64
 		{1451D687-A040-4E36-81E4-5D6229B769BB}.Release|x64.ActiveCfg = Release|x64

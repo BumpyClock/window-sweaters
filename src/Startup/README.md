@@ -137,9 +137,12 @@ Native consumers link `WindowSweaters.Startup.lib`, `windowsapp.lib`, and
 `runtimeobject.lib` plus `ole32.lib` for the MTA lifetime APIs.
 Default CRT is `/MTd` for Debug and `/MT` for Release,
 matching Host. A Settings `/MD[d]` consumer must build this static library into
-separate output/intermediate directories with
-`StartupRuntimeLibrary=MultiThreadedDLL` or `MultiThreadedDebugDLL`; do not link
-one CRT variant into another. The public header exposes no WinRT/WinUI types.
+separate output/intermediate directories. Settings references
+`WindowSweaters.Startup.Settings.vcxproj`, which imports the shared project with
+`StartupRuntimeLibrary=MultiThreadedDLL` or `MultiThreadedDebugDLL` and a separate
+project GUID. Visual Studio can therefore build both CRT variants in the same
+solution without relying on per-reference property overrides. Do not link one
+CRT variant into another. The public header exposes no WinRT/WinUI types.
 
 Tests use an in-memory fake startup backend and isolated fake preference store
 for all mutations. The only native call under test is **unpackaged read**;

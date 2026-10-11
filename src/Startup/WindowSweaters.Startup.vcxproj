@@ -7,7 +7,7 @@
     <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{1451D687-A040-4E36-81E4-5D6229B769BB}</ProjectGuid>
+    <ProjectGuid Condition="'$(ProjectGuid)' == ''">{1451D687-A040-4E36-81E4-5D6229B769BB}</ProjectGuid>
     <RootNamespace>window_sweaters.startup</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
