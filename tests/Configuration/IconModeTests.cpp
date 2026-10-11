@@ -120,7 +120,7 @@ void Schema3Migration(const std::filesystem::path& root) {
             tag|=static_cast<unsigned char>(schema3[offset+i])<<(8*i);
             size|=static_cast<unsigned char>(schema3[offset+4+i])<<(8*i);
         }
-        if (tag==6 || tag==8) {
+        if (tag==6 || tag==8 || tag==9) {
             schema3.erase(schema3.begin()+offset,schema3.begin()+offset+8+size);
             frameLength-=8+size;
         }
@@ -217,11 +217,102 @@ void NativeSessionPersistence(const std::filesystem::path& root) {
         "Stale shared-mode intent cannot overwrite a newer By App commit");
     restart.Stop();
 }
+void BaseOverride(const std::filesystem::path& root) {
+    Configuration chosen;
+    chosen.revision=7; chosen.design_selection=DesignSelection::by_app;
+    chosen.base_override=true; chosen.base_override_argb=0xfff8d3dfu;
+    Check(!Configuration{}.base_override && Configuration{}.base_override_argb==default_base_override_argb &&
+        Valid(chosen),"Base override defaults off and an opaque chosen base validates");
+    auto translucent=chosen; translucent.base_override_argb=0x7ff8d3dfu;
+    Check(!Valid(translucent),"Translucent base override is rejected");
+    translucent.base_override=false;
+    Check(!Valid(translucent),"A stored but disabled base override must still be opaque");
+    Message message; message.configuration=chosen; Message decoded;
+    Check(Decode(Encode(message),decoded) && decoded.configuration==chosen,"Base override survives the wire");
+    auto wire=Encode(message);
+    std::size_t offset=frame_size;
+    std::uint32_t tag=0;
+    while (offset<wire.size()) {
+        tag=0; std::uint32_t size=0;
+        for (unsigned i=0;i<4;++i) {
+            tag|=std::to_integer<std::uint32_t>(wire[offset+i])<<(8*i);
+            size|=std::to_integer<std::uint32_t>(wire[offset+4+i])<<(8*i);
+        }
+        if (tag==9) break;
+        offset+=8+size;
+    }
+    Check(tag==9,"Base override travels in tagged section 9");
+    auto bad=wire; bad[offset+8]=std::byte{2};
+    Check(!Decode(bad,decoded),"Base override flag above one is rejected");
+    bad=wire; bad.erase(bad.begin()+static_cast<std::ptrdiff_t>(offset),bad.begin()+static_cast<std::ptrdiff_t>(offset+16));
+    for (unsigned i=0;i<4;++i) bad[8+i]=std::byte((bad.size()>>(8*i))&255);
+    Check(!Decode(bad,decoded),"A current frame without the base override section is rejected");
+
+    configuration::Storage storage(root/L"base-override");
+    Check(storage.Save(chosen)==0 && storage.Load().configuration==chosen,"Base override round-trips through storage");
+    auto schema6=Bytes(storage.File());
+    std::uint32_t frameLength=0;
+    for (unsigned i=0;i<4;++i) frameLength|=static_cast<unsigned char>(schema6[12+8+i])<<(8*i);
+    offset=12+frame_size;
+    while (offset<12+frameLength) {
+        std::uint32_t size=0; tag=0;
+        for (unsigned i=0;i<4;++i) {
+            tag|=static_cast<unsigned char>(schema6[offset+i])<<(8*i);
+            size|=static_cast<unsigned char>(schema6[offset+4+i])<<(8*i);
+        }
+        if (tag==9) {
+            schema6.erase(schema6.begin()+static_cast<std::ptrdiff_t>(offset),schema6.begin()+static_cast<std::ptrdiff_t>(offset+8+size));
+            frameLength-=8+size;
+        }
+        else offset+=8+size;
+    }
+    Put(schema6,12+8,frameLength); Put(schema6,8,schema6.size());
+    Put(schema6,4,6); Put(schema6,12+4,7,2); Put(schema6,12+64,6);
+    WriteRecord(storage.File(),schema6);
+    const auto unchanged=Bytes(storage.File());
+    auto expected=chosen; expected.base_override=false; expected.base_override_argb=default_base_override_argb;
+    auto loaded=storage.Load();
+    Check(loaded.state==configuration::StorageState::ready && loaded.configuration==expected &&
+        Bytes(storage.File())==unchanged,"Schema6 files load in memory with the base override off");
+    auto mismatched=unchanged; Put(mismatched,12+4,8,2); WriteRecord(storage.File(),mismatched);
+    Check(storage.Load().state==configuration::StorageState::corrupt,"Schema6 cannot carry a protocol8 frame");
+    WriteRecord(storage.File(),unchanged);
+    auto next=expected; ++next.revision; next.base_override=true; next.base_override_argb=0xff1b2a49u;
+    Check(storage.Save(next)==0 && storage.Load().configuration==next && Bytes(storage.File())[4]==configuration_schema,
+        "First save after a schema6 load writes the current schema with the override");
+
+    Configuration plain; plain.base_override=true; plain.base_override_argb=0xffe86aa0u;
+    auto tile=settings::MakeAppearance(plain);
+    Check(!tile.chart && tile.baseArgb==0xffe86aa0u,"Plain preview takes the chosen base");
+    Configuration original; original.design_selection=DesignSelection::original; original.design_id="finder";
+    const auto literal=settings::MakeAppearance(original);
+    original.base_override=true; original.base_override_argb=0xffe86aa0u;
+    tile=settings::MakeAppearance(original);
+    Check(tile.baseArgb==0xffe86aa0u && tile.chart && tile.chart->semanticId=="finder~base-e86aa0" &&
+        tile.chart->width==literal.chart->width && tile.chart->height==literal.chart->height &&
+        tile.chart->appearance.flags==literal.chart->appearance.flags,"Original preview recolours the authored chart");
+    bool structure=true, changed=false;
+    for (std::size_t i=0;i<literal.chart->argbCells.size();++i) {
+        const bool base=(literal.chart->argbCells[i]>>24)<128;
+        structure=structure && base==((tile.chart->argbCells[i]>>24)<128);
+        changed=changed || (!base && tile.chart->argbCells[i]!=literal.chart->argbCells[i]);
+        for (std::size_t j=0;j<i;++j)
+            structure=structure && ((literal.chart->argbCells[i]==literal.chart->argbCells[j])==
+                (tile.chart->argbCells[i]==tile.chart->argbCells[j]));
+    }
+    Check(structure && changed,"Recoloured cells keep base sentinels and which cells share a yarn");
+    Configuration zigzag; zigzag.design_selection=DesignSelection::shared_zigzag;
+    zigzag.base_override=true; zigzag.base_override_argb=0xfff8d3dfu;
+    tile=settings::MakeAppearance(zigzag);
+    Check(tile.baseArgb==0xfff8d3dfu && tile.chart && tile.chart->argbCells[0]==icon_yarn::ZigzagContrast(0xfff8d3dfu) &&
+        tile.chart->argbCells[1]==0,"Shared Zigzag preview uses the chosen base and its zigzag contrast");
+}
 }
 int RunIconModeTests(const std::filesystem::path& root) {
     checks=0;
     SaltAndPreview();
     Schema3Migration(root);
+    BaseOverride(root);
     NativeSessionPersistence(root);
     return static_cast<int>(checks);
 }

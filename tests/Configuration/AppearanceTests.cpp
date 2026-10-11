@@ -46,7 +46,7 @@ Configuration Original(char const* id) {
     return value;
 }
 void DomainAndFrames() {
-    Check(configuration_schema==6 && protocol_version==7 && frame_size==176,"Appearance, eligibility, imports and startup use bounded schema6/protocol7");
+    Check(configuration_schema==7 && protocol_version==8 && frame_size==176,"Appearance, eligibility, imports, startup and base override use bounded schema7/protocol8");
     auto defaults=settings::MakeAppearance(Configuration{});
     Check(Configuration{}.material_style==MaterialStyle::raised &&
           defaults.material==knitting::Material::Raised && defaults.stitch==knitting::Stitch::Stockinette,

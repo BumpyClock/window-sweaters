@@ -23,6 +23,15 @@ stable pattern generated from their icon. Shared Zigzag uses each app's
 winning base yarn and derives contrast from that base. Neither representative
 preview claims to show the selected application's icon or live border.
 
+**Use my base color for every sweater** is a toggle followed by a second opaque
+`ColorPicker` Expander. When it is on, the preview and the host apply the chosen
+base after appearance resolution: authored charts and icon-seeded motifs adapt
+their other yarns with `colorways::AdaptPalette` (OKLab, the approved Hybrid
+strategy), Shared Zigzag derives its contrast from the chosen base, plain
+sweaters take it directly, and imported PNG charts keep their literal pixels while their
+transparent cells show the chosen base. A precise application color still wins.
+The color is saved while the toggle is off so turning it back on restores it.
+
 Every user edit captures **all** current appearance inputs with the exact
 displayed committed configuration, server identity, and client lease. Rapid
 slider/color/control changes coalesce without losing unrelated fields. Only the
@@ -51,8 +60,8 @@ A fresh admitted snapshot after host restart or client-lease expiry clears the
 transient expiry status and confirms its complete configuration. A later
 disconnect therefore retains the renewed host's latest appearance, not a
 previous instance's values. Publication/edit/confirmation metadata is local to
-Settings; protocol 7 preserves this local ordering contract while schema 6 adds
-owned personal imports and retains the existing shared mode and eligibility.
+Settings; protocol 8 preserves this local ordering contract while schema 7 adds
+the base override and retains imports, the shared mode and eligibility.
 
 ## Start at sign-in
 

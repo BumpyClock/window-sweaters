@@ -51,6 +51,12 @@ and patterns generated from each other app's icon, or **Shared Zigzag** for one 
 Manual original designs remain selectable. Settings saves choices through the
 host; closing Settings leaves decoration running.
 
+To use one base color everywhere, turn on **Use my base color for every sweater**
+and pick a color. Every sweater then knits on that base. Each design's other yarns
+shift to suit it, so the pattern stays readable and keeps the app's character.
+Imported PNG charts keep their exact pixels, and a precise application color from
+personal designs still wins. Turn the switch off to return to each app's own colors.
+
 Exterior borders are intentionally hidden for minimized, maximized, fullscreen,
 off-desktop, locked, and uncertain targets. Restore a window to ordinary size to
 see its sweater. Elevated (higher-integrity) windows are not decorated because Windows blocks z-ordering against them. An isolated `--preview-target` launch decorates only its selected

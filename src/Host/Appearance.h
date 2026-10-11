@@ -5,13 +5,23 @@
 #include "..\Knitting\KnitTile.h"
 #include "..\Integration\IconAppearance.h"
 #include "..\Integration\ImportedAppearance.h"
+#include "..\Integration\BaseOverride.h"
 #include <stdexcept>
 #include <utility>
 
 namespace window_sweaters::host {
 
-inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,
-    const integration::ImportedAppearance* imported=nullptr) {
+namespace detail {
+inline knitting::TileSpec Finish(const contracts::Configuration& configuration, knitting::TileSpec tile,
+    integration::ChartRecolor recolor) {
+    if (configuration.base_override)
+        tile = integration::OverrideBase(std::move(tile), configuration.base_override_argb, recolor,
+            colorways::ZigzagContrast(configuration.base_override_argb));
+    return knitting::NormalizeTileSpec(std::move(tile));
+}
+
+inline knitting::TileSpec Configured(const contracts::Configuration& configuration,
+    const integration::ImportedAppearance* imported, integration::ChartRecolor& recolor) {
     if (!contracts::Valid(configuration)) throw std::invalid_argument("Invalid host appearance configuration");
     knitting::TileSpec tile;
     tile.bandDip = configuration.border_width_dip;
@@ -22,14 +32,24 @@ inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configu
     if (!configuration.imports.selected_id.empty()) {
         tile.chart=imported?imported->Find(configuration.imports.selected_id):nullptr;
         if (!tile.chart) throw std::invalid_argument("Selected imported chart is unavailable");
+        recolor = integration::ChartRecolor::Preserve;
     } else if (configuration.design_selection == contracts::DesignSelection::original) {
         const auto theme = designs::ws_design_theme_by_id(configuration.design_id.c_str());
         const auto chart = theme ? designs::ws_design_chart_by_name(theme->chart_name) : nullptr;
         if (!chart) throw std::invalid_argument("Host design chart is unavailable");
         tile.chart=imported?imported->Named(chart->name):nullptr;
+        recolor = tile.chart ? integration::ChartRecolor::Preserve : integration::ChartRecolor::Adapt;
         if (!tile.chart) tile.chart = knitting::MakeDesignChart(*chart, theme->id);
     }
-    return knitting::NormalizeTileSpec(std::move(tile));
+    return tile;
+}
+}
+
+inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,
+    const integration::ImportedAppearance* imported=nullptr) {
+    auto recolor = integration::ChartRecolor::Preserve;
+    auto tile = detail::Configured(configuration, imported, recolor);
+    return detail::Finish(configuration, std::move(tile), recolor);
 }
 
 class AppearanceResolutionError final : public std::invalid_argument {
@@ -55,7 +75,8 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
     const colorways::ResolutionResult& resolution, const integration::ImportedAppearance* imported=nullptr) {
     if (!contracts::PerApplication(configuration.design_selection) && !imported)
         throw std::invalid_argument("Automatic appearance requires per-application configuration");
-    auto tile = MakeAppearance(configuration,imported);
+    auto recolor = integration::ChartRecolor::Preserve;
+    auto tile = detail::Configured(configuration, imported, recolor);
     if (const auto* error = std::get_if<colorways::ResolutionError>(&resolution))
         throw AppearanceResolutionError(*error);
     const auto& resolved = std::get<colorways::ResolvedAppearance>(resolution);
@@ -71,6 +92,7 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
     if (resolved.mapping && (!resolved.theme_id || *resolved.theme_id != resolved.mapping->theme_id))
         throw AppearanceResolutionError(colorways::ResolutionError::UnknownTheme);
     tile.baseArgb = resolved.base_argb;
+    recolor = integration::ChartRecolor::Preserve;
     if (const auto* authored = std::get_if<colorways::AuthoredChart>(&resolved.pattern)) {
         const auto* chart = designs::ws_design_chart_by_name(authored->name.c_str());
         if (!chart || authored->name.find('\0') != std::string::npos)
@@ -79,17 +101,20 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
             tile.chart=imported->Named(authored->name);
         } else if (resolved.chart_colors == colorways::ChartColorPolicy::LiteralAuthored) {
             tile.chart = knitting::MakeDesignChart(*chart, themeId.empty() ? authored->name : themeId);
+            recolor = integration::ChartRecolor::Adapt;
         } else throw std::invalid_argument("Unsupported authored chart color policy");
     } else if (std::holds_alternative<colorways::ZigzagPattern>(resolved.pattern)) {
         if (resolved.chart_colors != colorways::ChartColorPolicy::GeneratedContrast || !resolved.contrast_argb)
             throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
         tile.chart = integration::MakeGeneratedChart("zigzag", *resolved.contrast_argb);
+        recolor = integration::ChartRecolor::Contrast;
     } else if (const auto* generated = std::get_if<colorways::GeneratedPattern>(&resolved.pattern)) {
         if (resolved.chart_colors != colorways::ChartColorPolicy::GeneratedContrast ||
             !resolved.contrast_argb || !resolved.accent_argb)
             throw AppearanceResolutionError(colorways::ResolutionError::InvalidColor);
         tile.chart = integration::MakeMotifChart(generated->seed, generated->glyph,
             *resolved.contrast_argb, *resolved.accent_argb);
+        recolor = integration::ChartRecolor::Adapt;
     } else if (const auto* personal=std::get_if<colorways::PersonalChart>(&resolved.pattern)) {
         if (resolved.chart_colors!=colorways::ChartColorPolicy::PreservePersonalPixels || !imported ||
             !(tile.chart=imported->Find(personal->id,personal->revision)))
@@ -98,7 +123,9 @@ inline knitting::TileSpec MakeByAppAppearance(const contracts::Configuration& co
                resolved.chart_colors != colorways::ChartColorPolicy::NoChart) {
         throw std::invalid_argument("Host personal pattern adaptation is unavailable");
     }
-    return knitting::NormalizeTileSpec(std::move(tile));
+    if (resolved.color_source == colorways::ColorSource::Personal)
+        return knitting::NormalizeTileSpec(std::move(tile));
+    return detail::Finish(configuration, std::move(tile), recolor);
 }
 
 inline knitting::TileSpec MakeAppearance(const contracts::Configuration& configuration,

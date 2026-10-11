@@ -69,7 +69,7 @@ LoadedConfiguration Storage::Load() const noexcept {
             result.state=StorageState::corrupt; return result;
         }
         auto schema=Get(header,4,4);
-        if ((schema>=3 && schema<=6) &&
+        if ((schema>=3 && schema<=7) &&
             (read!=12 || Get(header,8,4)!=static_cast<std::uint64_t>(size.QuadPart))) {
             result.state=StorageState::corrupt; return result;
         }
@@ -80,7 +80,7 @@ LoadedConfiguration Storage::Load() const noexcept {
             result.state=StorageState::io_error; result.error=GetLastError(); return result;
         }
         if (read!=bytes.size()) { result.state=StorageState::corrupt; return result; }
-        if (schema>=3 && schema<=6) {
+        if (schema>=3 && schema<=7) {
             contracts::Message decoded;
             if (Get(bytes,0,4)!=0x31435357 ||
                 bytes.size()<12+contracts::frame_size+16+4 ||
@@ -93,25 +93,23 @@ LoadedConfiguration Storage::Load() const noexcept {
                 result.state=StorageState::corrupt; return result;
             }
             std::vector<std::byte> frame(bytes.begin()+12,bytes.begin()+12+static_cast<std::size_t>(frame_length));
-            if (schema<6) {
-                if (Get(frame,4,2)!=(schema==3?4u:schema==4?5u:6u) || Get(frame,64,4)!=schema ||
+            if (schema<7) {
+                if (Get(frame,4,2)!=schema+1 || Get(frame,64,4)!=schema ||
                     (schema<5 && frame_length!=bytes.size()-16) ||
                     (schema==3 && Get(frame,88,4)>static_cast<unsigned>(contracts::DesignSelection::by_app))) {
                     result.state=StorageState::corrupt; return result;
                 }
                 Put(frame,4,contracts::protocol_version,2);
                 Put(frame,64,contracts::configuration_schema,4);
-                if (schema<5) {
-                    contracts::payload::Writer empty;
-                    contracts::payload::Imports(empty,{});
+                const auto append=[&](std::uint32_t tag,contracts::payload::Writer const& section) {
                     const auto offset=frame.size(); frame.resize(offset+8);
-                    Put(frame,offset,6,4); Put(frame,offset+4,empty.bytes.size(),4);
-                    frame.insert(frame.end(),empty.bytes.begin(),empty.bytes.end());
-                }
-                contracts::payload::Writer startup; startup.Number(0);
-                const auto offset=frame.size(); frame.resize(offset+8);
-                Put(frame,offset,8,4); Put(frame,offset+4,startup.bytes.size(),4);
-                frame.insert(frame.end(),startup.bytes.begin(),startup.bytes.end());
+                    Put(frame,offset,tag,4); Put(frame,offset+4,section.bytes.size(),4);
+                    frame.insert(frame.end(),section.bytes.begin(),section.bytes.end());
+                };
+                if (schema<5) { contracts::payload::Writer empty; contracts::payload::Imports(empty,{}); append(6,empty); }
+                if (schema<6) { contracts::payload::Writer startup; startup.Number(0); append(8,startup); }
+                contracts::payload::Writer base; base.Number(0); base.Number(contracts::default_base_override_argb);
+                append(9,base);
                 Put(frame,8,frame.size(),4);
             } else if (Get(frame,64,4)!=schema) {
                 result.state=StorageState::corrupt; return result;

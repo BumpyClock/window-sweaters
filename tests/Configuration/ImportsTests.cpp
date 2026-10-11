@@ -215,7 +215,7 @@ void LegacyStartupSchema(std::filesystem::path const& root,unsigned schema) {
             tag|=static_cast<unsigned char>(bytes[offset+i])<<(8*i);
             size|=static_cast<unsigned char>(bytes[offset+4+i])<<(8*i);
         }
-        if ((schema==4 && tag==6) || tag==8) { bytes.erase(bytes.begin()+offset,bytes.begin()+offset+8+size); frameLength-=8+size; }
+        if ((schema==4 && tag==6) || tag==8 || tag==9) { bytes.erase(bytes.begin()+offset,bytes.begin()+offset+8+size); frameLength-=8+size; }
         else offset+=8+size;
     }
     if (schema==4) bytes.resize(12+frameLength+4);

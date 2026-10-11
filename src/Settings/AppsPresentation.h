@@ -19,7 +19,8 @@ inline bool SameAppearance(contracts::Configuration const& a,contracts::Configur
     return a.paused==b.paused && a.border_width_dip==b.border_width_dip &&
         a.design_selection==b.design_selection && a.design_id==b.design_id &&
         a.stitch_style==b.stitch_style && a.material_style==b.material_style &&
-        a.stitch_rows==b.stitch_rows && a.yarn_argb==b.yarn_argb && a.imports==b.imports;
+        a.stitch_rows==b.stitch_rows && a.yarn_argb==b.yarn_argb && a.base_override==b.base_override &&
+        a.base_override_argb==b.base_override_argb && a.imports==b.imports;
 }
 enum class AppItemChange { remove, insert, move };
 enum class AppFocusControl { toggle, remove_choice, defaults };

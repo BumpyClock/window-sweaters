@@ -352,6 +352,110 @@ void ResolverBoundaryAndFinishing() {
     Rejected([&] { (void)host::MakeAppearance(invalid, chrome, roots); });
 }
 
+bool SameStructure(const knitting::Chart& literal, const knitting::Chart& adapted) {
+    if (literal.width != adapted.width || literal.height != adapted.height ||
+        literal.appearance.flags != adapted.appearance.flags) return false;
+    for (std::size_t i = 0; i < literal.argbCells.size(); ++i) {
+        if (((literal.argbCells[i] >> 24) < 128) != ((adapted.argbCells[i] >> 24) < 128)) return false;
+        for (std::size_t j = 0; j < i; ++j)
+            if ((literal.argbCells[i] == literal.argbCells[j]) != (adapted.argbCells[i] == adapted.argbCells[j])) return false;
+    }
+    return true;
+}
+
+bool AdaptedFrom(const knitting::TileSpec& literal, const knitting::TileSpec& adapted, std::uint32_t base) {
+    std::vector<std::uint32_t> yarns;
+    for (auto cell : literal.chart->argbCells)
+        if ((cell >> 24) >= 128 && std::find(yarns.begin(), yarns.end(), cell) == yarns.end()) yarns.push_back(cell);
+    const auto expected = colorways::AdaptPalette(literal.baseArgb, yarns, base);
+    for (std::size_t i = 0; i < literal.chart->argbCells.size(); ++i) {
+        const auto cell = literal.chart->argbCells[i];
+        const auto want = (cell >> 24) < 128 ? cell :
+            expected[static_cast<std::size_t>(std::find(yarns.begin(), yarns.end(), cell) - yarns.begin())];
+        if (adapted.chart->argbCells[i] != want) return false;
+    }
+    return adapted.baseArgb == base && SameStructure(*literal.chart, *adapted.chart);
+}
+
+void BaseOverride() {
+    auto configuration = ByAppConfiguration();
+    const auto literal = host::MakeAppearance(configuration, chrome, roots);
+    configuration.base_override = true;
+    configuration.base_override_argb = 0xffe86aa0u;
+    auto tile = host::MakeAppearance(configuration, chrome, roots);
+    Check(tile.baseArgb == 0xffe86aa0u && tile.chart && tile.chart->semanticId == "google-chrome~base-e86aa0" &&
+          SameStructure(*literal.chart, *tile.chart) && tile.chart->argbCells[4] != literal.chart->argbCells[4],
+        "Override recolours a mapped authored chart and keeps its cell structure");
+    std::vector<std::uint32_t> yarns;
+    for (auto cell : literal.chart->argbCells)
+        if ((cell >> 24) >= 128 && std::find(yarns.begin(), yarns.end(), cell) == yarns.end()) yarns.push_back(cell);
+    const auto adapted = colorways::AdaptPalette(literal.baseArgb, yarns, 0xffe86aa0u);
+    const auto red = static_cast<std::size_t>(std::find(yarns.begin(), yarns.end(), 0xffd8675bu) - yarns.begin());
+    Check(tile.chart->argbCells[4] == adapted[red], "Mapped cells take the adapted palette from the app's own base");
+    Check(host::MakeAppearance(configuration, chrome, roots).chart->argbCells == tile.chart->argbCells,
+        "Override appearance is deterministic");
+
+    std::array<colorways::PersonalRule, 1> rules{{{chrome, {{0xff112233u}, {}}, {}}}};
+    tile = host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&chrome, {}, rules, roots));
+    Check(tile.baseArgb == 0xff112233u && tile.chart->semanticId == "google-chrome" &&
+          tile.chart->argbCells[4] == 0xffd8675bu, "A personal application colour outranks the global override");
+
+    auto plain = configuration;
+    plain.design_selection = contracts::DesignSelection::plain;
+    tile = host::MakeAppearance(plain);
+    Check(!tile.chart && tile.baseArgb == 0xffe86aa0u, "A plain sweater takes the override base");
+
+    const colorways::AutomaticAppearance icon{0xff112233u, 0xfff6f0deu, 0xffedae49u, 0x1234567u, ".aaa.aabaa..b...aaa.a...a"};
+    const auto motif = host::MakeAppearance(ByAppConfiguration(), unknown, roots, icon);
+    tile = host::MakeAppearance(configuration, unknown, roots, icon);
+    std::vector<std::uint32_t> motifYarns;
+    for (auto cell : tile.chart->argbCells)
+        if ((cell >> 24) >= 128 && std::find(motifYarns.begin(), motifYarns.end(), cell) == motifYarns.end()) motifYarns.push_back(cell);
+    Check(Generated(motif) && tile.chart->semanticId == "generated-19088743~base-e86aa0" &&
+          AdaptedFrom(motif, tile, 0xffe86aa0u) && motifYarns.size() == 2 && motifYarns[0] != motifYarns[1] &&
+          std::find(motifYarns.begin(), motifYarns.end(), colorways::ZigzagContrast(0xffe86aa0u)) == motifYarns.end(),
+        "An icon-seeded motif keeps two distinct yarns adapted to the override base");
+    const auto fallback = host::MakeAppearance(ByAppConfiguration(), unknown, roots);
+    tile = host::MakeAppearance(configuration, unknown, roots);
+    Check(Generated(fallback) && AdaptedFrom(fallback, tile, 0xffe86aa0u),
+        "The generated fallback motif adapts to the override base");
+
+    auto shared = configuration;
+    shared.design_selection = contracts::DesignSelection::shared_zigzag;
+    shared.base_override_argb = 0xff1b2a49u;
+    tile = host::MakeAppearance(shared, chrome, roots, colorways::AutomaticAppearance{0xff769cc0u, 0xfff6f0deu, 0xffedae49u, 7, {}});
+    Check(tile.baseArgb == 0xff1b2a49u && tile.chart->argbCells[0] == colorways::ZigzagContrast(0xff1b2a49u) &&
+          tile.chart->argbCells[1] == 0, "Shared Zigzag uses the override base and its zigzag contrast");
+
+    colorways::ResolverSettings settings;
+    settings.design = colorways::SelectedTheme{"notes"};
+    const auto notes = host::MakeByAppAppearance(ByAppConfiguration(), colorways::ResolveAppearance(&chrome, settings, {}, roots));
+    if (notes.chart->appearance.cuffArgb) {
+        tile = host::MakeByAppAppearance(configuration, colorways::ResolveAppearance(&chrome, settings, {}, roots));
+        Check(tile.chart->appearance.cuffArgb && tile.chart->appearance.cuffArgb != notes.chart->appearance.cuffArgb &&
+              (tile.chart->appearance.cuffArgb >> 24) == 255 && SameStructure(*notes.chart, *tile.chart),
+            "Authored cuff yarn adapts with the chart palette");
+    }
+
+    knitting::TileSpec personal;
+    personal.baseArgb = 0xff112233u;
+    personal.chart = std::make_shared<const knitting::Chart>("personal", 3, 2, 1,
+        std::vector<std::uint32_t>{0x00000000u, 0xff336699u});
+    tile = integration::OverrideBase(personal, 0xffe86aa0u, integration::ChartRecolor::Preserve, 0);
+    Check(tile.chart == personal.chart && tile.baseArgb == 0xffe86aa0u,
+        "Personal PNG pixels stay exact; only transparent cells show the override base");
+
+    auto original = ByAppConfiguration();
+    original.design_selection = contracts::DesignSelection::original;
+    original.design_id = "google-chrome";
+    const auto global = host::MakeAppearance(original);
+    original.base_override = true;
+    original.base_override_argb = 0xff8a8a8au;
+    tile = host::MakeAppearance(original);
+    Check(tile.baseArgb == 0xff8a8a8au && SameStructure(*global.chart, *tile.chart) &&
+          tile.chart->semanticId == "google-chrome~base-8a8a8a", "Global original design also follows the override");
+}
+
 void TargetTileKeys() {
     auto configuration = ByAppConfiguration();
     knitting::TileCache cache;
@@ -408,6 +512,29 @@ int main() {
             configuration.design_id = theme->id;
             configuration.yarn_argb = theme->base_argb;
             compare(configuration);
+            configuration.base_override = true;
+            compare(configuration);
+            configuration.base_override = false;
+        }
+        wchar_t outputs[MAX_PATH]{};
+        if (GetEnvironmentVariableW(L"WS_BASE_OVERRIDE_OUTPUTS", outputs, MAX_PATH)) {
+            for (const auto base : {0u, 0xffe86aa0u, 0xff1b2a49u, 0xfff8d3dfu, 0xff8a8a8au}) {
+                for (std::size_t index = 0; index < designs::ws_design_theme_count(); ++index) {
+                    const auto theme = designs::ws_design_theme_at(index);
+                    configuration.design_id = theme->id;
+                    configuration.yarn_argb = theme->base_argb;
+                    configuration.base_override = base != 0;
+                    if (base) configuration.base_override_argb = base;
+                    auto tile = host::MakeAppearance(configuration);
+                    tile.rasterScale = 2;
+                    rendering::KnitFrameSpec frame;
+                    frame.widthDip = 400; frame.heightDip = 140; frame.bandDip = configuration.border_width_dip;
+                    wchar_t name[MAX_PATH]{};
+                    swprintf_s(name, L"%s\\%06x-%S.png", outputs, base & 0xffffffu, theme->id);
+                    knitting::SavePng(rendering::KnitRaster::RenderFrame(frame, tile, hostCache), name);
+                }
+            }
+            configuration.base_override = false;
         }
         configuration.design_selection = contracts::DesignSelection::plain;
         configuration.design_id.clear();
@@ -435,6 +562,7 @@ int main() {
         NormalizationAndFallback();
         ResolverBoundaryAndFinishing();
         TargetTileKeys();
+        BaseOverride();
         std::printf("PASS: %zu identity-aware Host adapter checks (18 required original owner fixtures, %zu optional extensions); native two-app desktop demonstration is a separate gate\n",
             adapterChecks, optionalOwnerFixtures);
 #endif
