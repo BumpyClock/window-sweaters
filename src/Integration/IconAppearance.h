@@ -1,11 +1,14 @@
 #pragma once
 
 #include "..\Applications\AppIdentity.h"
+#include "..\IconYarn\IconMotif.h"
 #include "..\IconYarn\Preparation.h"
 #include "..\Colorways\Resolver.h"
 #include "..\Knitting\KnitTile.h"
 #include <windows.h>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace window_sweaters::integration {
 
@@ -43,17 +46,31 @@ inline std::variant<icon_yarn::IconInput, icon_yarn::Fallback> MakeIconInput(
     return IconInput{std::move(salt), iconRevision, std::wstring(executableSource)};
 }
 
-inline std::optional<colorways::AutomaticAppearance> AutomaticProposal(
-    const icon_yarn::IconInput& input, const icon_yarn::PaletteResult& result) {
+inline std::optional<colorways::AutomaticAppearance> AutomaticProposal(const icon_yarn::PaletteResult& result) {
     const auto* palette = std::get_if<icon_yarn::SampledPalette>(&result);
     if (!palette) return {};
-    return colorways::AutomaticAppearance{palette->baseArgb, palette->contrastArgb,
-        std::string(icon_yarn::MotifName(icon_yarn::StableMotif(input.canonicalAppIdentity)))};
+    return colorways::AutomaticAppearance{palette->baseArgb, palette->contrastArgb, palette->accentArgb,
+        palette->seed, palette->glyph};
+}
+
+inline std::shared_ptr<const knitting::Chart> MakeMotifChart(
+    std::uint32_t seed, std::string_view glyph, std::uint32_t contrast, std::uint32_t accent) {
+    if ((contrast >> 24) != 255 || (accent >> 24) != 255)
+        throw std::invalid_argument("Invalid generated motif yarn");
+    const auto rows = icon_yarn::GenerateMotif(seed, glyph);
+    const auto width = static_cast<std::uint32_t>(rows[0].size());
+    std::vector<std::uint32_t> cells;
+    cells.reserve(rows.size() * width);
+    for (const auto& row : rows)
+        for (const char cell : row) cells.push_back(cell == 'a' ? contrast : cell == 'b' ? accent : 0);
+    return std::make_shared<const knitting::Chart>("generated-" + std::to_string(seed), 0, width,
+        static_cast<std::uint32_t>(rows.size()), std::move(cells),
+        knitting::ChartAppearance{designs::ChartDefinedYarn | designs::ChartSculptedYarn});
 }
 
 inline std::shared_ptr<const knitting::Chart> MakeGeneratedChart(
     std::string_view name, std::uint32_t contrast) {
-    if ((contrast >> 24) != 255 || (name != "zigzag" && name != "picnic" && name != "twinkle"))
+    if ((contrast >> 24) != 255 || name != "zigzag")
         throw std::invalid_argument("Invalid generated yarn chart");
     const std::string chartName(name);
     const auto* source = designs::ws_design_chart_by_name(chartName.c_str());

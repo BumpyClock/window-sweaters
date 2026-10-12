@@ -45,6 +45,7 @@
     <ClCompile Include="..\..\src\Applications\EligibilityPreferences.cpp" />
     <ClCompile Include="..\..\src\Applications\WindowOwnerMetadata.cpp" />
     <ClCompile Include="..\..\src\Applications\ProcessMetadata.cpp" />
+    <ClCompile Include="..\..\src\Colorways\Recolor.cpp" />
     <ClCompile Include="..\..\src\Colorways\Resolver.cpp" />
     <ClCompile Include="..\..\src\Colorways\WindowsMappings.cpp" />
     <ClCompile Include="..\..\src\Knitting\KnitTile.cpp" />

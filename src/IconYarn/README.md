@@ -5,56 +5,82 @@ The Host integrates its completion gate and worker with validated owner metadata
 the shared resolver, and native knitting publication. Settings exposes a distinct
 persisted Shared Zigzag mode. Native acceptance and independent integration review
 are recorded separately in `docs\parity.md`.
-Portable consumers compile `IconPalette.cpp` and `Preparation.cpp` with C++20.
-Windows consumers add `WindowsIcon.cpp` and link `user32.lib`, `gdi32.lib`,
+Portable consumers compile `IconPalette.cpp`, `IconMotif.cpp` and `Preparation.cpp`
+with C++20. Windows consumers add `WindowsIcon.cpp` and link `user32.lib`, `gdi32.lib`,
 `ole32.lib` and `windowscodecs.lib`; the standalone test project supplies these.
 
 ## Palette boundary
 
-`IconPalette.h` has no Windows dependency. `SamplePalette` accepts exactly 2,304
-top-down, 48x48 sRGB `PremultipliedRgba8` pixels. Channels are bytes in R,G,B,A order.
-They are premultiplied in sRGB, not linear-light space. Invalid size or RGB greater
-than alpha returns `Fallback{InvalidPixels}`. Input and output contain no handles.
+`IconPalette.h` has no Windows dependency. `SamplePalette(pixels, identity)` accepts
+exactly 2,304 top-down, 48x48 sRGB `PremultipliedRgba8` pixels. Channels are bytes in
+R,G,B,A order, premultiplied in sRGB, not linear-light space. Invalid size or RGB
+greater than alpha returns `Fallback{InvalidPixels}`. Fewer than 38 pixels with alpha
+128 or more returns `Fallback{InsufficientColorCoverage}`. Grey and monochrome icons
+succeed. Input and output contain no handles.
 
-The mathematics follows `src/autoyarn.m:63-159` at upstream revision
-`a49dff52483dafdbe27f972bd271cd28d37cef1c`, under the repository GPL-3.0 license:
+The algorithm ports the approved icon-seeded prototype (`icongen.py`) exactly,
+including Python's `max`/`index` tie breaks, floor division, `colorsys` HLS and
+round-half-even byte conversion. Golden tests in `tests\IconYarn` pin its output.
 
-* Skip alpha below 217, unpremultiply by dividing RGB bytes by alpha.
-* Reject HSV saturation below .18, brightness below .12, or channel range below .10.
-* Require at least 38 qualifying pixels. Count floor-quantized RGB in 4,096 bins.
-* Pick up to three dominant bins, with deterministic ascending-bin tie breaks.
-  Candidates must differ by at least .06 circular hue or .20 HSL lightness.
-* Soften HSL saturation to `clamp(s*.48,.22,.60)` and lightness to
-  `clamp(l*.85+.10,.30,.72)`. Truncate output channels, as upstream does.
-* Select an accent with raw lightness separation of at least .20, then recheck
-  actual softened byte colors. If insufficient, derive `ZigzagContrast(base)`.
-  It is `0xfff6f0de` below lightness .62, otherwise the same hue/saturation at L-.26.
+1. Divide RGB by alpha, rounded. Pixels with alpha 128 or more are opaque.
+2. Bucket opaque pixels by the top 3 bits of each channel. Average each bucket and
+   sort by (count, average) descending. The largest is the base. Candidates are the
+   other buckets with at least 1/33 of the pixels and squared RGB distance 3,600 or
+   more from the base. The contrast is the candidate with the largest luma difference
+   from the base. Without one, the base is mixed 60% toward white (luma below 140)
+   or 55% toward black. The accent is the first candidate at distance 3,600 or more
+   from the contrast, else the contrast mixed 50% with gold `#edae49`.
+3. The glyph side G is `5 + (FNV-1a(identity) & 1)`. The opaque bounding box is cut
+   into a GxG grid. Each cell takes the majority of transparent, base, contrast or
+   accent pixels (nearest raw colour), written `.`, `.`, `a`, `b`. Cells with no
+   8-neighbour are cleared (x wraps, y does not). A glyph with fewer than G*G/6 stitches
+   or fewer than G*G/5 gaps becomes the built-in diamond.
+4. The seed is FNV-1a over the identity bytes, the glyph characters and each raw
+   channel shifted right by 4.
+5. Each colour is softened in HLS: saturation `clamp(s*.48,.22,.60)` (0 below .08),
+   lightness `clamp(l*.85+.10,.30,.72)`. A contrast or accent within .18 lightness of
+   the base moves to base lightness ±.22.
 
-`PaletteResult` is `variant<SampledPalette,Fallback>`. A successful palette contains
-opaque `baseArgb` and `contrastArgb` in `0xffRRGGBB` order. Transparent, monochrome,
-faint-gray and insufficient-coverage inputs return an explicit reason, not empty
-colors. There is deliberately no duplicate fallback basket table here.
+`PaletteResult` is `variant<SampledPalette,Fallback>`. `SampledPalette` holds opaque
+`baseArgb`, `contrastArgb` and `accentArgb` in `0xffRRGGBB` order, the row-major
+`glyph` string and the `seed`. `FallbackAccent(base, contrast)` applies the same
+gold mix and softening, separated from `base`, for apps without a sample.
+`ZigzagContrast` serves Shared Zigzag and the Settings preview: `0xfff6f0de` below
+lightness .62, otherwise the same hue and saturation at L-.26.
 
-`StableMotif` applies case-sensitive 32-bit FNV-1a to the complete supplied identity
-bytes, modulo `zigzag`, `picnic`, `twinkle`. The Host must supply a persistent,
-canonical, kind-prefixed UTF-8 identity. `AppIdentity::Kind()+Key()` must be converted
-at the Host boundary: executable identity equality is Windows ordinal
-case-insensitive, while AUMID equality is exact. Equivalent executable identities
-need one stable canonical byte spelling before use here. Raw Key alone, PID, HWND,
-window titles, display names and basenames are not valid persistent salts.
+The identity must be the persistent, canonical, kind-prefixed UTF-8 identity from
+`integration::MakeIconInput`. `AppIdentity::Kind()+Key()` must be converted at the
+Host boundary: executable identity equality is Windows ordinal case-insensitive,
+while AUMID equality is exact. Raw Key alone, PID, HWND, window titles, display names
+and basenames are not valid persistent salts.
+
+## Motif generation
+
+`IconMotif.h` is portable. `GenerateMotif(seed, glyph)` returns six equal rows of
+`.`, `a` and `b`, 6 to 18 stitches wide, with no isolated stitches. An empty glyph
+uses the diamond of side `5 + (seed & 1)`. `seed % 3` picks the generator, seeded with
+xorshift32 `Rng(seed ^ (variant + 1))`:
+
+* 0, grown peerie: a 5, 7 or 9 wide mirrored peerie grown from the glyph's top,
+  middle and bottom rows, with an optional dashed stripe.
+* 1, glyph and filler: the glyph beside a two-row filler bar, optionally mirrored.
+* 2, mirror garland: the left-mirrored glyph next to its vertical flip.
 
 ## Resolver interoperability and precedence
 
-The Host translates successful sampling to
-`colorways::AutomaticAppearance{base_argb, contrast_argb, chart_name}`:
-copy `baseArgb`, copy `contrastArgb` for By App, and use
-`string(MotifName(StableMotif(canonicalAppIdentity)))` as the generated built-in motif.
-On fallback or while pending, omit the automatic proposal and let the resolver
-provide its existing stable basket/authored provisional result.
+`integration::AutomaticProposal` translates a successful sample to
+`colorways::AutomaticAppearance{base_argb, contrast_argb, accent_argb, seed, glyph}`.
+An unmapped app with a sample resolves to `GeneratedPattern{seed, glyph}` with
+`PatternSource::AutomaticSample`. While pending or after a fallback, it resolves to
+`GeneratedPattern{StableHash(key), ""}` with `PatternSource::GeneratedFallback`, on
+the stable basket colour, `ZigzagContrast(base)` and `FallbackAccent`. Only a missing
+application identity gets `PlainFallback`. `integration::MakeMotifChart` knits the
+rows as `generated-<seed>`, with `a` as contrast, `b` as accent and `.` as base.
 
 The resolver, not this worker, applies explicit personal colors, manual selections,
-authored By App mapping, mode semantics and personal PNG precedence. Sampling must
-never directly mutate a border or recolor a semantic personal PNG asset. Shared
+authored By App mapping, mode semantics and personal PNG precedence. A personal base
+replaces the sampled contrast and accent with ones derived from that base. Sampling
+must never directly mutate a border or recolor a semantic personal PNG asset. Shared
 Zigzag derives its contrast from the winning main yarn, not the sample's secondary
 accent; explicit personal contrast remains the resolver's highest-priority override.
 Authored By App charts keep their literal authored colors.

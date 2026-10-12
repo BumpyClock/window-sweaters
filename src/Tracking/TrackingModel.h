@@ -52,6 +52,7 @@ struct AliveWindow {
     bool maximized{};
     bool fullscreen{};
     bool topmost{};
+    bool outranksHost{};
 };
 
 struct DestroyedWindow { WindowHandle hwnd{}; };

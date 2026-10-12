@@ -22,7 +22,7 @@
   <ItemGroup>
     <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
     <ClCompile Include="..\Knitting\KnitTile.cpp"/><ClCompile Include="..\Knitting\Chart.cpp"/><ClCompile Include="..\Rendering\KnitRaster.cpp"/><ClCompile Include="Preview.cpp"/>
-    <ClCompile Include="..\IconYarn\IconPalette.cpp"/>
+    <ClCompile Include="..\IconYarn\IconMotif.cpp"/><ClCompile Include="..\IconYarn\IconPalette.cpp"/><ClCompile Include="..\Colorways\Recolor.cpp"/>
     <ClInclude Include="Preview.h"/>
     <ClInclude Include="..\Rendering\ResourceLedger.h"/>
   </ItemGroup>

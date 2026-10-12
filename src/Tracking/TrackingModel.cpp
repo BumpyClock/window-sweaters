@@ -47,7 +47,7 @@ Eligibility Evaluate(const Observation& observation, const Policy& policy) {
     if (window.identity.pid == policy.hostPid
         || std::find(policy.excludedPids.begin(), policy.excludedPids.end(), window.identity.pid)
             != policy.excludedPids.end()
-        || !window.ordinaryTopLevel || ExcludedClass(window.className, policy)
+        || !window.ordinaryTopLevel || window.outranksHost || ExcludedClass(window.className, policy)
         || (policy.mode == TrackingMode::FixtureOnly
             && (window.hwnd != policy.fixtureTarget
                 || (policy.fixtureIdentity && window.identity != *policy.fixtureIdentity)))

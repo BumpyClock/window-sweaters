@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "..\..\src\Colorways\Resolver.h"
 #include "..\..\src\Designs\Catalogue.h"
+#include "..\..\src\IconYarn\IconPalette.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,8 @@
 
 using namespace window_sweaters;
 using namespace window_sweaters::colorways;
+
+std::size_t RecolorTests();
 
 namespace {
 std::size_t checks = 0;
@@ -197,7 +200,12 @@ void UnmappedAndSimilarNames() {
         const auto value = Appearance(ResolveAppearance(&identity, {}, {}, roots));
         Check(!value.mapping && !value.theme_id, "unverified/similar basename has no automatic theme");
         Check(value.color_source == ColorSource::StableFallback &&
-              value.pattern == PatternChoice(PlainPattern{}), "unmapped deterministic plain fallback");
+              value.pattern == PatternChoice(GeneratedPattern{StableHash(identity.Key()), {}}) &&
+              value.pattern_source == PatternSource::GeneratedFallback &&
+              value.chart_colors == ChartColorPolicy::GeneratedContrast &&
+              value.contrast_argb == ZigzagContrast(value.base_argb) &&
+              value.accent_argb == icon_yarn::FallbackAccent(value.base_argb, *value.contrast_argb),
+              "unmapped app without a sample knits a stable generated diamond, never plain");
     }
     const std::wstring_view packages[] = {
         L"MSTeams_aaaaaaaaaaaaa!MSTeams",
@@ -256,8 +264,13 @@ void FallbackAndRelaunch() {
     Check(unknown == relaunched, "stable relaunch identity");
     Check(Appearance(ResolveAppearance(&relaunched, {})).base_argb == 0xff7c9885, "relaunch fallback is exact and process-independent");
     Check(Appearance(ResolveAppearance(&unknown, {})).base_argb == 0xff7c9885, "default wool fallback");
-    Check(Appearance(ResolveAppearance(nullptr, {}, {}, roots, AutomaticAppearance{0xff112233, {}, {}})).base_argb == 0xff7c9885,
-          "unbound automatic sample cannot affect missing identity");
+    const auto missing = Appearance(ResolveAppearance(nullptr, {}, {}, roots, AutomaticAppearance{0xff112233, {}, {}}));
+    Check(missing.base_argb == 0xff7c9885 && missing.pattern_source == PatternSource::PlainFallback &&
+          missing.pattern == PatternChoice(PlainPattern{}), "unbound automatic sample cannot affect missing identity");
+    const auto provisional = Appearance(ResolveAppearance(&unknown, {}));
+    Check(provisional.base_argb == 0xff7c9885 && provisional.contrast_argb == 0xfff6f0de &&
+          provisional.accent_argb == 0xff705a34 && icon_yarn::FallbackAccent(0xff334455, 0xfff6f0de) == 0xffd2bf9d,
+          "provisional generated yarns: basket base, Zigzag contrast and gold-mixed accent");
 }
 
 void UnicodeIdentityRelaunch() {
@@ -297,7 +310,7 @@ void UnicodeIdentityRelaunch() {
 }
 
 void PrecedenceAndModes() {
-    const AutomaticAppearance sample{0xff123456, 0xffabcdef, "twinkle"};
+    const AutomaticAppearance sample{0xff123456, 0xffabcdef, 0xff445566, 0x1234567, ".aaa.aabaa..b...aaa.a...a"};
     std::array<PersonalRule, 2> rules{{
         {chrome, {{0xff778899}, {0xff010203}}, AuthoredChart{"checker"}},
         {chrome, {{0xff998877}, {}}, AuthoredChart{"braid"}}
@@ -311,9 +324,10 @@ void PrecedenceAndModes() {
     value = Appearance(ResolveAppearance(&chrome, {}, {}, roots, sample));
     Check(value.base_argb == 0xfff4f0e6 && value.pattern == PatternChoice(AuthoredChart{"atelier-chrome"}), "By App retains authored colors and motif even with completed icon sample");
     value = Appearance(ResolveAppearance(&unknown, {}, {}, roots, sample));
-    Check(value.base_argb == 0xff123456 && value.contrast_argb == 0xffabcdef &&
-          value.pattern == PatternChoice(AuthoredChart{"twinkle"}) &&
-          value.chart_colors == ChartColorPolicy::GeneratedContrast, "unmapped app sample extension");
+    Check(value.base_argb == 0xff123456 && value.contrast_argb == 0xffabcdef && value.accent_argb == 0xff445566 &&
+          value.pattern == PatternChoice(GeneratedPattern{0x1234567, ".aaa.aabaa..b...aaa.a...a"}) &&
+          value.pattern_source == PatternSource::AutomaticSample &&
+          value.chart_colors == ChartColorPolicy::GeneratedContrast, "unmapped app sample knits its icon-seeded pattern");
 
     ResolverSettings settings;
     settings.global_pattern = AuthoredChart{"braid"};
@@ -364,12 +378,14 @@ void PrecedenceAndModes() {
           "imported omitted chart can bind explicit personal plain");
     std::array<PersonalRule, 1> unknown_rule{{{unknown, {{0xff334455}, {}}, {}}}};
     value = Appearance(ResolveAppearance(&unknown, {}, unknown_rule, roots, sample));
-    Check(value.base_argb == 0xff334455 && value.contrast_argb == 0xfff6f0de, "base-only personal override prevents unrelated sample accent");
+    Check(value.base_argb == 0xff334455 && value.contrast_argb == 0xfff6f0de && value.accent_argb == 0xffd2bf9d &&
+          value.pattern == PatternChoice(GeneratedPattern{0x1234567, ".aaa.aabaa..b...aaa.a...a"}),
+          "base-only personal override keeps the icon motif but derives both yarns from the personal base");
 }
 
 void PersonalPixelsAndValidation() {
     const PersonalChart png{"personal:fixture-pattern", 42};
-    const AutomaticAppearance sample{0xff112233, 0xffddeeff, "picnic"};
+    const AutomaticAppearance sample{0xff112233, 0xffddeeff, 0xff445566, 7, {}};
     std::array<PersonalRule, 1> rule{{{chrome, {{0xff445566}, {0xffaabbcc}}, png}}};
     auto value = Appearance(ResolveAppearance(&chrome, {}, rule, roots, sample));
     Check(value.pattern == PatternChoice(png) && value.chart_colors == ChartColorPolicy::PreservePersonalPixels &&
@@ -401,6 +417,10 @@ void PersonalPixelsAndValidation() {
     rule[0].colors.base_argb = 0x00123456;
     Error(ResolveAppearance(&chrome, settings, rule, roots), ResolutionError::InvalidColor);
     Error(ResolveAppearance(&unknown, {}, {}, roots, AutomaticAppearance{0x00123456, {}, {}}), ResolutionError::InvalidColor);
+    Error(ResolveAppearance(&unknown, {}, {}, roots, AutomaticAppearance{0xff123456, 0xffabcdef, 0x00445566, 1, {}}),
+          ResolutionError::InvalidColor);
+    Error(ResolveAppearance(&unknown, {}, {}, roots, AutomaticAppearance{0xff123456, 0xffabcdef, 0xff445566, 1, "abc"}),
+          ResolutionError::UnknownChart);
     rule[0].colors.base_argb = 0xff123456;
     rule[0].colors.contrast_argb = 0x00123456;
     settings.global_pattern = ZigzagPattern{};
@@ -446,7 +466,9 @@ int main() {
         PrecedenceAndModes();
         PersonalPixelsAndValidation();
         CoverageAndManualCatalogue();
-        std::cout << "PASS: " << checks << " resolver checks; fixtures only, no installed-application demonstration\n";
+        const auto recolor = RecolorTests();
+        std::cout << "PASS: " << checks << " resolver checks and " << recolor
+                  << " recolour checks; fixtures only, no installed-application demonstration\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << '\n';

@@ -41,9 +41,11 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="IconMotif.cpp" />
     <ClCompile Include="IconPalette.cpp" />
     <ClCompile Include="Preparation.cpp" />
     <ClCompile Include="WindowsIcon.cpp" />
+    <ClInclude Include="IconMotif.h" />
     <ClInclude Include="IconPalette.h" />
     <ClInclude Include="Preparation.h" />
     <ClInclude Include="WindowsIcon.h" />

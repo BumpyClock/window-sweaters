@@ -177,6 +177,10 @@ void UnsupportedAndFixtureIsolation() {
     windows[4].ordinaryTopLevel = false;
     windows[5].className = L"WindowSweaters.TestFixture";
     windows[6].className = L"WindowSweaters.TestFixtureReceiver";
+    auto elevated = Window(8);
+    elevated.outranksHost = true;
+    Check(Evaluate(elevated, policy) == Eligibility::Unsupported, "Higher-integrity windows are unsupported");
+    Expect(TrackingModel{policy}.Observe(elevated, Dirty::Lifecycle | Dirty::Ordering | Dirty::Appearance, 0), {});
     TrackingModel model{policy};
     for (const auto& window : windows) {
         Check(Evaluate(window, policy) == Eligibility::Unsupported, "Unsupported policy");
@@ -568,6 +572,9 @@ void NativeProbePrefilter() {
             "Unknown tool/owned/popup/child candidates make no process or DWM call, on every pass");
     }
     const auto hidden=make(WS_OVERLAPPEDWINDOW,0,nullptr);
+    const auto own=WindowTracker::Query(hidden.value);
+    Check(std::holds_alternative<AliveWindow>(own) && !std::get<AliveWindow>(own).outranksHost,
+        "A same-integrity process does not outrank the host");
     Check(!IsWindowVisible(hidden.value),"Prefilter admission case is hidden");
     Check(full(probe(hidden.value)) && full(probe(hidden.value)),
         "Hidden supported frames are never rejected by the prefilter and each probe queries fully");

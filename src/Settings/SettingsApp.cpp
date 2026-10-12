@@ -218,6 +218,10 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         color_.ColorChanged([weak](auto const&,auto const&) {
             if (auto app=weak.get()) { app->UpdateYarnSummary(); app->Change(); }
         });
+        base_override_.Toggled([weak](auto const&,auto const&) { if (auto app=weak.get()) app->Change(); });
+        base_color_.ColorChanged([weak](auto const&,auto const&) {
+            if (auto app=weak.get()) { app->UpdateBaseSummary(); app->Change(); }
+        });
         root_.SizeChanged([weak](auto const&,SizeChangedEventArgs const& args) {
             if (auto app=weak.get()) app->Dispatch(L"layout-class",[&]{app->ApplyLayoutClass(args.NewSize().Width);});
         });
@@ -277,6 +281,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     void EnableControls(bool enabled) {
         pause_.IsEnabled(enabled); width_.IsEnabled(enabled); design_.IsEnabled(enabled);
         rows_.IsEnabled(enabled); color_.IsEnabled(enabled);
+        base_override_.IsEnabled(enabled); base_expander_.IsEnabled(enabled&&base_override_.IsOn());
         bool plain=design_.SelectedIndex()==0;
         plain_group_.Visibility(plain?Visibility::Visible:Visibility::Collapsed);
         material_.IsEnabled(enabled&&plain);
@@ -410,11 +415,27 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         yarn_expander_=Expander{}; yarn_expander_.HorizontalAlignment(HorizontalAlignment::Stretch);
         yarn_expander_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
         yarn_expander_.Header(yarn_header); yarn_expander_.Content(color_); UpdateYarnSummary();
+        base_override_=ToggleSwitch{}; base_override_.Header(box_value(L"Use my base color for every sweater"));
+        base_override_.OnContent(box_value(L"On")); base_override_.OffContent(box_value(L"Off"));
+        AutomationProperties::SetName(base_override_,L"Use my base color for every sweater");
+        base_color_=ColorPicker{}; base_color_.Color(ToColor(contracts::default_base_override_argb));
+        base_color_.IsAlphaEnabled(false); base_color_.IsMoreButtonVisible(false); base_color_.MaxWidth(480);
+        AutomationProperties::SetName(base_color_,L"My base color");
+        base_swatch_=Border{}; ApplyStyle(base_swatch_,L"WsSwatch");
+        base_hex_=TextBlock{}; base_hex_.VerticalAlignment(VerticalAlignment::Center); StyleSecondary(base_hex_);
+        TextBlock base_title; base_title.Text(L"My base color (opaque)"); base_title.VerticalAlignment(VerticalAlignment::Center);
+        auto base_header=StackPanel{}; base_header.Orientation(Orientation::Horizontal); base_header.Spacing(12);
+        base_header.Children().Append(base_swatch_); base_header.Children().Append(base_title); base_header.Children().Append(base_hex_);
+        base_expander_=Expander{}; base_expander_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        base_expander_.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        base_expander_.Header(base_header); base_expander_.Content(base_color_); UpdateBaseSummary();
         auto appearance=Stack(12);
         appearance.Children().Append(Section(L"Appearance")); appearance.Children().Append(design_);
         appearance.Children().Append(Caption(L"Original charts keep their authored stitches, material, corners and cuffs. By app keeps mapped palettes and samples unknown app icons. Shared Zigzag samples each app's colors. Automatic previews are representative, not a selected app."));
         appearance.Children().Append(plain_group_); appearance.Children().Append(rows_label_); appearance.Children().Append(rows_);
         appearance.Children().Append(yarn_expander_);
+        appearance.Children().Append(base_override_); appearance.Children().Append(base_expander_);
+        appearance.Children().Append(Caption(L"Replaces each app's base yarn and the base yarn above. Other yarns shift to suit your color so every pattern stays readable. Imported PNG charts keep their exact pixels, and a precise application color still wins."));
 
         apps_status_=TextBlock{}; apps_status_.Text(L"Loading host-owned application list…");
         apps_status_.TextWrapping(TextWrapping::Wrap); StyleSecondary(apps_status_);
@@ -519,6 +540,12 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         swprintf_s(hex,L"#%02X%02X%02X",color.R,color.G,color.B);
         yarn_hex_.Text(hex); yarn_swatch_.Background(Media::SolidColorBrush{color});
         AutomationProperties::SetName(yarn_expander_,hstring(L"Base yarn color ")+hex+L", expand to edit");
+    }
+    void UpdateBaseSummary() {
+        auto color=base_color_.Color(); wchar_t hex[8]{};
+        swprintf_s(hex,L"#%02X%02X%02X",color.R,color.G,color.B);
+        base_hex_.Text(hex); base_swatch_.Background(Media::SolidColorBrush{color});
+        AutomationProperties::SetName(base_expander_,hstring(L"My base color ")+hex+L", expand to edit");
     }
     void BuildImports() {
         import_status_=TextBlock{}; import_status_.Text(L"Connecting to host…");
@@ -1112,6 +1139,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
         configuration.stitch_style=static_cast<contracts::StitchStyle>(stitch_.SelectedIndex());
         configuration.material_style=static_cast<contracts::MaterialStyle>(material_.SelectedIndex());
         configuration.stitch_rows=static_cast<float>(rows_.Value()); configuration.yarn_argb=ToArgb(color_.Color());
+        configuration.base_override=base_override_.IsOn(); configuration.base_override_argb=ToArgb(base_color_.Color());
         return configuration;
     }
     void DesignChanged() {
@@ -1187,6 +1215,9 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
                 material_.SelectedIndex(static_cast<int>(configuration.material_style));
             if (rows_.Value()!=configuration.stitch_rows) rows_.Value(configuration.stitch_rows);
             if (ToArgb(color_.Color())!=configuration.yarn_argb) color_.Color(ToColor(configuration.yarn_argb));
+            if (base_override_.IsOn()!=configuration.base_override) base_override_.IsOn(configuration.base_override);
+            if (ToArgb(base_color_.Color())!=configuration.base_override_argb)
+                base_color_.Color(ToColor(configuration.base_override_argb));
             rows_label_.Text(L"Stitch size: "+to_hstring(configuration.stitch_rows)+L" rows across the border");
             if (!preview_configuration_ || !settings::SameAppearance(*preview_configuration_,configuration)) {
                 preview_configuration_=configuration;
@@ -1317,7 +1348,8 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     std::uint64_t startup_next_read_{};
     Slider width_{nullptr},rows_{nullptr};
     ComboBox design_{nullptr},stitch_{nullptr},material_{nullptr};
-    ColorPicker color_{nullptr};
+    ColorPicker color_{nullptr},base_color_{nullptr};
+    ToggleSwitch base_override_{nullptr};
     Image preview_image_{nullptr};
     TextBlock preview_status_{nullptr},rows_label_{nullptr};
     TextBlock width_label_{nullptr},status_{nullptr};
@@ -1325,9 +1357,9 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
     ResourceDictionary styles_{nullptr};
     Grid page_{nullptr},root_{nullptr};
     StackPanel left_{nullptr},right_{nullptr},plain_group_{nullptr};
-    Expander yarn_expander_{nullptr},personal_expander_{nullptr};
-    Border yarn_swatch_{nullptr};
-    TextBlock yarn_hex_{nullptr},saved_bindings_{nullptr},personal_summary_{nullptr};
+    Expander yarn_expander_{nullptr},base_expander_{nullptr},personal_expander_{nullptr};
+    Border yarn_swatch_{nullptr},base_swatch_{nullptr};
+    TextBlock yarn_hex_{nullptr},base_hex_{nullptr},saved_bindings_{nullptr},personal_summary_{nullptr};
     bool wide_{true};
     Button apps_all_on_{nullptr},apps_all_off_{nullptr};
     ToggleSwitch apps_default_{nullptr};

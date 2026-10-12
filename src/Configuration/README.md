@@ -1,6 +1,6 @@
 # Configuration contract
 
-`contracts::Configuration` schema 6 contains semantic settings, not target handles,
+`contracts::Configuration` schema 7 contains semantic settings, not target handles,
 tile indexes, cache keys, or renderer output:
 
 | Field | Contract |
@@ -15,6 +15,8 @@ tile indexes, cache keys, or renderer output:
 | `material_style` | `plain` or `raised`; default `raised`, retained plain-material preference |
 | `stitch_rows` | Finite 1.5–12 rows across the border, default 6; more rows mean smaller stitches |
 | `yarn_argb` | Opaque ARGB, default `0xff4e8098` |
+| `base_override` | Use `base_override_argb` as every sweater's base yarn, default off |
+| `base_override_argb` | Opaque ARGB, default `0xffe86aa0`; kept while the override is off |
 | `eligibility` | Default-on plus explicit `AppIdentity`-keyed enable/disable exceptions |
 | `imports` | Bounded personal rules, exact application bindings, diagnostics, chart headers and selected asset ID |
 
@@ -36,7 +38,7 @@ Typed import operations change only the validated import candidate.
 
 ## Storage and migration
 
-Schema 6 is length-framed and contains the bounded configuration record plus the
+Schema 7 is length-framed and contains the bounded configuration record plus the
 owned stored catalogue. The complete disk envelope is limited to 17,891,328 bytes.
 Validated PNG bytes, material, stable IDs, content hashes, numeric revisions and
 the catalogue high-water mark are stored atomically with appearance and exact
@@ -62,7 +64,7 @@ IDs are at most 63 ASCII bytes (`a`–`z`, `0`–`9`, `-`), a bounded UTF-8 subs
 containing the exact authored semantic IDs. Embedded NULs and nonzero padding are
 invalid. Reads validate the fixed header and aggregate file limit before allocation.
 
-Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3/4/5 records
+Valid legacy schema-1/32-byte, schema-2/120-byte, and framed schema-3/4/5/6 records
 migrate **in memory only**. Startup and snapshot reads do not rewrite them.
 Schema 1 acquires raised stockinette. Schema 2 retains every appearance field;
 both acquire default-on eligibility with no exceptions. Schema 3 retains its
@@ -73,6 +75,9 @@ personal catalogue; current malformed storage cannot infer an empty catalogue
 or reconstruct missing revision history.
 Schema 5 retains its complete personal catalogue and bindings. All older schemas
 acquire startup Off in memory, without enabling startup or rewriting the file.
+Schema 6 retains everything; it and all older schemas acquire the base override
+off with the default color. Each framed record must carry the protocol version of
+its schema (schema N uses protocol N+1).
 A successful validated mutation performs the ordinary staged,
 flushed atomic replacement; failed writes retain legacy bytes and committed
 state. Corrupt, unsupported old values, or newer-schema files remain untouched.
@@ -85,7 +90,7 @@ failed save or weakening permanent failed-write retention.
 
 ## IPC and acknowledgment
 
-Protocol version 7 retains the first 176 appearance bytes and its typed,
+Protocol version 8 retains the first 176 appearance bytes and its typed,
 length-framed sections. The byte-mode pipe reads a 12-byte header, validates the
 total bound, then reads exactly that frame. The previous header/request/client/
 server/revision/schema/pause/width offsets are unchanged. Offset 76 now carries
@@ -93,11 +98,12 @@ the actual Win32 storage error in responses (zero in requests), and offset 80
 retains the 64-bit client lease. Appearance fields occupy offsets 88–108 in the
 same semantic order as above; the bounded 64-byte ID occupies offsets 112–175.
 Sections carry eligibility, application snapshots, typed acknowledgments,
-personal-import metadata and import mutations. Required sections are
+personal-import metadata, import mutations, startup preference and the base
+override (section 9: a 4-byte flag of 0 or 1, then 4-byte ARGB). Required sections are
 operation-specific. Unknown/duplicate sections, unsupported operations, trailing
 data, invalid identities, duplicate edits, bad counts and unchecked lengths
 are rejected. The 1 MiB aggregate limit applies before payload allocation.
-The live endpoint accepts protocol 7 only. Legacy schema decoding exists
+The live endpoint accepts protocol 8 only. Legacy schema decoding exists
 solely for validated disk migration, not an alternate live mutation path.
 The existing three-second I/O budget covers the complete header/body read;
 partial byte progress does not restart the deadline.

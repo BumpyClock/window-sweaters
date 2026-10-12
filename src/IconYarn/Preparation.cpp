@@ -24,6 +24,11 @@ std::size_t InputBytes(const IconInput& input) noexcept {
            (input.executablePath.capacity() + 1) * sizeof(wchar_t);
 }
 
+std::size_t PaletteBytes(const PaletteResult& palette) noexcept {
+    const auto* sampled = std::get_if<SampledPalette>(&palette);
+    return sizeof(PaletteResult) + (sampled ? sampled->glyph.capacity() + 1 : 0);
+}
+
 std::size_t RequestBytes(const WorkRequest& request) noexcept {
     return InputBytes(*request.Input()) + 2 * sizeof(Completion) + 128;
 }
@@ -186,7 +191,7 @@ PreparationStatistics PreparationWorker::Statistics() const {
 }
 
 void PreparationWorker::Cache(std::shared_ptr<const IconInput> input, ImmutablePalette palette) {
-    const std::size_t bytes = InputBytes(*input) + sizeof(PaletteResult) + sizeof(CacheEntry) + 128;
+    const std::size_t bytes = InputBytes(*input) + PaletteBytes(*palette) + sizeof(CacheEntry) + 128;
     if (!limits_.cacheEntries || bytes > limits_.cacheBytes) return;
     while (!cache_.empty() && (cache_.size() >= limits_.cacheEntries ||
                               bytes > limits_.cacheBytes - statistics_.cacheBytes)) {

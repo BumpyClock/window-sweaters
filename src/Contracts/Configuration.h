@@ -8,10 +8,11 @@
 #include "..\Startup\Startup.h"
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint32_t configuration_schema = 6;
+inline constexpr std::uint32_t configuration_schema = 7;
 inline constexpr float minimum_width_dip = 2.0f;
 inline constexpr float maximum_width_dip = 64.0f;
 inline constexpr float default_width_dip = 16.0f;
+inline constexpr std::uint32_t default_base_override_argb = 0xffe86aa0u;
 
 inline constexpr std::size_t maximum_design_id_bytes = 63;
 inline constexpr float minimum_stitch_rows = 1.5f;
@@ -35,6 +36,8 @@ struct Configuration {
     MaterialStyle material_style = MaterialStyle::raised;
     float stitch_rows = 6.f;
     std::uint32_t yarn_argb = 0xff4e8098u;
+    bool base_override = false;
+    std::uint32_t base_override_argb = default_base_override_argb;
     applications::EligibilityPreferences eligibility;
     ImportPreferences imports;
     bool operator==(Configuration const&) const = default;
@@ -48,6 +51,7 @@ inline bool Valid(Configuration const& value) noexcept {
         value.material_style <= MaterialStyle::raised &&
         std::isfinite(value.stitch_rows) && value.stitch_rows >= minimum_stitch_rows &&
         value.stitch_rows <= maximum_stitch_rows && (value.yarn_argb >> 24) == 255 &&
+        (value.base_override_argb >> 24) == 255 &&
         value.design_id.size() <= maximum_design_id_bytes &&
         (value.design_selection == DesignSelection::original
             ? !value.design_id.empty() &&

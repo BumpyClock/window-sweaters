@@ -890,7 +890,7 @@ private:
                         auto known=entry->metadata?std::get_if<window_sweaters::applications::AppMetadata>(entry->metadata.get()):nullptr;
                         try {
                             auto automatic=entry->iconInput && entry->iconPalette?
-                                window_sweaters::integration::AutomaticProposal(*entry->iconInput,*entry->iconPalette):
+                                window_sweaters::integration::AutomaticProposal(*entry->iconPalette):
                                 std::optional<window_sweaters::colorways::AutomaticAppearance>{};
                             auto proposed=known?window_sweaters::host::MakeAppearance(snapshot,known->Identity(),
                                 installRoots_,automatic,{},&nextImported):nextAppearance;
@@ -1322,7 +1322,7 @@ private:
                 appearance.result = host::MakeByAppAppearance(committed_, error);
             } else {
                 const auto automatic = entry.iconInput && entry.iconPalette ?
-                    integration::AutomaticProposal(*entry.iconInput, *entry.iconPalette) :
+                    integration::AutomaticProposal(*entry.iconPalette) :
                     std::optional<colorways::AutomaticAppearance>{};
                 appearance.result = byApp ? host::MakeAppearance(committed_, known->Identity(), installRoots_, automatic,{},&imported_) : appearance_;
             }
@@ -1535,7 +1535,7 @@ private:
                 const auto* owner = std::get_if<applications::AppMetadata>(entry->metadata.get());
                 try {
                     auto proposed = host::MakeAppearance(committed_, owner->Identity(), installRoots_,
-                        integration::AutomaticProposal(*entry->iconInput, *completion.palette),{},&imported_);
+                        integration::AutomaticProposal(*completion.palette),{},&imported_);
                     const auto* old = entry->appearance ?
                         std::get_if<knitting::TileSpec>(&entry->appearance->result) : nullptr;
                     if (!old || !SameAutomaticAppearance(*old, proposed)) {
@@ -2647,9 +2647,10 @@ void Host::RunConsumerContracts() {
     auto byApp = host.committed_;
     byApp.design_selection = contracts::DesignSelection::by_app;
     appearanceChange(byApp);
-    require(!host.entries_.at(10001)->render.prepared->tile.chart &&
+    require(host.entries_.at(10001)->render.prepared->tile.chart &&
+        host.entries_.at(10001)->render.prepared->tile.chart->semanticId.starts_with("generated-") &&
         host.entries_.at(10001)->render.prepared->tile.baseArgb == 0xff7c9885u,
-        "ByApp actual Host publication uses identity-stable Wool fallback, never a Finder example or saved manual yarn");
+        "ByApp actual Host publication knits an identity-stable generated motif on Wool fallback, never a Finder example or saved manual yarn");
     contract.requireMetadata=true;
     {
         const auto previousConfiguration=host.committed_;
@@ -2748,9 +2749,9 @@ void Host::RunConsumerContracts() {
             "Mode change while real work is queued rejects old mode without rewriting saved manual controls");
         mappedTiles();
         const auto stable=*host.entries_.at(19003)->render.prepared;
-        require(!stable.tile.chart && stable.tile.baseArgb==0xff7c9885u &&
-            stable.tile.stitch==knitting::Stitch::Rib && stable.tile.material==knitting::Material::Plain,
-            "Unmatched ByApp uses exact stable fallback with saved plain stitch/material");
+        require(stable.tile.chart && stable.tile.chart->semanticId.starts_with("generated-") &&
+            stable.tile.baseArgb==0xff7c9885u,
+            "Unmatched ByApp knits a stable generated motif on the exact stable fallback yarn");
         require(SUCCEEDED(host.ApplyBatch(contract.model.Observe(DestroyedWindow{19003},Dirty::Lifecycle,GetTickCount64()))),
             "Retire unknown owner lifetime before relaunch");
         windows.at(19003).identity.processStart=5678;
@@ -2759,6 +2760,7 @@ void Host::RunConsumerContracts() {
         host.entries_.at(19003)->metadata=appMetadata(L"c:\\TOOLS\\unknown.EXE");
         host.PlaceAndShow(host.entries_.at(19003)->state.target); pump(prepared);
         require(host.entries_.at(19003)->render.prepared->tile.baseArgb==0xff7c9885u &&
+            host.entries_.at(19003)->render.prepared->tile.chart->semanticId==stable.tile.chart->semanticId &&
             host.entries_.at(19003)->state.target.generation!=stable.token.target.generation,
             "Relaunched unknown identity keeps exact yarn while old HWND/process epoch stays retired");
         const auto unrelated=*host.entries_.at(19002)->render.prepared;
@@ -2884,10 +2886,10 @@ void Host::RunConsumerContracts() {
         pump(prepared);
         const auto& native=*host.entries_.at(19501);
         const auto nativeSample=std::get_if<icon_yarn::SampledPalette>(native.iconPalette.get());
-        require(nativeSample && *nativeSample==
-            icon_yarn::SampledPalette{0xffc04b4bu,0xfff6f0deu} &&
-            native.render.prepared->tile.baseArgb==0xffc04b4bu && native.render.prepared->tile.chart &&
-            native.render.prepared->tile.chart->semanticId.starts_with("automatic-"),
+        require(nativeSample && nativeSample->baseArgb==0xffc04c4cu && nativeSample->contrastArgb==0xffda9595u &&
+            nativeSample->accentArgb==0xff6f462du && nativeSample->glyph.size()>=25 &&
+            native.render.prepared->tile.baseArgb==0xffc04c4cu && native.render.prepared->tile.chart &&
+            native.render.prepared->tile.chart->semanticId=="generated-"+std::to_string(nativeSample->seed),
             "Actual Host bounded PE resource/WIC worker proposal reaches native generated tile and GPU publication");
         require(host.entries_.at(19502)->renderEpoch==mappedEpoch &&
             host::SamePreparation(*host.entries_.at(19502)->render.prepared,mappedPreparation) &&
@@ -2904,7 +2906,7 @@ void Host::RunConsumerContracts() {
         pollUntil([&]{return host.entries_.at(19501)->iconPalette!=nullptr;}); pump(prepared);
         require(host.entries_.at(19501)->state.target.generation!=nativeGeneration &&
             host.entries_.at(19501)->iconInput->canonicalAppIdentity==nativeSalt &&
-            host.entries_.at(19501)->render.prepared->tile.baseArgb==0xffc04b4bu &&
+            host.entries_.at(19501)->render.prepared->tile.baseArgb==0xffc04c4cu &&
             host.iconWorker_->Statistics().queries==nativeQueryCount && host.iconWorker_->Statistics().cacheHits>0,
             "Native same-executable relaunch has a new target birth, identical salt/pixels and cached sampled colors");
         host.iconWorker_->Stop(); host.iconWorker_.reset(); host.iconGate_.Clear();
@@ -2977,8 +2979,8 @@ void Host::RunConsumerContracts() {
                     if (input.executablePath.find(L"Slow")!=std::wstring::npos) latch.Block(stop);
                     if (stop.stop_requested()) return icon_yarn::Fallback{icon_yarn::FallbackReason::Cancelled};
                     return input.executablePath.find(L"Slow")!=std::wstring::npos ?
-                        icon_yarn::SampledPalette{0xff719d79u,0xfff6f0deu} :
-                        icon_yarn::SampledPalette{0xff769cc0u,0xfff6f0deu};
+                        icon_yarn::SampledPalette{0xff719d79u,0xfff6f0deu,0xffedae49u} :
+                        icon_yarn::SampledPalette{0xff769cc0u,0xfff6f0deu,0xffedae49u};
                 },limits);
             struct ReleaseIcons {
                 IconLatch& latch;
@@ -3005,7 +3007,7 @@ void Host::RunConsumerContracts() {
             require(host.entries_.at(19510)->iconPending && !host.entries_.at(19510)->iconPalette &&
                 host.entries_.at(19511)->render.prepared->tile.baseArgb==0xff769cc0u &&
                 host.entries_.at(19511)->render.prepared->tile.chart->semanticId=="automatic-zigzag" &&
-                host.entries_.at(19501)->render.prepared->tile.baseArgb==0xffc04b4bu,
+                host.entries_.at(19501)->render.prepared->tile.baseArgb==0xffc04c4cu,
                 "Out-of-order owner completion publishes only its per-app shared Zigzag; slow source keeps provisional yarn");
             if (scenario==0)
                 require(host.entries_.at(19502)->render.prepared->tile.baseArgb==0xff769cc0u &&

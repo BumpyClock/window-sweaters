@@ -68,13 +68,24 @@ Original charts retain their authored flags, corners, cuffs, palettes, and mater
 normalization; they are not recolored or exaggerated for visibility. Fine plain
 yarn may look nearly solid from a distance.
 
+The optional base override is the one exception. `host::MakeAppearance` and
+`MakeByAppAppearance` apply it last, through `integration::OverrideBase`, so the
+resolver and icon sampling are unchanged. Authored charts (including corner and
+cuff yarns) and icon-seeded `generated-<seed>` motifs adapt with
+`colorways::AdaptPalette` from the app's resolved base and get a `~base-RRGGBB`
+semantic ID suffix, so a motif keeps two distinct yarns. Only Shared Zigzag uses
+`ZigzagContrast(override)`. Personal PNG charts and personal application colors
+are left as they are.
+
 The host and Settings preview use the same production knitting core. In By-app
 mode, each validated owner resolves through the reviewed Windows identity
 mappings. Authored charts retain their literal palettes and finishing flags.
-Unmatched owners initially use the resolver's stable identity-based Wool color
-and plain pattern, then may acquire locally sampled colors and a stable
-Zigzag, Picnic, or Twinkle motif. Explicit plain or original design selection
-preserves the saved manual appearance instead of applying app rules.
+Unmatched owners initially knit a generated diamond motif on the resolver's
+stable identity-based Wool color. When the local icon sample completes, they
+switch to a motif and three yarns generated from that icon (see
+`src\IconYarn\README.md`). Charted borders use stockinette and raised material,
+so the saved stitch and material apply only to plain borders. Explicit plain
+or original design selection preserves the saved manual appearance instead of applying app rules.
 The Settings Finder image remains a labelled example, not the selected owner's
 actual appearance.
 

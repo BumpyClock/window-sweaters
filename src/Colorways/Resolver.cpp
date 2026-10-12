@@ -4,6 +4,7 @@
 // Original precedence: src/apps.c and src/autoyarn.m at the same revision.
 #include "Resolver.h"
 #include "..\Designs\Catalogue.h"
+#include "..\IconYarn\IconPalette.h"
 
 #include <Windows.h>
 
@@ -74,6 +75,10 @@ std::optional<ResolutionError> ValidatePattern(const PatternChoice& pattern) {
     } else if (const auto* personal = std::get_if<PersonalChart>(&pattern)) {
         if (personal->id.empty() || personal->id.find('\0') != std::string::npos || !personal->revision)
             return ResolutionError::InvalidPersonalChart;
+    } else if (const auto* generated = std::get_if<GeneratedPattern>(&pattern)) {
+        const auto size = generated->glyph.size();
+        if ((size && size != 25 && size != 36) || generated->glyph.find_first_not_of(".ab") != std::string::npos)
+            return ResolutionError::UnknownChart;
     }
     return std::nullopt;
 }
@@ -193,12 +198,13 @@ ResolutionResult ResolveAppearance(
     }};
     const auto color = std::find_if(colors.begin(), colors.end(), [](const auto& item) { return item.color.has_value(); });
     if (!Opaque(*color->color)) return ResolutionError::InvalidColor;
-    const std::array<PatternCandidate, 6> patterns{{
+    const std::array<PatternCandidate, 7> patterns{{
         {std::move(global), PatternSource::GlobalSelection},
         {selected ? std::optional<PatternChoice>(AuthoredChart{selected->chart_name}) : std::nullopt, PatternSource::SelectedTheme},
         {personal ? personal->pattern : std::nullopt, PatternSource::Personal},
         {authored ? std::optional<PatternChoice>(AuthoredChart{authored->chart_name}) : std::nullopt, PatternSource::AuthoredApplication},
-        {!selected && sample && sample->chart_name ? std::optional<PatternChoice>(AuthoredChart{*sample->chart_name}) : std::nullopt, PatternSource::AutomaticSample},
+        {!selected && sample ? std::optional<PatternChoice>(GeneratedPattern{sample->seed, sample->glyph}) : std::nullopt, PatternSource::AutomaticSample},
+        {application ? std::optional<PatternChoice>(GeneratedPattern{StableHash(application->Key()), {}}) : std::nullopt, PatternSource::GeneratedFallback},
         {PlainPattern{}, PatternSource::PlainFallback}
     }};
     const auto pattern = std::find_if(patterns.begin(), patterns.end(), [](const auto& item) { return item.pattern.has_value(); });
@@ -206,21 +212,25 @@ ResolutionResult ResolveAppearance(
     auto policy = ChartColorPolicy::LiteralAuthored;
     if (std::holds_alternative<PlainPattern>(*pattern->pattern)) policy = ChartColorPolicy::NoChart;
     else if (std::holds_alternative<PersonalChart>(*pattern->pattern)) policy = ChartColorPolicy::PreservePersonalPixels;
-    else if (std::holds_alternative<ZigzagPattern>(*pattern->pattern) || pattern->source == PatternSource::AutomaticSample)
+    else if (std::holds_alternative<ZigzagPattern>(*pattern->pattern) || std::holds_alternative<GeneratedPattern>(*pattern->pattern))
         policy = ChartColorPolicy::GeneratedContrast;
-    std::optional<std::uint32_t> contrast;
+    const bool sampled = pattern->source == PatternSource::AutomaticSample && !personal_base;
+    std::optional<std::uint32_t> contrast, accent;
     if (policy == ChartColorPolicy::GeneratedContrast) {
         const std::array<std::optional<std::uint32_t>, 3> contrasts{
             personal ? personal->colors.contrast_argb : std::nullopt,
-            !std::holds_alternative<ZigzagPattern>(*pattern->pattern) && !personal_base && sample ?
-                sample->contrast_argb : std::nullopt,
+            sampled ? std::optional(sample->contrast_argb) : std::nullopt,
             ZigzagContrast(*color->color)
         };
         contrast = *std::find_if(contrasts.begin(), contrasts.end(), [](const auto& item) { return item.has_value(); });
         if (!Opaque(*contrast)) return ResolutionError::InvalidColor;
     }
+    if (std::holds_alternative<GeneratedPattern>(*pattern->pattern)) {
+        accent = sampled ? sample->accent_argb : icon_yarn::FallbackAccent(*color->color, *contrast);
+        if (!Opaque(*accent)) return ResolutionError::InvalidColor;
+    }
     const auto* theme = selected ? selected : authored;
-    return ResolvedAppearance{*color->color, contrast, *pattern->pattern, color->source, pattern->source, policy,
+    return ResolvedAppearance{*color->color, contrast, accent, *pattern->pattern, color->source, pattern->source, policy,
         theme ? std::optional<std::string_view>(theme->id) : std::nullopt, mapping};
 }
 }

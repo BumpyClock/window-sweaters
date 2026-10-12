@@ -39,8 +39,10 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="HostContractTests.cpp" />
+    <ClCompile Include="..\Colorways\Recolor.cpp" />
     <ClCompile Include="..\Colorways\Resolver.cpp" />
     <ClCompile Include="..\Colorways\WindowsMappings.cpp" />
+    <ClCompile Include="..\IconYarn\IconMotif.cpp" />
     <ClCompile Include="..\IconYarn\IconPalette.cpp" />
     <ClCompile Include="..\IconYarn\Preparation.cpp" />
     <ClCompile Include="..\IconYarn\WindowsIcon.cpp" />

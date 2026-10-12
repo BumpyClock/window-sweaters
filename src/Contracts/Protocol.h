@@ -10,7 +10,7 @@
 #include <objbase.h>
 
 namespace window_sweaters::contracts {
-inline constexpr std::uint16_t protocol_version = 7;
+inline constexpr std::uint16_t protocol_version = 8;
 inline constexpr std::size_t frame_size = 176;
 inline constexpr std::size_t frame_header_size = 12;
 inline constexpr DWORD io_timeout_ms = 3000;
@@ -92,6 +92,8 @@ inline std::vector<std::byte> Encode(Message const& value) {
     section(1,preferences);
     payload::Writer imports; payload::Imports(imports,value.configuration.imports); section(6,imports);
     payload::Writer startup; startup.Number(static_cast<unsigned>(value.configuration.startup_desired)); section(8,startup);
+    payload::Writer base; base.Number(value.configuration.base_override?1:0);
+    base.Number(value.configuration.base_override_argb); section(9,base);
     if (value.operation==Operation::imports ||
         (value.operation==Operation::response && value.response_to==Operation::imports)) {
         payload::Writer edit; payload::ImportEdit(edit,value.import_edit); section(5,edit);
@@ -168,7 +170,7 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
     unsigned seen=0;
     while (!extension.Done()) {
         std::uint64_t tag,size;
-        if (!extension.Number(tag) || tag<1 || tag>8 || !extension.Number(size) ||
+        if (!extension.Number(tag) || tag<1 || tag>9 || !extension.Number(size) ||
             size>extension.bytes.size()-extension.offset || (seen&(1u<<tag))) return false;
         seen|=1u<<tag;
         payload::Reader section(extension.bytes.subspan(extension.offset,static_cast<std::size_t>(size)));
@@ -196,6 +198,11 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
                 !payload::Utf8(section,value.import_failure.reason,512)) return false;
             value.import_failure.code=static_cast<std::uint32_t>(code);
             value.import_failure.line=static_cast<std::uint32_t>(line);
+        } else if (tag==9) {
+            std::uint64_t enabled{},argb{};
+            if (!section.Number(enabled) || enabled>1 || !section.Number(argb)) return false;
+            value.configuration.base_override=enabled==1;
+            value.configuration.base_override_argb=static_cast<std::uint32_t>(argb);
         } else {
             std::uint64_t desired;
             if (!section.Number(desired) || desired>1) return false;
@@ -203,7 +210,7 @@ inline bool Decode(std::span<std::byte const> bytes, Message& value) {
         }
         if (!section.Done()) return false;
     }
-    unsigned required=2u|64u|256u;
+    unsigned required=2u|64u|256u|512u;
     if (value.operation==Operation::imports) required|=32u;
     if (value.operation==Operation::eligibility) required|=4u;
     if (value.operation==Operation::response) {

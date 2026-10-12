@@ -1,6 +1,7 @@
 #include "Preview.h"
 #include "..\Geometry\Geometry.h"
 #include "..\Integration\IconAppearance.h"
+#include "..\Integration\BaseOverride.h"
 #include "..\Configuration\Storage.h"
 #include <cmath>
 #include <windows.h>
@@ -21,12 +22,14 @@ knitting::TileSpec MakeAppearance(contracts::Configuration const& configuration,
     tile.gauge.rows=configuration.stitch_rows;
     tile.stitch=static_cast<knitting::Stitch>(configuration.stitch_style);
     tile.material=static_cast<knitting::Material>(configuration.material_style);
+    auto recolor=integration::ChartRecolor::Preserve;
     if (!configuration.imports.selected_id.empty()) {
         tile.chart=imported?imported->Find(configuration.imports.selected_id):nullptr;
         if (!tile.chart) throw std::invalid_argument("Selected imported preview is not available in a matching saved catalogue");
     } else if (configuration.design_selection==contracts::DesignSelection::shared_zigzag) {
         tile.baseArgb=0xff769cc0u;
         tile.chart=integration::MakeGeneratedChart("zigzag",icon_yarn::ZigzagContrast(tile.baseArgb));
+        recolor=integration::ChartRecolor::Contrast;
     } else if (configuration.design_selection!=contracts::DesignSelection::plain) {
         auto id=configuration.design_selection==contracts::DesignSelection::original
             ? configuration.design_id.c_str() : "finder";
@@ -34,8 +37,14 @@ knitting::TileSpec MakeAppearance(contracts::Configuration const& configuration,
         auto chart=theme?designs::ws_design_chart_by_name(theme->chart_name):nullptr;
         if (!chart) throw std::invalid_argument("Original design chart is unavailable");
         tile.chart=imported?imported->Named(chart->name):nullptr;
+        recolor=tile.chart?integration::ChartRecolor::Preserve:integration::ChartRecolor::Adapt;
         if (!tile.chart) tile.chart=knitting::MakeDesignChart(*chart,theme->id);
+        if (configuration.design_selection==contracts::DesignSelection::by_app && configuration.base_override)
+            tile.baseArgb=theme->base_argb;
     }
+    if (configuration.base_override)
+        tile=integration::OverrideBase(std::move(tile),configuration.base_override_argb,recolor,
+            icon_yarn::ZigzagContrast(configuration.base_override_argb));
     return knitting::NormalizeTileSpec(std::move(tile));
 }
 struct Preview::Impl {
