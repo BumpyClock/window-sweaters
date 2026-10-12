@@ -47,6 +47,8 @@
     <ClCompile Include="..\IconYarn\Preparation.cpp" />
     <ClCompile Include="..\IconYarn\WindowsIcon.cpp" />
     <ClCompile Include="..\Rendering\Overlay.cpp" />
+    <ClCompile Include="..\Rendering\GpuShader.cpp" />
+    <ClCompile Include="..\Rendering\KnitAssembler.cpp" />
     <ClCompile Include="..\Rendering\Stacking.cpp" />
     <ClCompile Include="..\Rendering\RenderQueue.cpp" />
     <ClCompile Include="..\Rendering\GraphicsRecovery.cpp" />
@@ -82,4 +84,5 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="..\Rendering\KnitShader.targets" />
 </Project>

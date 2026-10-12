@@ -1,6 +1,7 @@
 #pragma once
 
 #include "..\Tracking\TrackingModel.h"
+#include "..\Rendering\KnitRaster.h"
 
 namespace window_sweaters::host {
 
@@ -46,6 +47,6 @@ struct OverlayState {
     }
 };
 
-int RunHostContractTests();
+int RunHostContractTests(rendering::Renderer renderer = rendering::Renderer::Cpu);
 
 }

@@ -37,6 +37,12 @@ Override switches are rejected outside test mode. The fixture's **Start test hos
 control remains compatible and cannot write the real user's configuration.
 `--help` and `--integration-contract` return before opening configuration storage.
 
+`--renderer cpu|gpu` selects CPU reference rendering (default) or experimental
+GPU strip assembly and shading. Selection is fixed for the host lifetime, travels
+with immutable frame requests, and survives graphics recovery. The hidden
+consumer contracts accept `--integration-contract --renderer cpu|gpu`; shader
+failures use the existing publication/error gates without CPU fallback.
+
 Selection captures the initial `WindowIdentity` before configuration, COM and graphics
 initialization. Tracker startup requires that same identity and rechecks the
 exact fixture class/title; a reused HWND cannot be resealed as a different app.
@@ -268,6 +274,36 @@ Removal cancels the exact `TargetId`. Configuration invalidation and
 terminal queue failure retire host pending gates explicitly; they do not wait
 for a cancelled completion.
 
+### Experimental shader path
+
+CPU preparation generates stitch/chart tiles for both renderers. CPU requests
+also draw software D2D/WIC colour and height strips and shade them on the worker.
+GPU requests stop after the tiles: the perimeter carries a `KnitAssembly` (the
+normalised frame, corner patch and cuff tiles, and per-side shader parameters)
+and no strip pixels. Both paths draw strips through `KnitRaster::DrawStrip`.
+
+On the receiver thread, `Overlay::Upload` publishes each side straight into its
+DirectComposition surface. For a GPU perimeter, `KnitAssembler` first draws the
+colour and height strips with hardware D2D on the shared D3D11 device. Embedded
+HLSL then applies relief lighting, fray, drop shadow and the content cut-out. A
+CPU perimeter uploads its shaded strip and uses the same cut-out shader. The
+cut-out is a signed-distance rounded rectangle, not D2D geometry coverage. Normal
+publication performs no GPU readback.
+
+Shader execution is restricted to uploads; idle and pure movement do not submit
+draws. The local probe adds `renderer` and `shader_draws`; `shader_draws` counts
+GPU relief draws only and resets when the shared graphics device is recreated.
+GPU resource admission charges the colour and height upload textures and
+coordinate tables as transient GPU bytes, and charges no CPU strip bytes. The
+existing hardware-initialization WARP fallback remains; it does not change the
+selected renderer.
+
+`tests\Rendering\compare-gpu.ps1` validates CPU/GPU output and hidden lifecycle
+contracts and records completion-aware benchmarks. See
+[`tests\Rendering\README.md`](../../tests/Rendering/README.md) for the exact
+coverage and timing boundaries. These checks do not establish physical desktop
+presentation, actual driver-reset recovery, or GPU power parity.
+
 ## Settings and lifetime
 
 The production host holds the exclusive canonical per-user configuration writer
@@ -359,7 +395,7 @@ exercise late work, destruction, pause/config changes, failed attempts and Stop.
 These injection checks are not evidence of an actual graphics-driver reset.
 
 The hidden native contract optionally reads the actual masked DComp upload back
-from its D2D GPU bitmap. It checks square, RoundSmall and round masks at
+from the surface's D3D11 texture. It checks square, RoundSmall and round masks at
 100/125/150/200 percent DPI, continuous rounded-corner yarn, retained inward tuck,
 and zero central-interior alpha. This narrow-piece staging/readback is used only
 when the hidden fixture requests it; normal rendering allocates no readback bitmap.

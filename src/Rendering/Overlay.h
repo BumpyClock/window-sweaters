@@ -1,12 +1,13 @@
 #pragma once
 
 #include <windows.h>
-#include <d2d1_1.h>
 #include <d3d11.h>
 #include <dcomp.h>
 #include <wrl/client.h>
 #include "KnitRaster.h"
 #include "ResourceLedger.h"
+#include "GpuShader.h"
+#include "KnitAssembler.h"
 
 namespace window_sweaters::rendering {
 
@@ -17,20 +18,21 @@ public:
     GraphicsDevice(const GraphicsDevice&) = delete;
     GraphicsDevice& operator=(const GraphicsDevice&) = delete;
 
-    HRESULT Initialize() noexcept;
+    HRESULT Initialize(D3D_DRIVER_TYPE driver = D3D_DRIVER_TYPE_UNKNOWN) noexcept;
     void Destroy() noexcept;
 
-    ID2D1Device* Drawing() const noexcept { return drawing_.Get(); }
     IDCompositionDevice* Composition() const noexcept { return composition_.Get(); }
     ResourceLedger& Resources() const noexcept { return *resources_; }
     std::shared_ptr<ResourceLedger> ResourceOwner() const noexcept { return resources_; }
+    std::shared_ptr<GpuShader> Shader() const noexcept { return shader_; }
+    std::shared_ptr<KnitAssembler> Assembler() const noexcept { return assembler_; }
 
 private:
     Microsoft::WRL::ComPtr<ID3D11Device> graphics_;
-    Microsoft::WRL::ComPtr<ID2D1Factory1> factory_;
-    Microsoft::WRL::ComPtr<ID2D1Device> drawing_;
     Microsoft::WRL::ComPtr<IDCompositionDevice> composition_;
     std::shared_ptr<ResourceLedger> resources_{std::make_shared<ResourceLedger>()};
+    std::shared_ptr<GpuShader> shader_;
+    std::shared_ptr<KnitAssembler> assembler_;
 };
 
 class Overlay final {
@@ -60,7 +62,7 @@ public:
 
 private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
-    HRESULT UploadPiece(const KnitRasterPiece& piece, const RECT& contentExclusion, float radiusPixels, float tuckPixels,
+    HRESULT UploadPiece(const KnitPerimeter& perimeter, std::size_t side, const RECT& contentExclusion, float radiusPixels, float tuckPixels,
         Microsoft::WRL::ComPtr<IDCompositionSurface>& surface, knitting::RasterImage* uploadedPixels) noexcept;
 
     HWND window_{};
@@ -68,13 +70,14 @@ private:
     RECT clip_{};
     std::uint32_t commits_{};
     Microsoft::WRL::ComPtr<IDCompositionDevice> composition_;
-    Microsoft::WRL::ComPtr<ID2D1DeviceContext> context_;
     Microsoft::WRL::ComPtr<IDCompositionTarget> target_;
     Microsoft::WRL::ComPtr<IDCompositionVisual> visual_;
     std::array<Microsoft::WRL::ComPtr<IDCompositionSurface>, 4> surfaces_;
     std::shared_ptr<const KnitPerimeter> perimeter_;
     std::shared_ptr<ResourceLedger> resources_;
     ResourceLedger::Lease resourceLease_;
+    std::shared_ptr<GpuShader> shader_;
+    std::shared_ptr<KnitAssembler> assembler_;
 };
 
 }

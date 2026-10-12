@@ -8,7 +8,7 @@
 #include <algorithm>
 
 namespace window_sweaters::host {
-void RunHostConsumerContracts();
+void RunHostConsumerContracts(rendering::Renderer renderer);
 namespace {
 using namespace tracking;
 
@@ -217,7 +217,10 @@ void ResourceReservationBounds() {
     auto tile=std::make_shared<knitting::Tile>();
     auto perimeter=std::make_shared<KnitPerimeter>(); perimeter->tile=tile;
     perimeter->width=8; perimeter->height=8;
-    for (auto& piece:perimeter->pieces) piece.image={2,2,8,{0xff123456,0xff123456,0xff123456,0xff123456}};
+    for (auto& piece:perimeter->pieces) {
+        piece.width=piece.height=2;
+        piece.image={2,2,8,{0xff123456,0xff123456,0xff123456,0xff123456}};
+    }
     ResourceLedger ledger(1024*1024,176);
     ResourceLedger::Lease first,alias,replacement;
     Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==80 &&
@@ -340,6 +343,7 @@ void NativePerimeterPublication() {
             Check(SUCCEEDED(overlay.Upload(perimeter, outer, fullClip, contentRect, radiusDip * scale, scale, &gpuPixels)),
                 "Upload real rounded/square/round-small source pieces and read masked DComp GPU pixels");
             auto captured = *perimeter;
+            captured.assembly.reset();
             for (std::size_t side = 0; side < gpuPixels.size(); ++side) captured.pieces[side].image = std::move(gpuPixels[side]);
             const auto image = rendering::KnitRaster::Compose(captured);
             bool antialiased{};
@@ -416,14 +420,14 @@ void NativePerimeterPublication() {
 }
 }
 
-int RunHostContractTests() {
+int RunHostContractTests(rendering::Renderer renderer) {
     GeometryAndRecovery();
     RecursiveValidationCannotOverridePolicy();
     StaleBatchPayloadUsesCurrentSnapshot();
     RenderPublicationTokens();
     ResourceReservationBounds();
     NativePerimeterPublication();
-    RunHostConsumerContracts();
+    RunHostConsumerContracts(renderer);
     std::puts("PASS: host action/geometry contract assertions (scripted; no desktop windows launched)");
     std::puts("PASS: recursive-validation and stale-batch snapshot regressions (scripted)");
     std::puts("PASS: immutable MTA stockinette preparation -> four-surface native DComp upload, clip/content exclusion and move reuse (hidden; desktop presentation not tested)");

@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "..\Knitting\KnitTile.h"
+#include <d2d1.h>
+#include <wrl/client.h>
 #include <array>
 #include <functional>
 #include <memory>
+#include <optional>
 
 namespace window_sweaters::rendering {
 enum class KnitAnchor : std::uint8_t { Corner, Centre };
+enum class Renderer : std::uint8_t { Cpu, Gpu };
 struct KnitFrameSpec {
     float widthDip = 620.f, heightDip = 140.f;
     std::uint32_t contentWidthPixels = 0, contentHeightPixels = 0;
@@ -14,10 +18,26 @@ struct KnitFrameSpec {
     float radiusDip = 10.f, bandDip = 10.f, tuckDip = 1.f;
     float deviceScale = 1.f, dim = 0.f;
     KnitAnchor anchor = KnitAnchor::Corner;
+    Renderer renderer = Renderer::Cpu;
 };
+struct KnitShaderParameters {
+    float ringWidth = 0, ringHeight = 0, outerRadius = 0, inset = 0;
+    float innerRadius = 0, originX = 0, originY = 0, scale = 0;
+    float relief = 0, band = 0, pitch = 0, phase = 0;
+    std::uint32_t side = 0;
+    float inverseScale = 0;
+    std::array<float, 2> padding{};
+};
+static_assert(sizeof(KnitShaderParameters) == 64);
 struct KnitRasterPiece {
-    std::uint32_t x = 0, y = 0;
+    std::uint32_t x = 0, y = 0, width = 0, height = 0;
     knitting::RasterImage image;
+};
+struct KnitAssembly {
+    KnitFrameSpec frame;
+    float depth = 0, gutterDip = 0;
+    std::shared_ptr<const knitting::Tile> patch, cuff;
+    std::array<KnitShaderParameters, 4> parameters;
 };
 struct KnitPerimeter {
     std::uint32_t width = 0, height = 0;
@@ -25,7 +45,18 @@ struct KnitPerimeter {
     float bandDip = 0.f, deviceScale = 1.f;
     std::array<KnitRasterPiece, 4> pieces;
     std::shared_ptr<const knitting::Tile> tile;
+    std::optional<KnitAssembly> assembly;
+    bool PieceValid(const KnitRasterPiece& piece) const noexcept {
+        const auto& image = piece.image;
+        if (!piece.width || !piece.height || piece.x > width || piece.y > height ||
+            piece.width > width - piece.x || piece.height > height - piece.y) return false;
+        if (assembly) return image.pixels.empty() && !image.width && !image.height;
+        return image.width == piece.width && image.height == piece.height && image.stride == piece.width * 4u &&
+            image.pixels.size() == static_cast<std::size_t>(piece.width) * piece.height;
+    }
 };
+using KnitTileBrush = std::function<Microsoft::WRL::ComPtr<ID2D1BitmapBrush>(int role, const knitting::Tile& tile,
+    bool heights, float px, float py, float repeatWidth)>;
 
 class KnitRasterScratch {
 public:
@@ -52,6 +83,8 @@ public:
         knitting::TileSpec tile, knitting::TileCache& cache,
         const KnitRenderControl& control = {});
     static knitting::RasterImage Compose(const KnitPerimeter& perimeter);
+    static void DrawStrip(ID2D1RenderTarget& target, const KnitAssembly& assembly, const knitting::Tile& tile,
+        const KnitRasterPiece& piece, int side, bool heights, const KnitTileBrush& brush);
     static knitting::RasterImage RenderFrame(const KnitFrameSpec& frame,
         knitting::TileSpec tile, knitting::TileCache& cache);
 };

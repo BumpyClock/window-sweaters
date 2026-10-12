@@ -118,7 +118,8 @@ KnitFrameSpec Normalize(KnitFrameSpec f) {
         || f.deviceScale > knitting::MaximumDeviceScale
         || f.dim < 0.f || f.dim > 1.f
         || ((f.contentWidthPixels == 0) != (f.contentHeightPixels == 0))
-        || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre))
+        || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre)
+        || (f.renderer != Renderer::Cpu && f.renderer != Renderer::Gpu))
         throw std::invalid_argument("Invalid knit frame specification");
     if (f.contentWidthPixels) {
         f.widthDip = static_cast<float>(f.contentWidthPixels) / f.deviceScale;
@@ -153,13 +154,13 @@ ComPtr<ID2D1Geometry> Ring(ID2D1Factory* factory, const KnitFrameSpec& f) {
     return ring;
 }
 
-ComPtr<ID2D1PathGeometry> Mitre(ID2D1Factory* factory, float length, float depth) {
+ComPtr<ID2D1PathGeometry> Mitre(ID2D1Factory* factory, float length, float depth, float overlap) {
     ComPtr<ID2D1PathGeometry> path;
     ComPtr<ID2D1GeometrySink> sink;
     Check(factory->CreatePathGeometry(&path), "Create mitre path");
     Check(path->Open(&sink), "Open mitre path");
-    sink->BeginFigure(D2D1::Point2F(0, 0), D2D1_FIGURE_BEGIN_FILLED);
-    const D2D1_POINT_2F points[] = {{length, 0}, {length - depth, depth}, {depth, depth}};
+    sink->BeginFigure(D2D1::Point2F(-overlap, 0), D2D1_FIGURE_BEGIN_FILLED);
+    const D2D1_POINT_2F points[] = {{length + overlap, 0}, {length - depth + overlap, depth}, {depth - overlap, depth}};
     sink->AddLines(points, 3);
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     Check(sink->Close(), "Close mitre path");
@@ -185,11 +186,63 @@ void Poll(const KnitRenderControl& control) {
     if (control.stop && control.stop()) throw KnitRenderCancelled{};
 }
 
-KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, int side,
-                           std::uint32_t width, std::uint32_t height, float depth, float gutterDip,
-                           const knitting::Tile* patch, const knitting::Tile* cuff,
-                           KnitRasterScratch::Impl& scratch, const KnitRenderControl& control) {
-    Poll(control);
+struct SideLayout {
+    float length = 0, px = 0, py = 0, repeatWidth = 0, cap = 0, available = 0;
+    D2D1::Matrix3x2F orientation, placement;
+};
+
+SideLayout Layout(const KnitAssembly& a, const knitting::Tile& tile, const KnitRasterPiece& piece, int side) {
+    const auto& f = a.frame;
+    const float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
+    const D2D1::Matrix3x2F orientations[] = {
+        D2D1::Matrix3x2F::Identity(),
+        D2D1::Matrix3x2F(0, 1, -1, 0, ow, 0),
+        D2D1::Matrix3x2F(-1, 0, 0, -1, ow, oh),
+        D2D1::Matrix3x2F(0, -1, 1, 0, 0, oh)
+    };
+    SideLayout l;
+    l.orientation = orientations[side];
+    l.placement = D2D1::Matrix3x2F::Translation(
+        a.gutterDip - static_cast<float>(piece.x) / f.deviceScale,
+        a.gutterDip - static_cast<float>(piece.y) / f.deviceScale);
+    l.length = side % 2 ? oh : ow;
+    auto look = tile.spec.chart ? tile.spec.chart->appearance : knitting::ChartAppearance{};
+    l.px = f.anchor == KnitAnchor::Centre ? l.length * 0.5f - tile.layout.width_dip * 0.5f : 0.f;
+    l.py = look.outsideAnchored ? 0.f : f.bandDip * 0.5f - tile.layout.height_dip * 0.5f;
+    bool fitted = (look.flags & designs::ChartFittedRepeat) != 0;
+    l.repeatWidth = fitted ? l.length / std::max(1.f, std::round(l.length / tile.layout.width_dip))
+        : static_cast<float>(tile.layout.width_dip);
+    l.cap = std::min(f.radiusDip + f.bandDip, l.length * .5f);
+    l.available = std::max(0.f, l.length - 2.f * l.cap);
+    if (a.patch && l.available > 0.f) {
+        l.repeatWidth = l.available / std::max(1.f, std::round(l.available / tile.layout.width_dip));
+        l.px = l.cap;
+    } else if (fitted) l.px = 0.f;
+    if (fitted || a.patch)
+        l.repeatWidth = std::max(1.f, std::round(l.repeatWidth * f.deviceScale)) / f.deviceScale;
+    return l;
+}
+
+KnitShaderParameters ShaderParameters(const KnitAssembly& a, const knitting::Tile& tile,
+                                      const KnitRasterPiece& piece, int side) {
+    const auto& f = a.frame;
+    const auto l = Layout(a, tile, piece, side);
+    auto material = tile.spec.material == knitting::Material::Raised
+        ? ws_knit_raised_material(tile.spec.gauge) : tile.spec.gauge;
+    bool hole = f.widthDip > 2.f * f.tuckDip && f.heightDip > 2.f * f.tuckDip;
+    return {
+        .ringWidth = f.widthDip + 2.f * f.bandDip, .ringHeight = f.heightDip + 2.f * f.bandDip,
+        .outerRadius = f.radiusDip + f.bandDip, .inset = hole ? f.bandDip + f.tuckDip : 0.f,
+        .innerRadius = std::max(0.f, f.radiusDip - f.tuckDip),
+        .originX = static_cast<float>(piece.x) / f.deviceScale - a.gutterDip,
+        .originY = static_cast<float>(piece.y) / f.deviceScale - a.gutterDip,
+        .scale = f.deviceScale, .relief = material.relief, .band = f.bandDip,
+        .pitch = l.repeatWidth / static_cast<float>(tile.layout.columns), .phase = l.px,
+        .side = static_cast<std::uint32_t>(side), .inverseScale = 1.f / f.deviceScale};
+}
+
+KnitRasterPiece SideBounds(const KnitFrameSpec& f, int side, std::uint32_t width, std::uint32_t height,
+                           float depth, float gutterDip) {
     float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
     float right = std::floor((gutterDip + ow - depth) * f.deviceScale);
     float bottom = std::floor((gutterDip + oh - depth) * f.deviceScale);
@@ -202,142 +255,102 @@ KnitRasterPiece RenderSide(const KnitFrameSpec& f, const knitting::Tile& tile, i
     auto dy = static_cast<std::uint32_t>(bottom);
     auto dw = static_cast<std::uint32_t>(narrow);
     KnitRasterPiece piece;
-    std::uint32_t pw = width, ph = height;
-    if (side == 0) ph = std::min(dw, height);
-    if (side == 1) { piece.x = dx; pw = width - dx; }
-    if (side == 2) { piece.y = dy; ph = height - dy; }
-    if (side == 3) pw = std::min(dw, width);
-    auto& slot = scratch.Acquire(pw, ph, f.deviceScale);
+    piece.width = width; piece.height = height;
+    if (side == 0) piece.height = std::min(dw, height);
+    if (side == 1) { piece.x = dx; piece.width = width - dx; }
+    if (side == 2) { piece.y = dy; piece.height = height - dy; }
+    if (side == 3) piece.width = std::min(dw, width);
+    return piece;
+}
+
+void RenderSide(const KnitAssembly& a, const knitting::Tile& tile, KnitRasterPiece& piece, int side,
+                KnitRasterScratch::Impl& scratch, const KnitRenderControl& control) {
+    auto& slot = scratch.Acquire(piece.width, piece.height, a.frame.deviceScale);
     try {
-    auto& surface = *slot.color;
-    auto& relief = *slot.relief;
-    auto ring = Ring(scratch.d2d.Get(), f);
-    float length = side % 2 ? oh : ow;
-    auto mitre = Mitre(scratch.d2d.Get(), length, depth);
-    const D2D1::Matrix3x2F orientations[] = {
-        D2D1::Matrix3x2F::Identity(),
-        D2D1::Matrix3x2F(0, 1, -1, 0, ow, 0),
-        D2D1::Matrix3x2F(-1, 0, 0, -1, ow, oh),
-        D2D1::Matrix3x2F(0, -1, 1, 0, 0, oh)
-    };
-    auto placement = D2D1::Matrix3x2F::Translation(
-        gutterDip - static_cast<float>(piece.x) / f.deviceScale,
-        gutterDip - static_cast<float>(piece.y) / f.deviceScale);
-    auto look = tile.spec.chart ? tile.spec.chart->appearance : knitting::ChartAppearance{};
-    float px = f.anchor == KnitAnchor::Centre ? length * 0.5f - tile.layout.width_dip * 0.5f : 0.f;
-    float py = look.outsideAnchored ? 0.f : f.bandDip * 0.5f - tile.layout.height_dip * 0.5f;
-    bool fitted = (look.flags & designs::ChartFittedRepeat) != 0;
-    float repeatWidth = fitted ? length / std::max(1.f, std::round(length / tile.layout.width_dip))
-        : static_cast<float>(tile.layout.width_dip);
-    float cap = std::min(f.radiusDip + f.bandDip, length * .5f);
-    float available = std::max(0.f, length - 2.f * cap);
-    if (patch && available > 0.f) {
-        repeatWidth = available / std::max(1.f, std::round(available / tile.layout.width_dip));
-        px = cap;
-    } else if (fitted) px = 0.f;
-    if (fitted || patch)
-        repeatWidth = std::max(1.f, std::round(repeatWidth * f.deviceScale)) / f.deviceScale;
-    ComPtr<ID2D1Geometry> cuffRing;
-    if (cuff) cuffRing = CuffRing(scratch.d2d.Get(), f);
-    auto brush = scratch.TileBrush(slot, 0, tile, false, px, py, repeatWidth);
-    ComPtr<ID2D1BitmapBrush> patchBrush, cuffBrush;
-    if (patch) patchBrush = scratch.TileBrush(slot, 1, *patch, false, 0, py,
-        static_cast<float>(patch->layout.width_dip));
-    if (cuff) cuffBrush = scratch.TileBrush(slot, 2, *cuff, false, 0, 0, static_cast<float>(cuff->layout.width_dip));
-    Poll(control);
-    ComPtr<ID2D1SolidColorBrush> backing, black;
-    auto cornerColor = patch ? patch->spec.baseArgb : tile.spec.baseArgb;
-    Check(surface.target->CreateSolidColorBrush(knitting::detail::OpaqueColor(cornerColor, 0.96f), &backing),
-          "Create opaque yarn backing");
-    Check(surface.target->CreateSolidColorBrush(D2D1::ColorF(0.f, 0.f, 0.f, f.dim), &black), "Create dim overlay");
-    surface.target->BeginDraw();
-    surface.target->Clear(D2D1::ColorF(0.f, 0.f, 0.f, 0.f));
-    surface.target->SetTransform(placement);
-    surface.target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), ring.Get()), nullptr);
-    surface.target->SetTransform(orientations[side] * placement);
-    auto mask = D2D1::LayerParameters(D2D1::InfiniteRect(), mitre.Get(), D2D1_ANTIALIAS_MODE_ALIASED);
-    surface.target->PushLayer(mask, nullptr);
-    auto rectangle = D2D1::RectF(0.f, 0.f, length, depth);
-    surface.target->FillRectangle(rectangle, backing.Get());
-    if (patch) {
-        surface.target->FillRectangle(D2D1::RectF(0, 0, cap, depth), patchBrush.Get());
-        surface.target->FillRectangle(D2D1::RectF(length-cap, 0, length, depth), patchBrush.Get());
-        if (available > 0.f)
-            surface.target->FillRectangle(D2D1::RectF(cap, 0, length-cap, depth), brush.Get());
-    } else surface.target->FillRectangle(rectangle, brush.Get());
-    if (cuff) {
-        surface.target->SetTransform(placement);
-        surface.target->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), cuffRing.Get()), nullptr);
-        surface.target->SetTransform(orientations[side] * placement);
-        surface.target->FillRectangle(rectangle, cuffBrush.Get());
-        surface.target->PopLayer();
-    }
-    if (f.dim > 0.001f) surface.target->FillRectangle(D2D1::RectF(-depth, -depth, length + 2.f*depth, 3.f*depth), black.Get());
-    surface.target->PopLayer();
-    surface.target->PopLayer();
-    Check(surface.target->EndDraw(), "Render knit perimeter side");
-    piece.image = surface.Read();
-    Poll(control);
-    {
-        auto& rt = *relief.target.Get();
-        auto heightBrush = scratch.TileBrush(slot, 0, tile, true, px, py, repeatWidth);
-        ComPtr<ID2D1BitmapBrush> heightPatch, heightCuff;
-        if (patch) heightPatch = scratch.TileBrush(slot, 1, *patch, true, 0, py, static_cast<float>(patch->layout.width_dip));
-        if (cuff) heightCuff = scratch.TileBrush(slot, 2, *cuff, true, 0, 0, static_cast<float>(cuff->layout.width_dip));
-        ComPtr<ID2D1SolidColorBrush> floor;
-        Check(rt.CreateSolidColorBrush(D2D1::ColorF(.3f, .3f, .3f, 1.f), &floor), "Create stitch height backing");
-        rt.BeginDraw();
-        rt.Clear(D2D1::ColorF(0.f, 0.f, 0.f, 0.f));
-        rt.SetTransform(placement);
-        rt.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), ring.Get()), nullptr);
-        rt.SetTransform(orientations[side] * placement);
-        rt.PushLayer(mask, nullptr);
-        rt.FillRectangle(rectangle, floor.Get());
-        if (patch) {
-            rt.FillRectangle(D2D1::RectF(0, 0, cap, depth), heightPatch.Get());
-            rt.FillRectangle(D2D1::RectF(length-cap, 0, length, depth), heightPatch.Get());
-            if (available > 0.f) rt.FillRectangle(D2D1::RectF(cap, 0, length-cap, depth), heightBrush.Get());
-        } else rt.FillRectangle(rectangle, heightBrush.Get());
-        if (cuff) {
-            rt.SetTransform(placement);
-            rt.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), cuffRing.Get()), nullptr);
-            rt.SetTransform(orientations[side] * placement);
-            rt.FillRectangle(rectangle, heightCuff.Get());
-            rt.PopLayer();
-        }
-        rt.PopLayer();
-        rt.PopLayer();
-        Check(rt.EndDraw(), "Render knit stitch height");
-    }
-    auto stitchHeights = relief.Read();
-    Poll(control);
-    auto material = tile.spec.material == knitting::Material::Raised
-        ? ws_knit_raised_material(tile.spec.gauge) : tile.spec.gauge;
-    bool hole = f.widthDip > 2.f * f.tuckDip && f.heightDip > 2.f * f.tuckDip;
-    const ws_knit_ring tube{ow, oh, f.radiusDip + f.bandDip, hole ? f.bandDip + f.tuckDip : 0.f,
-        std::max(0.f, f.radiusDip - f.tuckDip)};
-    if (!ws_knit_shade_ring_relief(&tube, static_cast<float>(piece.x) / f.deviceScale - gutterDip,
-            static_cast<float>(piece.y) / f.deviceScale - gutterDip, f.deviceScale,
-            piece.image.pixels.data(), static_cast<int>(pw), static_cast<int>(ph),
-            stitchHeights.pixels.data(), material.relief))
-        throw std::invalid_argument("Invalid knit ring shading");
-    Poll(control);
-    if (!ws_knit_fray_ring(&tube, side, ws_knit_fray_depth(f.bandDip),repeatWidth / static_cast<float>(tile.layout.columns), px,
-            static_cast<float>(piece.x) / f.deviceScale - gutterDip,
-            static_cast<float>(piece.y) / f.deviceScale - gutterDip, f.deviceScale,
-            piece.image.pixels.data(), static_cast<int>(pw), static_cast<int>(ph)))
-        throw std::invalid_argument("Invalid knit ring fray");
-    Poll(control);
-    if (!ws_knit_ring_drop_shadow(&tube, side, f.bandDip,
-            static_cast<float>(piece.x) / f.deviceScale - gutterDip,
-            static_cast<float>(piece.y) / f.deviceScale - gutterDip, f.deviceScale,
-            piece.image.pixels.data(), static_cast<int>(pw), static_cast<int>(ph)))
-        throw std::invalid_argument("Invalid knit drop shadow");
+        const KnitTileBrush brush = [&](int role, const knitting::Tile& t, bool heights, float px, float py,
+                                        float repeatWidth) {
+            return scratch.TileBrush(slot, role, t, heights, px, py, repeatWidth);
+        };
+        Poll(control);
+        KnitRaster::DrawStrip(*slot.color->target.Get(), a, tile, piece, side, false, brush);
+        piece.image = slot.color->Read();
+        Poll(control);
+        KnitRaster::DrawStrip(*slot.relief->target.Get(), a, tile, piece, side, true, brush);
+        auto stitchHeights = slot.relief->Read();
+        Poll(control);
+        const auto p = ShaderParameters(a, tile, piece, side);
+        const ws_knit_ring tube{p.ringWidth, p.ringHeight, p.outerRadius, p.inset, p.innerRadius};
+        const auto w = static_cast<int>(piece.width), h = static_cast<int>(piece.height);
+        if (!ws_knit_shade_ring_relief(&tube, p.originX, p.originY, p.scale, piece.image.pixels.data(), w, h,
+                stitchHeights.pixels.data(), p.relief))
+            throw std::invalid_argument("Invalid knit ring shading");
+        Poll(control);
+        if (!ws_knit_fray_ring(&tube, side, ws_knit_fray_depth(p.band), p.pitch, p.phase, p.originX, p.originY,
+                p.scale, piece.image.pixels.data(), w, h))
+            throw std::invalid_argument("Invalid knit ring fray");
+        Poll(control);
+        if (!ws_knit_ring_drop_shadow(&tube, side, p.band, p.originX, p.originY, p.scale,
+                piece.image.pixels.data(), w, h))
+            throw std::invalid_argument("Invalid knit drop shadow");
     } catch (const KnitRenderCancelled&) { throw; }
     catch (...) { scratch.Drop(slot); throw; }
     scratch.EndSide(slot);
-    return piece;
 }
+}
+
+void KnitRaster::DrawStrip(ID2D1RenderTarget& target, const KnitAssembly& a, const knitting::Tile& tile,
+                           const KnitRasterPiece& piece, int side, bool heights, const KnitTileBrush& tileBrush) {
+    const auto& f = a.frame;
+    const auto l = Layout(a, tile, piece, side);
+    const auto* patch = a.patch.get();
+    const auto* cuff = a.cuff.get();
+    const float depth = a.depth;
+    ComPtr<ID2D1Factory> factory;
+    target.GetFactory(&factory);
+    auto ring = Ring(factory.Get(), f);
+    // Aliased 45-degree edges through pixel centres rasterize differently in software and hardware D2D.
+    auto mitre = Mitre(factory.Get(), l.length, depth, 1.f / (8.f * f.deviceScale));
+    ComPtr<ID2D1Geometry> cuffRing;
+    if (cuff) cuffRing = CuffRing(factory.Get(), f);
+    auto brush = tileBrush(0, tile, heights, l.px, l.py, l.repeatWidth);
+    ComPtr<ID2D1BitmapBrush> patchBrush, cuffBrush;
+    if (patch) patchBrush = tileBrush(1, *patch, heights, 0, l.py, static_cast<float>(patch->layout.width_dip));
+    if (cuff) cuffBrush = tileBrush(2, *cuff, heights, 0, 0, static_cast<float>(cuff->layout.width_dip));
+    ComPtr<ID2D1SolidColorBrush> backing, black;
+    if (heights) Check(target.CreateSolidColorBrush(D2D1::ColorF(.3f, .3f, .3f, 1.f), &backing),
+        "Create stitch height backing");
+    else {
+        auto cornerColor = patch ? patch->spec.baseArgb : tile.spec.baseArgb;
+        Check(target.CreateSolidColorBrush(knitting::detail::OpaqueColor(cornerColor, 0.96f), &backing),
+              "Create opaque yarn backing");
+        Check(target.CreateSolidColorBrush(D2D1::ColorF(0.f, 0.f, 0.f, f.dim), &black), "Create dim overlay");
+    }
+    target.BeginDraw();
+    target.Clear(D2D1::ColorF(0.f, 0.f, 0.f, 0.f));
+    target.SetTransform(l.placement);
+    target.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), ring.Get()), nullptr);
+    target.SetTransform(l.orientation * l.placement);
+    target.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), mitre.Get(), D2D1_ANTIALIAS_MODE_ALIASED), nullptr);
+    auto rectangle = D2D1::RectF(0.f, 0.f, l.length, depth);
+    target.FillRectangle(rectangle, backing.Get());
+    if (patch) {
+        target.FillRectangle(D2D1::RectF(0, 0, l.cap, depth), patchBrush.Get());
+        target.FillRectangle(D2D1::RectF(l.length - l.cap, 0, l.length, depth), patchBrush.Get());
+        if (l.available > 0.f)
+            target.FillRectangle(D2D1::RectF(l.cap, 0, l.length - l.cap, depth), brush.Get());
+    } else target.FillRectangle(rectangle, brush.Get());
+    if (cuff) {
+        target.SetTransform(l.placement);
+        target.PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), cuffRing.Get()), nullptr);
+        target.SetTransform(l.orientation * l.placement);
+        target.FillRectangle(rectangle, cuffBrush.Get());
+        target.PopLayer();
+    }
+    if (!heights && f.dim > 0.001f)
+        target.FillRectangle(D2D1::RectF(-depth, -depth, l.length + 2.f * depth, 3.f * depth), black.Get());
+    target.PopLayer();
+    target.PopLayer();
+    Check(target.EndDraw(), heights ? "Render knit stitch height" : "Render knit perimeter side");
 }
 
 KnitRasterScratch::KnitRasterScratch(std::size_t byteBudget) : impl_(std::make_unique<Impl>()) {
@@ -401,13 +414,21 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     }
     Poll(control);
     float gutterDip = static_cast<float>(inset + margin) / f.deviceScale - f.bandDip;
-    for (int side = 0; side < 4; ++side)
-        perimeter.pieces[side] = RenderSide(f, *perimeter.tile, side, perimeter.width,
-            perimeter.height, depth, gutterDip, patch.get(), cuff.get(), scratch, control);
+    KnitAssembly assembly{f, depth, gutterDip, std::move(patch), std::move(cuff), {}};
+    for (int side = 0; side < 4; ++side) {
+        Poll(control);
+        auto& piece = perimeter.pieces[side];
+        piece = SideBounds(f, side, perimeter.width, perimeter.height, depth, gutterDip);
+        if (f.renderer == Renderer::Gpu) assembly.parameters[side] = ShaderParameters(assembly, *perimeter.tile, piece, side);
+        else RenderSide(assembly, *perimeter.tile, piece, side, scratch, control);
+    }
+    if (f.renderer == Renderer::Gpu) perimeter.assembly = std::move(assembly);
     return perimeter;
 }
 
 knitting::RasterImage KnitRaster::Compose(const KnitPerimeter& p) {
+    if (p.assembly)
+        throw std::invalid_argument("GPU perimeter requires shader rendering before composition");
     if (!p.width || !p.height || p.width > 32768 || p.height > 32768
         || static_cast<std::uint64_t>(p.width) * p.height > 16u * 1024u * 1024u)
         throw std::invalid_argument("Fixture image exceeds limits");

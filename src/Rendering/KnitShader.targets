@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <KnitShaderSource>$(MSBuildThisFileDirectory)KnitShader.hlsl</KnitShaderSource>
+    <KnitShaderCompiler>$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\fxc.exe</KnitShaderCompiler>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+  </ItemDefinitionGroup>
+  <Target Name="CompileKnitShader" BeforeTargets="ClCompile" Inputs="$(KnitShaderSource);$(MSBuildThisFileFullPath)" Outputs="$(IntDir)KnitVertex.h;$(IntDir)KnitPixel.h;$(IntDir)CopyPixel.h">
+    <MakeDir Directories="$(IntDir)" />
+    <Exec Command="&quot;$(KnitShaderCompiler)&quot; /nologo /WX /Ges /Gis /O3 /T vs_4_0 /E Vertex /Vn KnitVertex /Fh &quot;$(IntDir)KnitVertex.h&quot; &quot;$(KnitShaderSource)&quot;" />
+    <Exec Command="&quot;$(KnitShaderCompiler)&quot; /nologo /WX /Ges /Gis /O3 /T ps_4_0 /E Knit /Vn KnitPixel /Fh &quot;$(IntDir)KnitPixel.h&quot; &quot;$(KnitShaderSource)&quot;" />
+    <Exec Command="&quot;$(KnitShaderCompiler)&quot; /nologo /WX /Ges /Gis /O3 /T ps_4_0 /E Copy /Vn CopyPixel /Fh &quot;$(IntDir)CopyPixel.h&quot; &quot;$(KnitShaderSource)&quot;" />
+    <ItemGroup><FileWrites Include="$(IntDir)KnitVertex.h;$(IntDir)KnitPixel.h;$(IntDir)CopyPixel.h" /></ItemGroup>
+  </Target>
+</Project>

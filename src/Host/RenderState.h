@@ -11,7 +11,7 @@ inline tracking::PhysicalRect TrackedRect(const geometry::PhysicalRect& rect) no
 
 inline rendering::RenderRequest MakeRenderRequest(const tracking::WorkToken& token,
     std::uint64_t revision, std::uint64_t generation, const geometry::RenderInput& input,
-    knitting::TileSpec appearance = {}) {
+    knitting::TileSpec appearance = {}, rendering::Renderer renderer = rendering::Renderer::Cpu) {
     rendering::RenderRequest request;
     request.token = token;
     request.configRevision = revision;
@@ -26,6 +26,7 @@ inline rendering::RenderRequest MakeRenderRequest(const tracking::WorkToken& tok
     request.frame.bandDip = static_cast<float>(input.widthDip);
     request.frame.radiusDip = static_cast<float>(input.radiusDip);
     request.frame.deviceScale = static_cast<float>(input.deviceScale);
+    request.frame.renderer = renderer;
     request.tile = std::move(appearance);
     request.tile.bandDip = request.frame.bandDip;
     request.tile.deviceScale = request.frame.deviceScale;
@@ -49,6 +50,7 @@ inline bool SamePreparation(const rendering::RenderRequest& left,
     const rendering::RenderRequest& right) noexcept {
     return left.token == right.token && left.configRevision == right.configRevision &&
         left.deviceGeneration == right.deviceGeneration &&
+        left.frame.renderer == right.frame.renderer &&
         left.frame.contentWidthPixels == right.frame.contentWidthPixels &&
         left.frame.contentHeightPixels == right.frame.contentHeightPixels &&
         left.frame.physicalPaddingPixels == right.frame.physicalPaddingPixels &&

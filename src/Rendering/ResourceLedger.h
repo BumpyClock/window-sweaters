@@ -56,14 +56,14 @@ public:
         try {
             std::size_t cpu=sizeof(KnitPerimeter),gpu=0,transient=0;
             for (auto const& piece:perimeter->pieces) {
-                auto const& image=piece.image;
-                if (!image.width || !image.height || image.width>32768 || image.height>32768 ||
-                    image.stride!=std::uint64_t(image.width)*4 ||
-                    image.pixels.size()!=std::uint64_t(image.width)*image.height) return E_INVALIDARG;
-                const auto surface=std::size_t(image.width)*image.height*4;
-                if (!Add(gpu,surface) || !Add(cpu,image.pixels.capacity()*sizeof(std::uint32_t)))
+                if (!perimeter->PieceValid(piece) || piece.width>32768 || piece.height>32768) return E_INVALIDARG;
+                const auto surface=std::size_t(piece.width)*piece.height*4;
+                if (!Add(gpu,surface) || !Add(cpu,piece.image.pixels.capacity()*sizeof(std::uint32_t)))
                     return E_INVALIDARG;
-                transient=std::max(transient,surface);
+                if (perimeter->assembly) {
+                    if (!Add(transient,surface*2u) || !Add(transient,(std::size_t(piece.width)+piece.height)*8u))
+                        return E_INVALIDARG;
+                } else transient=std::max(transient,surface);
             }
             if (!Add(gpu,transient)) return E_INVALIDARG;
             auto const& tile=perimeter->tile;

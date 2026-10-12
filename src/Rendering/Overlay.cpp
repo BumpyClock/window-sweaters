@@ -1,6 +1,8 @@
 #include "Overlay.h"
 #include "Stacking.h"
 
+#include <dxgi1_2.h>
+
 #include <cstdint>
 #include <algorithm>
 #include <cmath>
@@ -16,36 +18,88 @@ HRESULT LastError() noexcept {
     const auto error = GetLastError();
     return HRESULT_FROM_WIN32(error ? error : ERROR_GEN_FAILURE);
 }
+
+HRESULT TargetView(ID3D11Texture2D* texture, UINT subresource,
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView>& view) noexcept {
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    if (!desc.MipLevels || subresource >= desc.MipLevels * desc.ArraySize) return E_UNEXPECTED;
+    D3D11_RENDER_TARGET_VIEW_DESC viewDesc{};
+    viewDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (desc.ArraySize > 1) {
+        viewDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+        viewDesc.Texture2DArray = {subresource % desc.MipLevels, subresource / desc.MipLevels, 1};
+    } else {
+        viewDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        viewDesc.Texture2D.MipSlice = subresource;
+    }
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    texture->GetDevice(&device);
+    return device->CreateRenderTargetView(texture, &viewDesc, view.ReleaseAndGetAddressOf());
 }
 
-HRESULT GraphicsDevice::Initialize() noexcept {
+HRESULT ReadRegion(ID3D11Texture2D* texture, UINT subresource, POINT offset, std::uint32_t width,
+    std::uint32_t height, knitting::RasterImage& image) noexcept {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    texture->GetDevice(&device);
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width; desc.Height = height;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+    HRESULT result = device->CreateTexture2D(&desc, nullptr, &staging);
+    if (FAILED(result)) return result;
+    try {
+        image = {width, height, width * 4, {}};
+        image.pixels.resize(static_cast<std::size_t>(width) * height);
+    } catch (...) { return E_OUTOFMEMORY; }
+    const D3D11_BOX region{static_cast<UINT>(offset.x), static_cast<UINT>(offset.y), 0,
+        static_cast<UINT>(offset.x) + width, static_cast<UINT>(offset.y) + height, 1};
+    context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, texture, subresource, &region);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    result = context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(result)) return result;
+    for (std::uint32_t row = 0; row < height; ++row)
+        std::memcpy(image.pixels.data() + static_cast<std::size_t>(row) * width,
+            static_cast<const BYTE*>(mapped.pData) + static_cast<std::size_t>(row) * mapped.RowPitch, width * 4u);
+    context->Unmap(staging.Get(), 0);
+    return S_OK;
+}
+}
+
+HRESULT GraphicsDevice::Initialize(D3D_DRIVER_TYPE driver) noexcept {
     Destroy();
-    HRESULT result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+    HRESULT result = D3D11CreateDevice(nullptr,
+        driver == D3D_DRIVER_TYPE_UNKNOWN ? D3D_DRIVER_TYPE_HARDWARE : driver, nullptr,
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
         graphics_.ReleaseAndGetAddressOf(), nullptr, nullptr);
-    if (FAILED(result)) {
+    if (FAILED(result) && driver == D3D_DRIVER_TYPE_UNKNOWN) {
         result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
             graphics_.ReleaseAndGetAddressOf(), nullptr, nullptr);
     }
     if (FAILED(result)) return result;
+    try {
+        shader_ = std::make_shared<GpuShader>(graphics_.Get());
+        assembler_ = std::make_shared<KnitAssembler>(graphics_.Get());
+    } catch (...) { return E_OUTOFMEMORY; }
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
     result = graphics_.As(&dxgi);
-    if (FAILED(result)) return result;
-    result = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,
-        factory_.ReleaseAndGetAddressOf());
-    if (FAILED(result)) return result;
-    result = factory_->CreateDevice(dxgi.Get(), drawing_.ReleaseAndGetAddressOf());
     if (FAILED(result)) return result;
     return DCompositionCreateDevice(dxgi.Get(), __uuidof(IDCompositionDevice),
         reinterpret_cast<void**>(composition_.ReleaseAndGetAddressOf()));
 }
 
 void GraphicsDevice::Destroy() noexcept {
+    shader_.reset();
+    assembler_.reset();
     composition_.Reset();
-    drawing_.Reset();
-    factory_.Reset();
     graphics_.Reset();
 }
 
@@ -69,7 +123,7 @@ HRESULT Overlay::Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& gra
     DWORD hostProcess{};
     if (!hostWindow || !GetWindowThreadProcessId(hostWindow, &hostProcess) || hostProcess != GetCurrentProcessId())
         return E_INVALIDARG;
-    if (!graphics.Drawing() || !graphics.Composition()) return E_UNEXPECTED;
+    if (!graphics.Composition() || !graphics.Shader() || !graphics.Assembler()) return E_UNEXPECTED;
     WNDCLASSEXW windowClass{sizeof(windowClass)};
     windowClass.lpfnWndProc = WindowProc;
     windowClass.hInstance = instance;
@@ -84,21 +138,24 @@ HRESULT Overlay::Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& gra
 
     composition_ = graphics.Composition();
     resources_ = graphics.ResourceOwner();
-    HRESULT result = graphics.Drawing()->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-        context_.ReleaseAndGetAddressOf());
-    if (FAILED(result)) return result;
-    context_->SetDpi(96.0f, 96.0f);
-    result = composition_->CreateTargetForHwnd(window_, TRUE, target_.ReleaseAndGetAddressOf());
+    shader_ = graphics.Shader();
+    assembler_ = graphics.Assembler();
+    HRESULT result = composition_->CreateTargetForHwnd(window_, TRUE, target_.ReleaseAndGetAddressOf());
     if (FAILED(result)) return result;
     result = composition_->CreateVisual(visual_.ReleaseAndGetAddressOf());
     if (FAILED(result)) return result;
     return target_->SetRoot(visual_.Get());
 }
 
-HRESULT Overlay::UploadPiece(const KnitRasterPiece& piece, const RECT& exclusion, float radiusPixels, float tuckPixels,
-    Microsoft::WRL::ComPtr<IDCompositionSurface>& surface, knitting::RasterImage* uploadedPixels) noexcept {
-    const auto& image = piece.image;
-    HRESULT result = composition_->CreateSurface(image.width, image.height,
+HRESULT Overlay::UploadPiece(const KnitPerimeter& perimeter, std::size_t side, const RECT& exclusion,
+    float radiusPixels, float tuckPixels, Microsoft::WRL::ComPtr<IDCompositionSurface>& surface,
+    knitting::RasterImage* uploadedPixels) noexcept {
+    const auto& piece = perimeter.pieces[side];
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> colour, heights;
+    HRESULT result = perimeter.assembly ? assembler_->Assemble(perimeter, side, colour, heights)
+        : shader_->Upload(piece.image, colour);
+    if (FAILED(result)) return result;
+    result = composition_->CreateSurface(piece.width, piece.height,
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED,
         surface.ReleaseAndGetAddressOf());
     if (FAILED(result)) return result;
@@ -109,76 +166,29 @@ HRESULT Overlay::UploadPiece(const KnitRasterPiece& piece, const RECT& exclusion
         reinterpret_cast<void**>(drawingSurface.ReleaseAndGetAddressOf()), &offset);
     if (FAILED(result)) return result;
 
-    Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap, source;
-    const auto properties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
-    result = context_->CreateBitmapFromDxgiSurface(drawingSurface.Get(), &properties,
-        bitmap.ReleaseAndGetAddressOf());
-    const auto sourceProperties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_NONE,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
-    if (SUCCEEDED(result)) result = context_->CreateBitmap(D2D1::SizeU(image.width, image.height),
-        image.pixels.data(), image.stride, &sourceProperties, source.ReleaseAndGetAddressOf());
-    Microsoft::WRL::ComPtr<ID2D1Factory> factory;
-    context_->GetFactory(factory.ReleaseAndGetAddressOf());
-    Microsoft::WRL::ComPtr<ID2D1RectangleGeometry> outer;
-    Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> inner;
-    Microsoft::WRL::ComPtr<ID2D1GeometryGroup> mask;
-    const auto extent = D2D1::RectF(0, 0, static_cast<float>(image.width), static_cast<float>(image.height));
-    if (SUCCEEDED(result)) result = factory->CreateRectangleGeometry(extent, outer.ReleaseAndGetAddressOf());
+    Microsoft::WRL::ComPtr<IDXGISurface2> backing;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    UINT subresource{};
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target;
+    result = drawingSurface.As(&backing);
+    if (SUCCEEDED(result)) result = backing->GetResource(__uuidof(ID3D11Texture2D),
+        reinterpret_cast<void**>(texture.GetAddressOf()), &subresource);
+    if (SUCCEEDED(result)) result = TargetView(texture.Get(), subresource, target);
     const float tuck = std::min(tuckPixels, std::min(
         static_cast<float>(exclusion.right - exclusion.left), static_cast<float>(exclusion.bottom - exclusion.top)) * .5f);
-    const auto content = D2D1::RectF(
-        static_cast<float>(exclusion.left) + tuck - piece.x, static_cast<float>(exclusion.top) + tuck - piece.y,
-        static_cast<float>(exclusion.right) - tuck - piece.x, static_cast<float>(exclusion.bottom) - tuck - piece.y);
-    const float radius = std::min(std::max(0.f, radiusPixels - tuck),
-        std::min(content.right - content.left, content.bottom - content.top) * .5f);
-    const bool hasHole = content.right > content.left && content.bottom > content.top;
-    if (SUCCEEDED(result) && hasHole) result = factory->CreateRoundedRectangleGeometry(
-        D2D1::RoundedRect(content, radius, radius), inner.ReleaseAndGetAddressOf());
-    if (SUCCEEDED(result)) {
-        ID2D1Geometry* contours[] = {outer.Get(), inner.Get()};
-        result = factory->CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, contours, hasHole ? 2u : 1u, mask.ReleaseAndGetAddressOf());
-    }
-    if (SUCCEEDED(result)) {
-        context_->SetTarget(bitmap.Get());
-        context_->SetTransform(D2D1::Matrix3x2F::Translation(static_cast<float>(offset.x),
-            static_cast<float>(offset.y)));
-        context_->BeginDraw();
-        context_->PushAxisAlignedClip(extent, D2D1_ANTIALIAS_MODE_ALIASED);
-        context_->Clear(D2D1::ColorF(0, 0, 0, 0));
-        context_->PushLayer(D2D1::LayerParameters1(extent, mask.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE), nullptr);
-        context_->DrawBitmap(source.Get(), extent, 1.0f, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
-        context_->PopLayer();
-        context_->PopAxisAlignedClip();
-        result = context_->EndDraw();
-        context_->SetTarget(nullptr);
-    }
-    if (SUCCEEDED(result) && uploadedPixels) {
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> staging;
-        const auto readProperties = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
-        result = context_->CreateBitmap(D2D1::SizeU(image.width, image.height), nullptr, 0,
-            &readProperties, staging.ReleaseAndGetAddressOf());
-        const D2D1_RECT_U region{static_cast<UINT32>(offset.x), static_cast<UINT32>(offset.y),
-            static_cast<UINT32>(offset.x) + image.width, static_cast<UINT32>(offset.y) + image.height};
-        if (SUCCEEDED(result)) result = staging->CopyFromBitmap(nullptr, bitmap.Get(), &region);
-        if (SUCCEEDED(result)) {
-            try {
-                uploadedPixels->width = image.width;
-                uploadedPixels->height = image.height;
-                uploadedPixels->stride = image.width * 4;
-                uploadedPixels->pixels.resize(static_cast<std::size_t>(image.width) * image.height);
-            } catch (...) { result = E_OUTOFMEMORY; }
-        }
-        D2D1_MAPPED_RECT mapped{};
-        if (SUCCEEDED(result)) result = staging->Map(D2D1_MAP_OPTIONS_READ, &mapped);
-        if (SUCCEEDED(result)) {
-            for (UINT32 row = 0; row < image.height; ++row)
-                std::memcpy(uploadedPixels->pixels.data() + static_cast<std::size_t>(row) * image.width,
-                    mapped.bits + static_cast<std::size_t>(row) * mapped.pitch, image.width * 4u);
-            result = staging->Unmap();
-        }
-    }
+    KnitMask mask{static_cast<float>(exclusion.left) + tuck - piece.x, static_cast<float>(exclusion.top) + tuck - piece.y,
+        static_cast<float>(exclusion.right) - tuck - piece.x, static_cast<float>(exclusion.bottom) - tuck - piece.y};
+    mask.radius = std::min(std::max(0.f, radiusPixels - tuck), std::min(mask.right - mask.left, mask.bottom - mask.top) * .5f);
+    mask.hole = mask.right > mask.left && mask.bottom > mask.top;
+    const KnitSources sources{piece.width, piece.height, colour.Get(), heights.Get(),
+        perimeter.assembly ? &perimeter.assembly->parameters[side] : nullptr};
+    if (SUCCEEDED(result)) result = shader_->Render(sources, mask, target.Get(), offset);
+    if (SUCCEEDED(result) && uploadedPixels)
+        result = ReadRegion(texture.Get(), subresource, offset, piece.width, piece.height, *uploadedPixels);
+    target.Reset();
+    texture.Reset();
+    backing.Reset();
+    drawingSurface.Reset();
     const HRESULT endResult = surface->EndDraw();
     if (FAILED(result)) return result;
     return endResult;
@@ -199,13 +209,10 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
         clip.bottom <= clip.top || !std::isfinite(radiusPixels) || radiusPixels < 0 ||
         !std::isfinite(tuckPixels) || tuckPixels < 0) return E_INVALIDARG;
     std::uint64_t bytes{};
+    if (perimeter->assembly && !perimeter->tile) return E_INVALIDARG;
     for (const auto& piece : perimeter->pieces) {
-        const auto& image = piece.image;
-        if (!image.width || !image.height || piece.x > perimeter->width || piece.y > perimeter->height ||
-            image.width > perimeter->width - piece.x || image.height > perimeter->height - piece.y ||
-            image.stride != image.width * 4u ||
-            image.pixels.size() != static_cast<std::size_t>(image.width) * image.height) return E_INVALIDARG;
-        bytes += image.ByteSize();
+        if (!perimeter->PieceValid(piece)) return E_INVALIDARG;
+        bytes += std::uint64_t{piece.width} * piece.height * 4u * (perimeter->assembly ? 2u : 1u);
     }
     if (bytes > 64ull * 1024 * 1024) return E_OUTOFMEMORY;
     ResourceLedger::Lease reservation;
@@ -216,7 +223,7 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
     HRESULT result = composition_->CreateVisual(nextRoot.ReleaseAndGetAddressOf());
     for (std::size_t i = 0; i < surfaces.size() && SUCCEEDED(result); ++i) {
         const auto& piece = perimeter->pieces[i];
-        result = UploadPiece(piece, exclusion, radiusPixels, tuckPixels, surfaces[i],
+        result = UploadPiece(*perimeter, i, exclusion, radiusPixels, tuckPixels, surfaces[i],
             uploadedPixels ? &(*uploadedPixels)[i] : nullptr);
         Microsoft::WRL::ComPtr<IDCompositionVisual> child;
         if (SUCCEEDED(result)) result = composition_->CreateVisual(child.ReleaseAndGetAddressOf());
@@ -280,9 +287,10 @@ void Overlay::Hide() noexcept {
 void Overlay::Destroy() noexcept {
     ReleaseContent();
     target_.Reset();
-    context_.Reset();
     composition_.Reset();
     resources_.reset();
+    shader_.reset();
+    assembler_.reset();
     if (window_) DestroyWindow(window_);
     window_ = nullptr;
     bounds_ = clip_ = {};
@@ -299,7 +307,6 @@ void Overlay::ReleaseContent() noexcept {
     }
     if (FAILED(detached)) {
         target_.Reset();
-        context_.Reset();
         if (window_) DestroyWindow(window_);
         window_=nullptr;
     }

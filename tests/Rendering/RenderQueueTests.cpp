@@ -766,6 +766,50 @@ void ChartKeysAndCacheBudget() {
           "Oversize tile not charged as resident cache");
 }
 
+void GpuInputsAndBudget() {
+    Receiver receiver;
+    receiver.Start();
+    auto request = Request();
+    request.frame.renderer = Renderer::Gpu;
+    Check(receiver.queue->Submit(request) == S_OK, "GPU inputs through owned worker");
+    receiver.Collect(1);
+    const auto& p = Perimeter(receiver.results[0]);
+    Check(receiver.results[0].request->frame.renderer == Renderer::Gpu,
+        "Immutable selection reaches ready GPU perimeter");
+    std::size_t stripBytes = 0;
+    for (const auto& piece : p.pieces) {
+        Check(p.assembly && piece.width && piece.height && piece.image.pixels.empty(),
+            "GPU perimeter carries an assembly recipe and no CPU strip pixels");
+        stripBytes += std::size_t{piece.width} * piece.height * 4;
+    }
+    bool rejected = false;
+    try { (void)KnitRaster::Compose(p); } catch (const std::invalid_argument&) { rejected = true; }
+    Check(rejected, "CPU Compose cannot silently publish unshaded GPU inputs");
+    Receiver bounded;
+    RenderQueueLimits limits;
+    limits.maxPerimeterBytes = stripBytes * 3 / 2;
+    bounded.Start(limits);
+    auto cpuRequest = request;
+    cpuRequest.frame.renderer = Renderer::Cpu;
+    Check(bounded.queue->Submit(cpuRequest) == S_OK, "CPU request within the same strip budget");
+    bounded.Collect(1);
+    Check(std::holds_alternative<std::shared_ptr<const KnitPerimeter>>(bounded.results[0].outcome),
+        "CPU strips fit a budget below twice their size");
+    request.token.target.hwnd = 102;
+    Check(bounded.queue->Submit(request) == S_OK, "Over-budget GPU request completes with explicit error");
+    bounded.Collect(2);
+    const auto* error = std::get_if<RenderError>(&bounded.results[1].outcome);
+    Check(error && error->kind == RenderErrorKind::ResourceQuota && error->result == Quota,
+        "GPU colour and height upload textures are admitted before allocation");
+    request.token.target.hwnd = 101;
+    request.frame.renderer = static_cast<Renderer>(99);
+    Check(receiver.queue->Submit(request) == S_OK, "Invalid renderer typed completion");
+    receiver.Collect(2);
+    error = std::get_if<RenderError>(&receiver.results[1].outcome);
+    Check(error && error->kind == RenderErrorKind::InvalidInput && error->result == E_INVALIDARG,
+        "Unknown renderer rejected without fallback");
+}
+
 void ReceiverOwnershipAndWrongThreadCalls() {
     Receiver receiver;
     receiver.Start();
@@ -995,6 +1039,7 @@ int main() {
         std::pair{"stop pending/active", StopPendingAndActiveWithoutDetachedWork},
         std::pair{"stop notification lifetime", StopRemovesPostedNotifications},
         std::pair{"immutable chart/cache byte budget", ChartKeysAndCacheBudget},
+        std::pair{"GPU immutable inputs/byte admission", GpuInputsAndBudget},
         std::pair{"owned receiver/thread", ReceiverOwnershipAndWrongThreadCalls},
         std::pair{"receiver start/post failure", StartRevalidatesReceiverAndPostFailureIsVisible},
         std::pair{"native PostMessage quota retirement", NativePostMessageQuotaFailureRetiresAcceptedWork},

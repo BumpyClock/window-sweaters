@@ -110,7 +110,8 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             || f.bandDip > 256.f || f.deviceScale < knitting::MinimumDeviceScale
             || f.deviceScale > knitting::MaximumDeviceScale || f.dim < 0.f || f.dim > 1.f
             || ((f.contentWidthPixels == 0) != (f.contentHeightPixels == 0))
-            || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre))
+            || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre)
+            || (f.renderer != Renderer::Cpu && f.renderer != Renderer::Gpu))
             throw std::invalid_argument("Invalid frame");
         if (f.contentWidthPixels) {
             f.widthDip = static_cast<float>(f.contentWidthPixels) / f.deviceScale;
@@ -140,9 +141,11 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             + std::max(0.f, f.radiusDip - f.tuckDip) * (1.f - .7071067811865475244f) + 1.f;
         depth = std::min(depth, std::min(ow, oh) * .5f);
         const double narrow = std::ceil(depth * f.deviceScale) + 2. + margin;
-        const double output = 2. * narrow * (w + h) * 4.;
-        if (!std::isfinite(output) || output > static_cast<double>(limits.maxPerimeterBytes))
+        const bool gpu = f.renderer == Renderer::Gpu;
+        const double strips = 2. * narrow * (w + h) * 4.;
+        if (!std::isfinite(strips) || strips * (gpu ? 2. : 1.) > static_cast<double>(limits.maxPerimeterBytes))
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
+        const double output = gpu ? 0. : strips;
         auto tileSpec = r.tile;
         tileSpec.bandDip = f.bandDip;
         tileSpec.deviceScale = f.deviceScale;
@@ -165,7 +168,7 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
         const auto outputBytes = static_cast<std::size_t>(output);
         b.readyBytes = errorBytes + sizeof(KnitPerimeter) + outputBytes + tile.retained;
         b.transientBytes = b.requestBytes + sizeof(KnitPerimeter) + outputBytes
-            + static_cast<std::size_t>(3. * narrow * std::max(w, h) * 4.)
+            + (gpu ? 0 : static_cast<std::size_t>(3. * narrow * std::max(w, h) * 4.))
             + 2 * retainedTiles + 8 * largestPixels + largestCells;
         if (b.readyBytes > limits.maxReadyBytes || b.transientBytes > limits.maxTransientBytes)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};

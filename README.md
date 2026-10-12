@@ -67,6 +67,35 @@ desktop evidence in the parity ledger. Physical input/desktop transitions,
 aggregate compositor budgets, and Store-installed execution remain separate
 qualification gates.
 
+## Experimental GPU shader renderer
+
+The host accepts `--renderer cpu|gpu`; CPU remains the default and the reference
+for comparison. Stitch and chart tiles are generated on the CPU for both
+backends. The GPU backend then draws the colour and height strips with hardware
+Direct2D when it uploads a border, and embedded HLSL shaders apply the relief
+lighting, fraying, drop shadow and content cut-out directly into the
+DirectComposition surfaces. A GPU border keeps no strip pixels in CPU memory.
+The CPU backend uses the same cut-out shader to publish its CPU-shaded strips.
+Neither backend runs a continuous render loop or regenerates pixels for pure
+movement. Shader failures are reported rather than falling back to CPU rendering.
+
+Hardware Direct2D anti-aliases edges differently from software Direct2D, so GPU
+borders can differ slightly from the CPU reference at partly covered edge pixels
+and at nearest-neighbour stitch texel ties.
+
+Run the isolated, hidden comparison without replacing the running application:
+
+```powershell
+.\tests\Rendering\compare-gpu.ps1 -Configuration Release -Platform x64
+```
+
+The comparison builds both selectable backends, checks hardware and WARP pixel
+output, exercises Host lifecycle/recovery contracts, and records completed-GPU
+timings and PNG pairs under `out\gpu-comparison`. See the
+[comparison guide](tests/Rendering/README.md) for coverage, ARM64 builds, timing
+boundaries, and limitations. Only one production host can own user configuration
+at a time; the comparison uses isolated hidden contracts instead.
+
 ## Safety and scope
 
 Decorations use windows owned by this application. The port must not inject code, change another application's window styles, move its windows, or require administrator privileges. Desktop probes must be opt-in and restricted to fixtures or explicitly inspected preview lifetimes.
