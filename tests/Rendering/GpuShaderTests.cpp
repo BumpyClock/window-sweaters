@@ -378,7 +378,7 @@ void StripProbe(testing::Gpu& gpu, const std::filesystem::path& output) {
                             * D2D1::Matrix3x2F::Translation(px, py));
                         return result;
                     };
-                    KnitRaster::DrawStrip(*surface.target.Get(), *p.assembly, *p.tile, piece, side, heights, brush);
+                    DrawKnitStrip(*surface.target.Get(), *p.assembly, *p.tile, piece, side, heights, brush);
                     software[heights] = surface.Read();
                 }
                 ComPtr<ID3D11ShaderResourceView> views[2];

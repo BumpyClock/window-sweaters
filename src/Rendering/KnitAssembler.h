@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
-#include "KnitRaster.h"
+#include "KnitStrip.h"
 #include <d2d1_1.h>
 #include <d3d11.h>
 #include <vector>

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Frame geometry adapted from upstream src/knit.c:505-731 at
 // a49dff52483dafdbe27f972bd271cd28d37cef1c. No CoreGraphics compatibility layer.
-#include "KnitRaster.h"
+#include "KnitStrip.h"
 #include "..\Geometry\Geometry.h"
 #include "..\Knitting\WicSurface.h"
 #include <algorithm>
@@ -272,10 +272,10 @@ void RenderSide(const KnitAssembly& a, const knitting::Tile& tile, KnitRasterPie
             return scratch.TileBrush(slot, role, t, heights, px, py, repeatWidth);
         };
         Poll(control);
-        KnitRaster::DrawStrip(*slot.color->target.Get(), a, tile, piece, side, false, brush);
+        DrawKnitStrip(*slot.color->target.Get(), a, tile, piece, side, false, brush);
         piece.image = slot.color->Read();
         Poll(control);
-        KnitRaster::DrawStrip(*slot.relief->target.Get(), a, tile, piece, side, true, brush);
+        DrawKnitStrip(*slot.relief->target.Get(), a, tile, piece, side, true, brush);
         auto stitchHeights = slot.relief->Read();
         Poll(control);
         const auto p = ShaderParameters(a, tile, piece, side);
@@ -298,8 +298,8 @@ void RenderSide(const KnitAssembly& a, const knitting::Tile& tile, KnitRasterPie
 }
 }
 
-void KnitRaster::DrawStrip(ID2D1RenderTarget& target, const KnitAssembly& a, const knitting::Tile& tile,
-                           const KnitRasterPiece& piece, int side, bool heights, const KnitTileBrush& tileBrush) {
+void DrawKnitStrip(ID2D1RenderTarget& target, const KnitAssembly& a, const knitting::Tile& tile,
+                   const KnitRasterPiece& piece, int side, bool heights, const KnitTileBrush& tileBrush) {
     const auto& f = a.frame;
     const auto l = Layout(a, tile, piece, side);
     const auto* patch = a.patch.get();

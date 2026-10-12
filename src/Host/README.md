@@ -280,7 +280,7 @@ CPU preparation generates stitch/chart tiles for both renderers. CPU requests
 also draw software D2D/WIC colour and height strips and shade them on the worker.
 GPU requests stop after the tiles: the perimeter carries a `KnitAssembly` (the
 normalised frame, corner patch and cuff tiles, and per-side shader parameters)
-and no strip pixels. Both paths draw strips through `KnitRaster::DrawStrip`.
+and no strip pixels. Both paths draw strips through `DrawKnitStrip`.
 
 On the receiver thread, `Overlay::Upload` publishes each side straight into its
 DirectComposition surface. For a GPU perimeter, `KnitAssembler` first draws the

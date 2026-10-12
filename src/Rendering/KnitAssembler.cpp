@@ -92,7 +92,7 @@ HRESULT KnitAssembler::Assemble(const KnitPerimeter& perimeter, std::size_t side
             if (FAILED(result)) break;
             context_->SetTarget(target.Get());
             context_->SetDpi(96.f * scale, 96.f * scale);
-            KnitRaster::DrawStrip(*context_.Get(), assembly, *perimeter.tile, piece, static_cast<int>(side),
+            DrawKnitStrip(*context_.Get(), assembly, *perimeter.tile, piece, static_cast<int>(side),
                 stitchHeights, brush);
             context_->SetTarget(nullptr);
         }

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "..\Knitting\KnitTile.h"
-#include <d2d1.h>
-#include <wrl/client.h>
 #include <array>
 #include <functional>
 #include <memory>
@@ -55,9 +53,6 @@ struct KnitPerimeter {
             image.pixels.size() == static_cast<std::size_t>(piece.width) * piece.height;
     }
 };
-using KnitTileBrush = std::function<Microsoft::WRL::ComPtr<ID2D1BitmapBrush>(int role, const knitting::Tile& tile,
-    bool heights, float px, float py, float repeatWidth)>;
-
 class KnitRasterScratch {
 public:
     struct Stats { std::uint64_t factories = 0, targets = 0, uploads = 0, reused = 0; };
@@ -83,8 +78,6 @@ public:
         knitting::TileSpec tile, knitting::TileCache& cache,
         const KnitRenderControl& control = {});
     static knitting::RasterImage Compose(const KnitPerimeter& perimeter);
-    static void DrawStrip(ID2D1RenderTarget& target, const KnitAssembly& assembly, const knitting::Tile& tile,
-        const KnitRasterPiece& piece, int side, bool heights, const KnitTileBrush& brush);
     static knitting::RasterImage RenderFrame(const KnitFrameSpec& frame,
         knitting::TileSpec tile, knitting::TileCache& cache);
 };

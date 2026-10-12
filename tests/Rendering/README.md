@@ -12,7 +12,7 @@ when hardware creation fails; this is not a renderer fallback.
 Both paths use the existing CPU stitch and chart tile generation, material
 preparation, fibre grain and blurred height fields. Both draw the periodic
 colour and height strips, corner patches, cuffs, ring masks and dimming through
-the same `KnitRaster::DrawStrip` code. The CPU path draws them with software
+the same `DrawKnitStrip` code. The CPU path draws them with software
 D2D/WIC on the queue worker and shades them on the CPU. A GPU perimeter carries
 a `KnitAssembly` recipe and **no strip pixels**. At upload, `KnitAssembler` draws
 the strips with hardware D2D on the shared device, and HLSL applies tube/relief
