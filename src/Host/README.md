@@ -302,8 +302,10 @@ colour and height textures, tile bitmaps, coordinate tables and retained surface
 Tile bitmap and coordinate-table cache leases receive budget from that reservation
 when populated, so persistent caches remain included in estimated GPU bytes after
 upload completion. Cache admission is bounded; quota pressure clears caches and
-retries admission once. Production requires hardware D3D11 initialization. Initialization failures
-enter the existing graphics recovery path. WARP is an explicit test driver only.
+retries admission once. Production requires hardware D3D11 initialization. A
+startup graphics initialization failure exits the Host with code 6. Recoverable
+graphics failures after startup enter the existing graphics recovery path. WARP
+is an explicit test driver only.
 
 `tests\Rendering\compare-gpu.ps1` validates GPU output against test-only scalar
 lighting expectations and hidden lifecycle contracts, and records benchmarks. See
