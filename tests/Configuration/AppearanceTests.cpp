@@ -1,4 +1,5 @@
 #include "..\..\src\Settings\Preview.h"
+#include "..\..\src\Rendering\GpuSnapshot.h"
 #include "..\..\src\Configuration\ConfigurationServer.h"
 #include "..\..\src\Configuration\Storage.h"
 #include "..\..\src\Configuration\Pipe.h"
@@ -231,11 +232,12 @@ void ProductionPreview() {
               "All original designs render into bounded native BGRA preview pixels on the MTA worker");
         frame.bandDip=16;
         auto tile=settings::MakeAppearance(value); tile.rasterScale=2;
-        auto actual=rendering::KnitRaster::RenderFrame(frame,tile,cache);
-        Check(actual.pixels==result->image.pixels,"Preview displays the exact production KnitRaster pieces, not an approximate texture");
+        rendering::GpuSnapshot snapshot;
+        auto actual=snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame,tile,cache));
+        Check(actual.pixels==result->image.pixels,"Preview displays the exact production GPU snapshot");
         auto plain=value; plain.design_selection=DesignSelection::plain; plain.design_id.clear();
         auto plain_tile=settings::MakeAppearance(plain); plain_tile.rasterScale=2;
-        auto baseline=rendering::KnitRaster::RenderFrame(frame,plain_tile,cache);
+        auto baseline=snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame,plain_tile,cache));
         Check(baseline.pixels!=result->image.pixels,"Original-design preview is not a fake plain tile");
     }
     worker.Stop();
@@ -245,16 +247,18 @@ void PreviewCoalescing() {
     std::mutex mutex; std::condition_variable wake;
     bool entered=false,released=false;
     unsigned renders=0; bool mta=true;
-    settings::Preview worker([&](auto value){views.Add(std::move(value));},[&](Configuration const&) {
-        APTTYPE type; APTTYPEQUALIFIER qualifier;
-        mta=mta && SUCCEEDED(CoGetApartmentType(&type,&qualifier)) && type==APTTYPE_MTA;
-        std::unique_lock lock(mutex);
-        if (++renders==1) {
-            entered=true; wake.notify_all();
-            if (!wake.wait_for(lock,std::chrono::seconds(10),[&]{return released;}))
-                throw std::runtime_error("Preview test gate timed out");
-        }
-                return knitting::RasterImage{1,1,4,{0xff123456}};
+    settings::Preview worker([&](auto value){views.Add(std::move(value));},[&] {
+        return settings::Preview::Render{[&](rendering::KnitPerimeter const&) {
+            APTTYPE type; APTTYPEQUALIFIER qualifier;
+            mta=mta && SUCCEEDED(CoGetApartmentType(&type,&qualifier)) && type==APTTYPE_MTA;
+            std::unique_lock lock(mutex);
+            if (++renders==1) {
+                entered=true; wake.notify_all();
+                if (!wake.wait_for(lock,std::chrono::seconds(10),[&]{return released;}))
+                    throw std::runtime_error("Preview test gate timed out");
+            }
+            return knitting::RasterImage{1,1,4,{0xff123456}};
+        }};
     });
     worker.Submit(Configuration{});
     {
@@ -271,6 +275,33 @@ void PreviewCoalescing() {
     auto result=views.Wait(latest); worker.Stop();
     Check(renders==2 && views.values.size()==1 && result->configuration==final && mta,
           "70 color/gauge/width/design changes coalesce to one latest immutable MTA preview without publishing stale work");
+}
+void PreviewFailureRecovery() {
+    PreviewViews views;
+    unsigned sessions=0,renders=0;
+    settings::Preview worker([&](auto value){views.Add(std::move(value));},[&] {
+        const auto session=++sessions;
+        return settings::Preview::Render{[&,session](rendering::KnitPerimeter const& perimeter) {
+            ++renders;
+            if (!perimeter.tile || !perimeter.width || !perimeter.height)
+                throw std::runtime_error("Missing prepared preview recipe");
+            if (session==1) throw std::runtime_error("Injected snapshot render failure");
+            return knitting::RasterImage{1,1,4,{0xff123456}};
+        }};
+    });
+    Configuration configuration;
+    const auto failed=views.Wait(worker.Submit(configuration));
+    Check(failed->configuration==configuration && failed->error==L"Injected snapshot render failure" &&
+        failed->image.pixels.empty(),"Failed snapshot render publishes its current generation as an error");
+    configuration.yarn_argb=0xff223344;
+    const auto recovered=views.Wait(worker.Submit(configuration));
+    Check(recovered->error.empty() && recovered->configuration==configuration &&
+        recovered->image.pixels==std::vector<std::uint32_t>{0xff123456} && sessions==2 && renders==2,
+        "Next preview request creates a fresh snapshot session after render failure and publishes its pixels");
+    const auto reused=views.Wait(worker.Submit(configuration));
+    worker.Stop();
+    Check(reused->error.empty() && reused->image.pixels==recovered->image.pixels && sessions==2 && renders==3,
+        "Successful replacement snapshot session persists for later preview requests");
 }
 void ProductionSliderBounds() {
     PreviewViews views;
@@ -299,7 +330,7 @@ int RunAppearanceTests(std::filesystem::path const& directory) {
     DomainAndFrames(); Migration(directory); Transactions(directory);
     auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
     if (FAILED(initialized)) throw std::runtime_error("Cannot initialize production preview test apartment");
-    try { ProductionPreview(); ProductionSliderBounds(); PreviewCoalescing(); }
+    try { ProductionPreview(); ProductionSliderBounds(); PreviewCoalescing(); PreviewFailureRecovery(); }
     catch (...) { CoUninitialize(); throw; }
     CoUninitialize(); return checks;
 }

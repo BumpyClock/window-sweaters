@@ -67,6 +67,49 @@ desktop evidence in the parity ledger. Physical input/desktop transitions,
 aggregate compositor budgets, and Store-installed execution remain separate
 qualification gates.
 
+## GPU shader renderer
+
+The host renders borders through GPU strip assembly and shading. The former
+`--renderer` option is rejected. Stitch and chart tiles are generated on the CPU.
+The GPU draws the colour and height strips with hardware
+Direct2D when it uploads a border, and embedded HLSL shaders apply the relief
+lighting, fraying, drop shadow and content cut-out directly into the
+DirectComposition surfaces. A GPU border keeps no strip pixels in CPU memory.
+The host retains published surfaces for idle periods and pure movement.
+Shader failures follow the graphics recovery path. Settings previews use the
+same GPU assembly and shading, compose on the GPU, and read back one BGRA image.
+
+`TileSpec` describes reusable raster content; device scale belongs to
+`KnitFrameSpec` and `KnitPerimeter`, so monitor DPI changes share tile pixels.
+
+The shared graphics device reuses native tile bitmaps and separate brushes for
+main, corner and cuff transforms within a 32 MiB cache. Shader coordinate tables
+reuse the exact CPU division results within a 1 MiB cache. Both evict before new
+allocations and count retained GPU bytes against the same admission limit as
+border surfaces. These are allocation estimates, not measured driver residency.
+Cache charges remain after an overlay releases its border. Clearing shared
+device caches releases charges after any staged uploads finish or are canceled.
+Oversized tiles use charged temporary
+uploads. Each publication batch submits drawing once, then commits and waits
+once for all prepared borders; pure movement reuses the published surfaces.
+
+Hardware Direct2D anti-aliases edges differently from software Direct2D, so GPU
+borders can differ slightly from the CPU reference at partly covered edge pixels
+and at nearest-neighbour stitch texel ties.
+
+Run the isolated, hidden comparison without replacing the running application:
+
+```powershell
+.\tests\Rendering\compare-gpu.ps1 -Configuration Release -Platform x64
+```
+
+The comparison builds the GPU runtime and test-only software oracle, checks hardware and WARP pixel
+output, exercises Host lifecycle/recovery contracts, and records completed-GPU
+timings and PNG pairs under `out\gpu-comparison`. See the
+[comparison guide](tests/Rendering/README.md) for coverage, ARM64 builds, timing
+boundaries, and limitations. Only one production host can own user configuration
+at a time; the comparison uses isolated hidden contracts instead.
+
 ## Safety and scope
 
 Decorations use windows owned by this application. The port must not inject code, change another application's window styles, move its windows, or require administrator privileges. Desktop probes must be opt-in and restricted to fixtures or explicitly inspected preview lifetimes.

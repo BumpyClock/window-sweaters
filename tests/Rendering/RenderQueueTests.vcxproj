@@ -45,7 +45,7 @@
   <ItemGroup>
     <ClCompile Include="RenderQueueTests.cpp" />
     <ClCompile Include="..\..\src\Rendering\RenderQueue.cpp" />
-    <ClCompile Include="..\..\src\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\..\src\Rendering\KnitPreparation.cpp" />
     <ClCompile Include="..\..\src\Knitting\KnitTile.cpp" />
     <ClCompile Include="..\..\src\Knitting\Chart.cpp" />
     <ClCompile Include="..\..\src\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>

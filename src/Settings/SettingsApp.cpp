@@ -274,7 +274,7 @@ struct SettingsApp : ApplicationT<SettingsApp,Markup::IXamlMetadataProvider> {
             if (auto queue=dispatcher.get()) queue.TryEnqueue([weak,result=std::move(result)] {
                 if (auto app=weak.get()) app->Dispatch(L"preview-dispatch",[&]{app->RenderPreview(*result);});
             });
-        },settings::Preview::Render{},options_.storage_directory);
+        },settings::Preview::RenderFactory{},options_.storage_directory);
         EnableControls(false); EnableApps(false); EnableImports(false); window_.Activate();
         StartupDiagnostic(L"window-activated",S_OK,L"Native settings window activated; awaiting host snapshot.");
     }

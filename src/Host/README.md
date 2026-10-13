@@ -37,6 +37,10 @@ Override switches are rejected outside test mode. The fixture's **Start test hos
 control remains compatible and cannot write the real user's configuration.
 `--help` and `--integration-contract` return before opening configuration storage.
 
+The host prepares immutable stitch/chart tiles and assembles and shades every
+perimeter on the GPU. Graphics recovery recreates the same hardware pipeline.
+`--integration-contract` runs hidden consumer and native publication contracts.
+
 Selection captures the initial `WindowIdentity` before configuration, COM and graphics
 initialization. Tracker startup requires that same identity and rechecks the
 exact fixture class/title; a reused HWND cannot be resealed as a different app.
@@ -130,16 +134,15 @@ requires Host restart. These limits can reject valid large or unusual app icons.
 
 ## Retained resource admission
 
-The shared graphics owner bounds retained perimeter CPU buffers to 128 MiB
+The shared graphics owner bounds retained tile/chart buffers to 128 MiB
 and estimated BGRA surface backing to 256 MiB. A shared tile/chart allocation
 is charged once across aliases. Upload admission includes the old and new
-surface sets plus the largest transient upload surface; failure leaves the old
+surface sets plus transient colour/height textures, tile bitmaps and coordinate tables; failure leaves the old
 resource ownership intact.
 
 Closing, excluding, suppressing or rebuilding an overlay releases its lease.
 Capacity retries use a bounded FIFO and only run when released capacity can
-help. Queue scratch, in-flight rendering and its tile cache have separate
-existing bounds. These accounting values are not total process heap, driver
+help. In-flight preparation and the tile cache have separate bounds. These accounting values are not total process heap, driver
 VRAM or actual compositor memory.
 
 The local probe exposes retained CPU bytes, estimated surface bytes, transient
@@ -233,7 +236,7 @@ content-exclusion rectangle. Each immutable queue request includes the complete
 target identity, appearance revision, committed configuration revision, and device
 generation. Generation starts at 1 and advances before shared GPU recovery.
 
-One MTA worker owns the CPU/D2D/WIC preparation and tile cache. The UI thread submits
+One MTA worker owns the stitch/chart tile preparation and tile cache. The UI thread submits
 only appearance, settled-size, and DPI changes. Movement does not submit jobs.
 The worker posts a cookie-bearing `WM_APP + 30`; it never calls UI callbacks or
 reads/writes configuration. The host drains results, queries the current exact
@@ -243,14 +246,14 @@ Movement between submission and completion attaches at current bounds, not the
 queued position.
 
 `Overlay::Upload(shared_ptr<const KnitPerimeter>, physicalOuterBounds,
-clipRelativeToOuter, contentExclusion, radiusPixels, tuckPixels)` uploads premultiplied BGRA into four narrow
+clipRelativeToOuter, contentExclusion, radiusPixels, tuckPixels)` assembles and shades premultiplied BGRA in four narrow
 DirectComposition surfaces. `physicalOuterBounds` is the target plus band padding
 plus a `ShadowMarginPixels(padding)` drop-shadow margin per side, which equals the
 perimeter's `contentInsetPixels`. The overlay is therefore half a band larger
 than the band on each side. It stays click-through, and the margin is
 transparent apart from the soft shadow. Four child visuals retain the perimeter pieces.
 There is no full-window backing surface. The root clips to the current monitor
-region; the bitmap upload subtracts the matching rounded client-interior geometry.
+region; the shader masks the matching rounded client-interior geometry.
 Its inner rectangle is inset by the source's one-DIP tuck and its radius is the
 physical window radius minus tuck, clamped for small content. The inward source
 yarn remains under the nonactivating overlay's verified below-target placement;
@@ -267,6 +270,48 @@ and native preparation failures remain failed until their render key changes.
 Removal cancels the exact `TargetId`. Configuration invalidation and
 terminal queue failure retire host pending gates explicitly; they do not wait
 for a cancelled completion.
+
+### GPU assembly and shading
+
+The worker generates stitch/chart tiles and prepares a `KnitAssembly`: the
+normalised frame, corner patch and cuff tiles, and per-side shader parameters.
+Each perimeter retains that recipe and four physical side bounds. GPU assembly
+uses `DrawKnitStrip` to draw colour and height strips.
+
+On the receiver thread, `Overlay::PrepareUpload` draws each side straight into its
+DirectComposition surface. `KnitAssembler` first draws the
+colour and height strips with hardware D2D on the shared D3D11 device. Embedded
+HLSL then applies relief lighting, fray, drop shadow and the content cut-out. The
+cut-out is a signed-distance rounded rectangle, not D2D geometry coverage. Normal
+publication performs no GPU readback. The host gathers at most eight ready
+perimeters, checks their current geometry and visibility, then publishes their
+prepared roots with one GPU submission, DirectComposition commit and completion
+wait. Standalone `Overlay::Upload` remains synchronous. Unattached roots can be
+discarded without changing retained content. Both previous content and replacement
+leases remain live until the batch completes. Commit or completion failure retires
+every affected native target before releasing either generation's resources.
+The host checks target lifetime and visibility again before showing completed
+content. If staging exhausts admission capacity, it completes the staged prefix
+and retries the next perimeter once before suppressing it.
+
+Shader execution is restricted to uploads; idle and pure movement do not submit
+draws. The local probe exposes `shader_draws`, which counts
+GPU relief draws only and resets when the shared graphics device is recreated.
+GPU resource admission reserves the whole upload working set before drawing:
+colour and height textures, tile bitmaps, coordinate tables and retained surfaces.
+Tile bitmap and coordinate-table cache leases receive budget from that reservation
+when populated, so persistent caches remain included in estimated GPU bytes after
+upload completion. Cache admission is bounded; quota pressure clears caches and
+retries admission once. Production requires hardware D3D11 initialization. A
+startup graphics initialization failure exits the Host with code 6. Recoverable
+graphics failures after startup enter the existing graphics recovery path. WARP
+is an explicit test driver only.
+
+`tests\Rendering\compare-gpu.ps1` validates GPU output against test-only scalar
+lighting expectations and hidden lifecycle contracts, and records benchmarks. See
+[`tests\Rendering\README.md`](../../tests/Rendering/README.md) for the exact
+coverage and timing boundaries. These checks do not establish physical desktop
+presentation, actual driver-reset recovery, or GPU power parity.
 
 ## Settings and lifetime
 
@@ -359,7 +404,7 @@ exercise late work, destruction, pause/config changes, failed attempts and Stop.
 These injection checks are not evidence of an actual graphics-driver reset.
 
 The hidden native contract optionally reads the actual masked DComp upload back
-from its D2D GPU bitmap. It checks square, RoundSmall and round masks at
+from the surface's D3D11 texture. It checks square, RoundSmall and round masks at
 100/125/150/200 percent DPI, continuous rounded-corner yarn, retained inward tuck,
 and zero central-interior alpha. This narrow-piece staging/readback is used only
 when the hidden fixture requests it; normal rendering allocates no readback bitmap.

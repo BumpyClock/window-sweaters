@@ -1,4 +1,5 @@
 #include "Preview.h"
+#include "..\Rendering\GpuSnapshot.h"
 #include "..\Geometry\Geometry.h"
 #include "..\Integration\IconAppearance.h"
 #include "..\Integration\BaseOverride.h"
@@ -50,7 +51,7 @@ knitting::TileSpec MakeAppearance(contracts::Configuration const& configuration,
 struct Preview::Impl {
     struct Request { std::uint64_t generation; contracts::Configuration configuration; };
     std::function<void(std::shared_ptr<PreviewResult const>)> publish;
-    Render render;
+    RenderFactory render_factory;
     std::filesystem::path storage_directory;
     std::mutex mutex;
     std::condition_variable wake;
@@ -59,11 +60,17 @@ struct Preview::Impl {
     std::uint64_t latest=0;
     bool stopped=false;
     std::thread worker;
-    Impl(std::function<void(std::shared_ptr<PreviewResult const>)> callback,Render renderer,std::filesystem::path directory)
-        : publish(std::move(callback)),render(std::move(renderer)),storage_directory(std::move(directory)) {}
+    Impl(std::function<void(std::shared_ptr<PreviewResult const>)> callback,RenderFactory factory,std::filesystem::path directory)
+        : publish(std::move(callback)),render_factory(std::move(factory)),storage_directory(std::move(directory)) {
+        if (!render_factory) render_factory=[] {
+            auto snapshot=std::make_shared<rendering::GpuSnapshot>();
+            return Render{[snapshot](rendering::KnitPerimeter const& perimeter) { return snapshot->Render(perimeter); }};
+        };
+    }
     void Run() noexcept {
         auto apartment=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
         knitting::TileCache cache(16u*1024u*1024u);
+        Render snapshot;
         std::optional<contracts::ImportPreferences> imported_preferences;
         integration::ImportedAppearance imported;
         for (;;) {
@@ -82,29 +89,29 @@ struct Preview::Impl {
                 result->generation=request.generation; result->configuration=std::move(request.configuration);
                 try {
                     if (FAILED(apartment)) throw std::system_error(static_cast<int>(apartment),std::system_category(),"Preview COM initialization");
-                    if (render) result->image=render(result->configuration);
-                    else {
-                        rendering::KnitFrameSpec frame;
-                        frame.bandDip=result->configuration.border_width_dip;
-                        auto shadow=static_cast<float>(geometry::ShadowMarginPixels(
-                            static_cast<std::uint32_t>(std::ceil(frame.bandDip))));
-                        frame.widthDip=400.f-2.f*shadow; frame.heightDip=140.f-2.f*shadow;
-                        auto const& preferences=result->configuration.imports;
-                        if (!imported_preferences || *imported_preferences!=preferences) {
-                            if (preferences.charts.empty()) {
-                                imported=integration::ImportedAppearance(preferences,std::make_shared<const imports::ImportCatalogue>());
-                            } else {
-                                auto saved=configuration::Storage(storage_directory).Load();
-                                if (saved.state!=configuration::StorageState::ready || saved.configuration.imports!=preferences)
-                                    throw std::invalid_argument("Imported preview requires the matching host-saved catalogue");
-                                imported=integration::ImportedAppearance(preferences,std::move(saved.catalogue),&imported);
-                            }
-                            imported_preferences=preferences;
+                    rendering::KnitFrameSpec frame;
+                    frame.bandDip=result->configuration.border_width_dip;
+                    auto shadow=static_cast<float>(geometry::ShadowMarginPixels(
+                        static_cast<std::uint32_t>(std::ceil(frame.bandDip))));
+                    frame.widthDip=400.f-2.f*shadow; frame.heightDip=140.f-2.f*shadow;
+                    auto const& preferences=result->configuration.imports;
+                    if (!imported_preferences || *imported_preferences!=preferences) {
+                        if (preferences.charts.empty()) {
+                            imported=integration::ImportedAppearance(preferences,std::make_shared<const imports::ImportCatalogue>());
+                        } else {
+                            auto saved=configuration::Storage(storage_directory).Load();
+                            if (saved.state!=configuration::StorageState::ready || saved.configuration.imports!=preferences)
+                                throw std::invalid_argument("Imported preview requires the matching host-saved catalogue");
+                            imported=integration::ImportedAppearance(preferences,std::move(saved.catalogue),&imported);
                         }
-                        auto tile=MakeAppearance(result->configuration,&imported);
-                        tile.rasterScale=2;
-                        result->image=rendering::KnitRaster::RenderFrame(frame,std::move(tile),cache);
+                        imported_preferences=preferences;
                     }
+                    auto tile=MakeAppearance(result->configuration,&imported);
+                    tile.rasterScale=2;
+                    auto perimeter=rendering::KnitPreparation::PreparePerimeter(frame,std::move(tile),cache);
+                    if (!snapshot) snapshot=render_factory();
+                    try { result->image=snapshot(perimeter); }
+                    catch (...) { snapshot={}; throw; }
                 } catch (std::exception const& error) {
                     std::string text=error.what();
                     result->error.assign(text.begin(),text.end());
@@ -114,11 +121,12 @@ struct Preview::Impl {
                 if (current) publish(std::move(result));
             } catch (...) { OutputDebugStringW(L"WindowSweaters: preview publication failed.\n"); }
         }
+        snapshot={};
         if (SUCCEEDED(apartment)) CoUninitialize();
     }
 };
-Preview::Preview(std::function<void(std::shared_ptr<PreviewResult const>)> publish,Render render,std::filesystem::path directory)
-    : impl_(std::make_unique<Impl>(std::move(publish),std::move(render),std::move(directory))) {
+Preview::Preview(std::function<void(std::shared_ptr<PreviewResult const>)> publish,RenderFactory render_factory,std::filesystem::path directory)
+    : impl_(std::make_unique<Impl>(std::move(publish),std::move(render_factory),std::move(directory))) {
     impl_->worker=std::thread([state=impl_.get()]{state->Run();});
 }
 Preview::~Preview() { Stop(); }

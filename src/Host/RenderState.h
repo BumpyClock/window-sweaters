@@ -28,7 +28,6 @@ inline rendering::RenderRequest MakeRenderRequest(const tracking::WorkToken& tok
     request.frame.deviceScale = static_cast<float>(input.deviceScale);
     request.tile = std::move(appearance);
     request.tile.bandDip = request.frame.bandDip;
-    request.tile.deviceScale = request.frame.deviceScale;
     return request;
 }
 

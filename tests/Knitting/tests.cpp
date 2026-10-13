@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#include "..\..\src\Rendering\KnitRaster.h"
+#include "..\..\src\Rendering\KnitPreparation.h"
+#include "..\..\src\Rendering\GpuSnapshot.h"
+#include "..\Rendering\BorderMath.h"
 #include "..\..\src\Knitting\WicSurface.h"
 #include "..\..\src\Designs\Catalogue.h"
 #include <algorithm>
@@ -23,6 +25,10 @@ using window_sweaters::knitting::detail::ComPtr;
 
 namespace {
 int checks = 0;
+std::unique_ptr<GpuSnapshot> snapshot;
+RasterImage CaptureFrame(const KnitFrameSpec& frame, TileSpec tile, TileCache& cache) {
+    return snapshot->Render(KnitPreparation::PreparePerimeter(frame, std::move(tile), cache));
+}
 void Require(bool condition, const char* message) {
     ++checks;
     if (!condition) throw std::runtime_error(message);
@@ -181,7 +187,7 @@ void CacheAndInvalidInputs() {
         probe.Get(changed);
         Require(probe.GenerationCount() == previous + 1, "Complete cache key invalidates");
     };
-    auto changed = spec; changed.deviceScale = 1.25f; change(changed);
+    auto changed = spec;
     changed = spec; changed.chartRevision = 42; change(changed);
     changed = spec; changed.rasterScale = 2; change(changed);
     changed = spec; changed.sampling = Sampling::Nearest; change(changed);
@@ -197,10 +203,6 @@ void CacheAndInvalidInputs() {
     Invalid([&] { probe.Get(changed); }, "Unknown stitch rejected");
     changed = spec; changed.gauge.jitter = std::numeric_limits<float>::quiet_NaN();
     Invalid([&] { probe.Get(changed); }, "NaN gauge rejected");
-    changed = spec; changed.deviceScale = 0;
-    Invalid([&] { probe.Get(changed); }, "Zero scale rejected");
-    changed = spec; changed.deviceScale = 1e-38f;
-    Invalid([&] { probe.Get(changed); }, "Positive subnormal-scale tile specification rejected");
     changed = spec; changed.rasterScale = 9;
     Invalid([&] { probe.Get(changed); }, "Excess sampling rejected");
     changed = spec; changed.bandDip = 257;
@@ -210,7 +212,7 @@ void CacheAndInvalidInputs() {
 }
 
 RasterImage BandImage(const KnitPerimeter& perimeter) {
-    auto image = KnitRaster::Compose(perimeter);
+    auto image = snapshot->Render(perimeter);
     const auto m = perimeter.shadowMarginPixels;
     Require(image.width > 2*m && image.height > 2*m, "Shadow margin fits the composed perimeter");
     RasterImage band{image.width - 2*m, image.height - 2*m, (image.width - 2*m) * 4, {}};
@@ -221,8 +223,39 @@ RasterImage BandImage(const KnitPerimeter& perimeter) {
     return band;
 }
 
+void DpiTileReuse() {
+    for (const auto sampling : {Sampling::Nearest, Sampling::Linear}) {
+        TileCache cache;
+        TileSpec tile;
+        tile.sampling = sampling;
+        KnitFrameSpec frame;
+        frame.widthDip = 73; frame.heightDip = 61;
+        frame.deviceScale = 1.5f;
+        const auto original = KnitPreparation::PreparePerimeter(frame, tile, cache);
+        const auto generations = cache.GenerationCount();
+        const auto resident = cache.ResidentBytes();
+        for (const float scale : {MinimumDeviceScale, 1.f, 1.25f, 1.5f, 2.f, 3.f, MaximumDeviceScale}) {
+            frame.deviceScale = scale;
+            const auto reused = KnitPreparation::PreparePerimeter(frame, tile, cache);
+            TileCache fresh;
+            const auto independent = KnitPreparation::PreparePerimeter(frame, tile, fresh);
+            Require(reused.tile == original.tile && cache.GenerationCount() == generations &&
+                cache.ResidentBytes() == resident, "DPI presentation changes reuse tile pixels and cache bytes");
+            Require(reused.deviceScale == scale && reused.width == independent.width && reused.height == independent.height
+                && (scale == 1.5f || (reused.width != original.width && reused.height != original.height)),
+                "DPI presentation retains current physical size and scale");
+            Require(reused.tile->image.pixels == independent.tile->image.pixels
+                && reused.tile->height.pixels == independent.tile->height.pixels,
+                "DPI frame requests retain independently generated tile colour and stitch height pixels");
+            Require(reused.tile->spec.sampling == sampling &&
+                snapshot->Render(reused).pixels == snapshot->Render(independent).pixels,
+                "DPI cache reuse retains sampling and independently generated rendered pixels");
+        }
+    }
+}
+
 RasterImage BandFrame(const KnitFrameSpec& frame, TileSpec tile, TileCache& cache) {
-    return BandImage(KnitRaster::RenderPerimeter(frame, std::move(tile), cache));
+    return BandImage(KnitPreparation::PreparePerimeter(frame, std::move(tile), cache));
 }
 
 bool InsideRounded(float x, float y, float left, float top, float width, float height, float radius);
@@ -461,15 +494,15 @@ void RenderBehavior(const std::filesystem::path& root) {
     TileSpec tile;
     KnitFrameSpec frame;
     frame.deviceScale = 2;
-    auto perimeter = KnitRaster::RenderPerimeter(frame, tile, cache);
-    auto desktop = KnitRaster::Compose(perimeter);
+    auto perimeter = KnitPreparation::PreparePerimeter(frame, tile, cache);
+    auto desktop = snapshot->Render(perimeter);
     Require(desktop.width == 1300 && desktop.height == 340 && perimeter.shadowMarginPixels == 10
         && perimeter.contentInsetPixels == 30, "Overlay adds a half-band (10px at 2x) drop-shadow margin per side");
     DropShadowContracts(desktop, perimeter.shadowMarginPixels, 2.f);
     auto image = BandImage(perimeter);
     Require(image.width == 1280 && image.height == 320, "620x140 DIP content plus 10 DIP band at 2x");
     std::size_t perimeterBytes = 0;
-    for (const auto& piece : perimeter.pieces) perimeterBytes += piece.image.ByteSize();
+    for (const auto& piece : perimeter.pieces) perimeterBytes += std::size_t(piece.width) * piece.height * 4u;
     Require(perimeterBytes < image.ByteSize() / 3, "Production allocates narrow perimeter surfaces only");
     Require(Alpha(Pixel(image, 640, 160)) == 0, "Content center transparent");
     Require(Alpha(Pixel(image, 0, 0)) == 0, "Rounded exterior corner transparent");
@@ -478,7 +511,7 @@ void RenderBehavior(const std::filesystem::path& root) {
     Require(Alpha(Pixel(image, 100, 20)) == 255, "Tuck below content edge opaque");
     Require(Alpha(Pixel(image, 100, 24)) == 0, "Tuck stops at clamped inner edge");
     Premultiplied(image);
-    Require(KnitRaster::RenderFrame(frame, tile, cache).pixels == desktop.pixels, "Fixture uses exact production output");
+    Require(CaptureFrame(frame, tile, cache).pixels == desktop.pixels, "Fixture uses exact production output");
     Require(cache.GenerationCount() == 1, "Repeated rendering/reposition needs no yarn generation");
     auto repeat = static_cast<std::uint32_t>(perimeter.tile->layout.width_dip * 2);
     bool periodic = true;
@@ -552,13 +585,13 @@ void RenderBehavior(const std::filesystem::path& root) {
     auto physical = frame;
     physical.deviceScale = 1.5f;
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
-    auto physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
+    auto physicalPerimeter = KnitPreparation::PreparePerimeter(physical, tile, cache);
     Require(physicalPerimeter.width == 1046 && physicalPerimeter.height == 287
         && physicalPerimeter.contentInsetPixels == 23 && physicalPerimeter.shadowMarginPixels == 8,
         "Native physical target extents do not undergo lossy DIP ceil roundtrips");
     physical.deviceScale = 1.25f;
     physical.contentWidthPixels = 775; physical.contentHeightPixels = 175;
-    physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
+    physicalPerimeter = KnitPreparation::PreparePerimeter(physical, tile, cache);
     Require(physicalPerimeter.width == 815 && physicalPerimeter.height == 215
         && physicalPerimeter.contentInsetPixels == 20 && physicalPerimeter.shadowMarginPixels == 7,
         "Integer outer placement matches physical padding, shadow margin and fractional gutter");
@@ -566,7 +599,7 @@ void RenderBehavior(const std::filesystem::path& root) {
     physical.bandDip = static_cast<float>(10.00000001);
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
     physical.physicalPaddingPixels = 11;
-    physicalPerimeter = KnitRaster::RenderPerimeter(physical, tile, cache);
+    physicalPerimeter = KnitPreparation::PreparePerimeter(physical, tile, cache);
     Require(physicalPerimeter.width == 1034 && physicalPerimeter.height == 275
         && physicalPerimeter.contentInsetPixels == 17 && physicalPerimeter.shadowMarginPixels == 6,
         "Authoritative double-precision geometry padding survives a float integer crossing");
@@ -581,7 +614,7 @@ void RenderBehavior(const std::filesystem::path& root) {
     Require(cache.GenerationCount() == beforeResize, "Window size is not part of the immutable yarn tile key");
     for (float size : {.25f, 1.f, 2.f, 3.f, 6.f, 10.f}) {
         auto tiny = frame; tiny.widthDip = size; tiny.heightDip = size; tiny.radiusDip = 500; tiny.tuckDip = 1000;
-        auto tinyImage = KnitRaster::RenderFrame(tiny, tile, cache);
+        auto tinyImage = CaptureFrame(tiny, tile, cache);
         Require(!tinyImage.pixels.empty(), "Tiny geometry safely renders");
         Require(std::any_of(tinyImage.pixels.begin(), tinyImage.pixels.end(),
             [](auto p) { return Alpha(p) > 128; }), "Tiny geometry retains a visible sweater, not only shadow");
@@ -613,27 +646,29 @@ void RenderBehavior(const std::filesystem::path& root) {
             Require(covered, "Fractional-size/DPI capsule and square corners have no mitre holes");
         }
     auto invalid = frame; invalid.widthDip = 0;
-    Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Zero content width rejected");
+    Invalid([&] { CaptureFrame(invalid, tile, cache); }, "Zero content width rejected");
     invalid = frame; invalid.radiusDip = std::numeric_limits<float>::quiet_NaN();
-    Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "NaN radius rejected");
+    Invalid([&] { CaptureFrame(invalid, tile, cache); }, "NaN radius rejected");
     invalid = frame; invalid.dim = 1.1f;
-    Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Invalid dim rejected");
+    Invalid([&] { CaptureFrame(invalid, tile, cache); }, "Invalid dim rejected");
     invalid = frame; invalid.widthDip = 100000;
-    Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Unbounded allocation rejected");
+    Invalid([&] { CaptureFrame(invalid, tile, cache); }, "Unbounded allocation rejected");
     invalid = frame; invalid.contentWidthPixels = 1000;
-    Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Partial physical-dimension override rejected");
+    Invalid([&] { CaptureFrame(invalid, tile, cache); }, "Partial physical-dimension override rejected");
     invalid = frame; invalid.physicalPaddingPixels = 100;
-    Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Unrelated authoritative padding rejected");
+    Invalid([&] { CaptureFrame(invalid, tile, cache); }, "Unrelated authoritative padding rejected");
+    invalid = frame; invalid.deviceScale = 0;
+    Invalid([&] { KnitPreparation::PreparePerimeter(invalid, tile, cache); }, "Zero frame scale rejected");
     invalid = frame; invalid.deviceScale = 1e-38f;
     invalid.contentWidthPixels = 1000; invalid.contentHeightPixels = 241;
-    Invalid([&] { KnitRaster::RenderPerimeter(invalid, tile, cache); },
+    Invalid([&] { KnitPreparation::PreparePerimeter(invalid, tile, cache); },
         "Finite positive near-zero scale cannot overflow derived physical-to-DIP geometry");
     invalid = frame; invalid.deviceScale = std::nextafter(MinimumDeviceScale, 0.f);
-    Invalid([&] { KnitRaster::RenderPerimeter(invalid, tile, cache); },
+    Invalid([&] { KnitPreparation::PreparePerimeter(invalid, tile, cache); },
         "Scale below explicit supported minimum rejected");
     auto minimum = frame; minimum.deviceScale = MinimumDeviceScale;
     minimum.contentWidthPixels = 100; minimum.contentHeightPixels = 31;
-    auto minimumPerimeter = KnitRaster::RenderPerimeter(minimum, tile, cache);
+    auto minimumPerimeter = KnitPreparation::PreparePerimeter(minimum, tile, cache);
     Require(minimumPerimeter.width == 106 && minimumPerimeter.height == 37
         && minimumPerimeter.contentInsetPixels == 3,
         "Supported minimum scale safely derives physical perimeter bounds");
@@ -658,7 +693,7 @@ void RenderBehavior(const std::filesystem::path& root) {
     SavePng(dark, (output / L"stockinette-dim-2x.png").c_str());
     SavePng(fractionalImage, (output / L"stockinette-1.25x.png").c_str());
     tile.material = Material::Raised;
-    auto raisedImage = KnitRaster::RenderFrame(frame, tile, cache);
+    auto raisedImage = CaptureFrame(frame, tile, cache);
     SavePng(raisedImage, (output / L"raised-stockinette-620x140-2x.png").c_str());
     SavePng(perimeter.tile->image, (output / L"plain-periodic-tile.png").c_str());
     tile.baseArgb = 0xff497641u;
@@ -689,74 +724,23 @@ TileSpec ThemeSpec(const char* id) {
     return spec;
 }
 
-std::string FrameDigest(const KnitPerimeter& p) {
-    std::string out;
-    for (const auto& piece : p.pieces) {
-        out.append(reinterpret_cast<const char*>(&piece.x), sizeof piece.x);
-        out.append(reinterpret_cast<const char*>(&piece.y), sizeof piece.y);
-        out.append(reinterpret_cast<const char*>(piece.image.pixels.data()), piece.image.ByteSize());
-    }
-    return out;
-}
-
-void ScratchContracts() {
+void CancellationContracts() {
     TileCache cache;
-    KnitRasterScratch scratch;
-    struct Case { const char* name; KnitFrameSpec frame; TileSpec tile; };
-    auto frame = [](float w, float h, float scale, float dim = 0.f, KnitAnchor anchor = KnitAnchor::Corner) {
-        KnitFrameSpec f; f.widthDip = w; f.heightDip = h; f.deviceScale = scale; f.dim = dim; f.anchor = anchor;
-        return f;
-    };
-    const std::vector<Case> cases{
-        {"base", frame(620, 140, 2), ThemeSpec("spotify")},
-        {"resized", frame(300, 90, 2), ThemeSpec("spotify")},
-        {"base again", frame(620, 140, 2), ThemeSpec("spotify")},
-        {"scale", frame(620, 140, 1.5f), ThemeSpec("spotify")},
-        {"theme", frame(620, 140, 2), ThemeSpec("messages")},
-        {"anchor", frame(620, 140, 2, 0.f, KnitAnchor::Centre), ThemeSpec("messages")},
-        {"dim", frame(620, 140, 2, .5f), ThemeSpec("messages")},
-        {"plain", frame(620, 140, 2), TileSpec{}},
-        {"base after plain", frame(620, 140, 2), ThemeSpec("spotify")},
-        {"chrome", frame(620, 140, 2), ThemeSpec("google-chrome")},
-        {"notes", frame(320, 120, 1), ThemeSpec("notes")},
-        {"base last", frame(620, 140, 2), ThemeSpec("spotify")},
-    };
-    for (const auto& c : cases) {
-        const auto fresh = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache));
-        const auto reused = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch}));
-        Require(fresh == reused, c.name);
-    }
-    Require(scratch.GetStats().factories == 2, "One D2D and one WIC factory for the scratch lifetime");
-    const auto& c = cases[0];
-    auto first = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch}));
-    auto warm = scratch.GetStats();
-    auto second = FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch}));
-    auto after = scratch.GetStats();
-    Require(first == second, "Repeated reused render is deterministic");
-    Require(after.targets == warm.targets && after.uploads == warm.uploads && after.factories == warm.factories
-        && after.reused == warm.reused + 4, "Repeated identical render creates no targets or uploads");
-    Require(scratch.ResidentBytes() > 0 && scratch.ResidentBytes() <= 16u * 1024u * 1024u, "Scratch bytes bounded");
-
-    KnitRasterScratch tiny(1);
-    Require(FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&tiny})) == first
-        && tiny.ResidentBytes() == 0, "Over-budget scratch renders identically and retains nothing");
-    KnitRasterScratch capped(512 * 1024);
-    for (const auto& k : cases)
-        KnitRaster::RenderPerimeter(k.frame, k.tile, cache, {&capped});
-    Require(capped.ResidentBytes() <= 512 * 1024, "Mid-sized budget evicts to its bound");
-
+    KnitFrameSpec frame;
+    const auto tile = ThemeSpec("spotify");
+    const auto expected = CaptureFrame(frame, tile, cache);
     std::uint32_t total = 0;
-    KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch, [&] { ++total; return false; }});
-    Require(total == 2 + 4 * 6, "Every stage polls for cancellation");
+    KnitPreparation::PreparePerimeter(frame, tile, cache, {[&] { ++total; return false; }});
+    Require(total > 0, "Preparation polls for cancellation");
     for (std::uint32_t stopAt = 1; stopAt <= total; ++stopAt) {
         std::uint32_t polls = 0;
         bool cancelled = false;
         try {
-            KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch, [&] { return ++polls == stopAt; }});
+            KnitPreparation::PreparePerimeter(frame, tile, cache, {[&] { return ++polls == stopAt; }});
         } catch (const KnitRenderCancelled&) { cancelled = true; }
         Require(cancelled && polls == stopAt, "Stop predicate aborts at the polled stage");
-        Require(FrameDigest(KnitRaster::RenderPerimeter(c.frame, c.tile, cache, {&scratch})) == first,
-                "Render after an abort matches fresh output");
+        Require(CaptureFrame(frame, tile, cache).pixels == expected.pixels,
+            "Preparation after cancellation preserves output");
     }
 }
 
@@ -887,10 +871,18 @@ void ChartContracts() {
     chartBudget.Get(recolored);
     Require(chartBudget.ResidentBytes() == 0, "Byte cache bounds include owned chart data, not only raster");
     for (float scale : {MinimumDeviceScale, 1.f, 1.25f, 1.5f, 2.f, MaximumDeviceScale}) {
-        auto scaled = spotify; scaled.deviceScale = scale;
-        auto scaledTile = cache.Get(scaled);
-        Require(scaledTile->layout.width_dip == 27 && scaledTile->image.width == 108,
-            "Device scale invalidation preserves source logical stitch gauge and raster sampling rule");
+        KnitFrameSpec frame;
+        frame.widthDip = 73; frame.heightDip = 61; frame.deviceScale = scale;
+        const auto reused = KnitPreparation::PreparePerimeter(frame, spotify, cache);
+        TileCache fresh;
+        const auto independent = KnitPreparation::PreparePerimeter(frame, spotify, fresh);
+        Require(reused.tile == tile && reused.deviceScale == scale
+            && reused.tile->layout.width_dip == 27 && reused.tile->image.width == 108,
+            "DPI frame requests share chart tiles and preserve source stitch gauge and raster sampling");
+        Require(reused.tile->image.pixels == independent.tile->image.pixels
+            && reused.tile->height.pixels == independent.tile->height.pixels
+            && snapshot->Render(reused).pixels == snapshot->Render(independent).pixels,
+            "DPI chart cache reuse matches independently generated tile and perimeter pixels");
     }
     Invalid([&] { Chart("", 0, 1, 1, {0}); }, "Empty chart identity rejected");
     Invalid([&] { Chart("bad", 0, 0, 1, {}); }, "Empty chart dimensions rejected");
@@ -997,9 +989,9 @@ void CatalogueFixtures(const std::filesystem::path& root) {
         auto spec = ThemeSpec(theme->id);
         for (float scale : {1.f, 2.f}) {
             KnitFrameSpec frame; frame.deviceScale = scale;
-            auto perimeter = KnitRaster::RenderPerimeter(frame, spec, cache);
+            auto perimeter = KnitPreparation::PreparePerimeter(frame, spec, cache);
             auto name = std::string(theme->id) + (scale == 1.f ? "-1x.png" : "-2x.png");
-            SavePng(KnitRaster::Compose(perimeter), (output / name).c_str());
+            SavePng(snapshot->Render(perimeter), (output / name).c_str());
             auto image = BandImage(perimeter);
             Require(image.width == static_cast<std::uint32_t>(640*scale)
                 && image.height == static_cast<std::uint32_t>(160*scale)
@@ -1041,8 +1033,8 @@ void CatalogueFixtures(const std::filesystem::path& root) {
         && Pixel(actual, 100, 8) != Pixel(patchOnly, 100, 8),
         "WhatsApp curved tangent caps use solid raised base yarn while straight edge retains stripes");
     auto square = frame; square.widthDip = 20; square.heightDip = 20; square.radiusDip = 10;
-    auto allCaps = KnitRaster::RenderFrame(square, whatsapp, cache);
-    Require(allCaps.pixels == KnitRaster::RenderFrame(square, patch, cache).pixels,
+    auto allCaps = CaptureFrame(square, whatsapp, cache);
+    Require(allCaps.pixels == CaptureFrame(square, patch, cache).pixels,
         "A short WhatsApp edge with no tangent interval is wholly solid, without partial motif");
     for (auto id : {"notes", "calendar"}) {
         auto spec = ThemeSpec(id);
@@ -1059,28 +1051,28 @@ void CatalogueFixtures(const std::filesystem::path& root) {
             "Curved outer cuff reaches the arc, not disconnected rectangular strips");
     }
     auto fitted = ThemeSpec("finder");
-    auto fittedImage = KnitRaster::RenderFrame(frame, fitted, cache);
+    auto fittedImage = CaptureFrame(frame, fitted, cache);
     auto noFit = fitted.chart->appearance; noFit.flags &= ~ChartFittedRepeat;
     auto free = fitted; free.chart = std::make_shared<const Chart>("finder-free", 0,
         fitted.chart->width, fitted.chart->height, fitted.chart->argbCells, noFit);
-    Require(fittedImage.pixels != KnitRaster::RenderFrame(frame, free, cache).pixels,
+    Require(fittedImage.pixels != CaptureFrame(frame, free, cache).pixels,
         "Fitted flag changes real along-edge motif placement");
     for (float scale : {1.f, 1.25f, 1.5f, 2.f}) {
         auto fitFrame = frame; fitFrame.deviceScale = scale;
         fitFrame.widthDip = 107.25f; fitFrame.heightDip = 31.75f; fitFrame.radiusDip = 1000;
-        auto image = KnitRaster::RenderFrame(fitFrame, whatsapp, cache);
+        auto image = CaptureFrame(fitFrame, whatsapp, cache);
         Require(std::any_of(image.pixels.begin(), image.pixels.end(), [](auto p) { return Alpha(p) == 255; }),
             "Fractional short-edge tangent fits retain covered opaque yarn");
     }
     auto physical = frame; physical.deviceScale = 1.5f;
     physical.contentWidthPixels = 1000; physical.contentHeightPixels = 241;
     physical.physicalPaddingPixels = 16;
-    auto authority = KnitRaster::RenderPerimeter(physical, ThemeSpec("notes"), cache);
+    auto authority = KnitPreparation::PreparePerimeter(physical, ThemeSpec("notes"), cache);
     Require(authority.width == 1048 && authority.height == 289 && authority.contentInsetPixels == 24,
         "Chart/cuff rendering preserves authoritative physical content and one-pixel padding override");
     for (auto stitch : {Stitch::Rib, Stitch::Garter}) {
         TileSpec spec; spec.stitch = stitch;
-        SavePng(KnitRaster::RenderFrame(frame, spec, cache),
+        SavePng(CaptureFrame(frame, spec, cache),
             (output / (stitch == Stitch::Rib ? L"rib-2x.png" : L"garter-2x.png")).c_str());
     }
     std::cout << "catalogue fixtures: " << ws_design_theme_count() << " themes x 1x/2x, cache bytes=" << cache.ResidentBytes() << "\n";
@@ -1144,7 +1136,7 @@ void SpecialFinishContracts() {
     for (float band : {2.f, 10.f, 14.f, 26.f})
         for (float scale : {1.f, 2.f}) {
             KnitFrameSpec f; f.bandDip=band; f.deviceScale=scale; f.widthDip=180; f.heightDip=110;
-            auto perimeter=KnitRaster::RenderPerimeter(f, ThemeSpec("messages"), cache);
+            auto perimeter=KnitPreparation::PreparePerimeter(f, ThemeSpec("messages"), cache);
             auto image=BandImage(perimeter);
             auto bandPixels=static_cast<std::uint32_t>(band*scale);
             Require(image.width==static_cast<std::uint32_t>((180+2*band)*scale)
@@ -1281,7 +1273,8 @@ void StitchLightConsistency() {
     TileCache cache;
     TileSpec tile; tile.material = Material::Raised; tile.baseArgb = 0xff7aa86au;
     KnitFrameSpec f; f.widthDip = 220; f.heightDip = 140; f.deviceScale = 4;
-    auto perimeter = KnitRaster::RenderPerimeter(f, tile, cache);
+    auto perimeter = KnitPreparation::PreparePerimeter(f, tile, cache);
+    const auto captured = snapshot->Render(perimeter);
     const auto& t = *perimeter.tile;
     float dev = f.deviceScale, band = f.bandDip, ow = f.widthDip + 2*band, oh = f.heightDip + 2*band;
     float gutter = static_cast<float>(perimeter.contentInsetPixels) / dev - band;
@@ -1307,9 +1300,9 @@ void StitchLightConsistency() {
     for (int side = 0; side < 4; ++side) {
         const auto& piece = perimeter.pieces[side];
         double n = 0, sl = 0, sg = 0, sll = 0, sgg = 0, slg = 0;
-        for (std::uint32_t y = 0; y < piece.image.height; ++y)
-            for (std::uint32_t x = 0; x < piece.image.width; ++x) {
-                auto p = Pixel(piece.image, x, y);
+        for (std::uint32_t y = 0; y < piece.height; ++y)
+            for (std::uint32_t x = 0; x < piece.width; ++x) {
+                auto p = Pixel(captured, piece.x + x, piece.y + y);
                 float fx = (x + .5f + piece.x) / dev - gutter, fy = (y + .5f + piece.y) / dev - gutter;
                 auto q = tileFrame(side, fx, fy);
                 float length = side % 2 ? oh : ow;
@@ -1331,30 +1324,7 @@ void StitchLightConsistency() {
         "Opposite sides agree on stitch light strength");
 }
 
-void RendererMetrics() {
-    TileCache cache;
-    KnitFrameSpec f; f.widthDip=620; f.heightDip=140; f.deviceScale=2;
-    for (auto id : {"spotify","messages","notes"}) {
-        auto spec=ThemeSpec(id);
-        auto start=std::chrono::steady_clock::now();
-        auto perimeter=KnitRaster::RenderPerimeter(f,spec,cache);
-        double cold=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
-        start=std::chrono::steady_clock::now();
-        constexpr int iterations=10;
-        for(int i=0;i<iterations;++i) KnitRaster::RenderPerimeter(f,spec,cache);
-        double warm=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/iterations;
-        KnitRasterScratch scratch;
-        KnitRaster::RenderPerimeter(f,spec,cache,{&scratch});
-        start=std::chrono::steady_clock::now();
-        for(int i=0;i<iterations;++i) KnitRaster::RenderPerimeter(f,spec,cache,{&scratch});
-        double reused=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/iterations;
-        std::size_t bytes=0;for(const auto& piece:perimeter.pieces)bytes+=piece.image.ByteSize();
-        std::cout<<"measured "<<id<<" 620x140@2x: cold="<<cold<<"ms, warm="<<warm
-            <<"ms, scratchWarm="<<reused<<"ms, scratchBytes="<<scratch.ResidentBytes()<<", narrowBytes="<<bytes<<", tileOwnedBytes="<<perimeter.tile->ByteSize()
-            <<", cacheResident="<<cache.ResidentBytes()<<", generations="<<cache.GenerationCount()
-            <<", hits="<<cache.HitCount()<<"\n";
-    }
-}
+
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -1369,29 +1339,31 @@ int wmain(int argc, wchar_t** argv) {
     if (FAILED(initialized)) { std::cerr << "COM initialization failed\n"; return 1; }
     int exitCode = 0;
     try {
+        snapshot = std::make_unique<GpuSnapshot>(D3D_DRIVER_TYPE_WARP);
         std::filesystem::path root = argc > 1 ? argv[1] : L"tests\\Knitting";
         if (argc > 2 && std::wstring(argv[2]) == L"--stitch-light") {
             StitchLightConsistency();
             std::cout << "PASS " << checks << " stitch light checks\n";
+            snapshot.reset();
             CoUninitialize();
             return 0;
         }
-        if (argc > 2 && std::wstring(argv[2]) == L"--metrics") { RendererMetrics(); CoUninitialize(); return 0; }
         PortableMath();
         CacheAndInvalidInputs();
-        ScratchContracts();
+        DpiTileReuse();
+        CancellationContracts();
         RenderBehavior(root);
         ChartContracts();
         CatalogueFixtures(root);
         SpecialFinishContracts();
         StitchLightConsistency();
         SourceCatalogueParity(root);
-        RendererMetrics();
         std::cout << "PASS " << checks << " native knitting checks\n";
     } catch (const std::exception& error) {
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << "\n";
         exitCode = 1;
     }
+    snapshot.reset();
     CoUninitialize();
     return exitCode;
 }

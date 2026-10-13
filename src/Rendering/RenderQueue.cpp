@@ -3,6 +3,7 @@
 #include "..\Geometry\Geometry.h"
 #include "..\Knitting\WicSurface.h"
 #include <objbase.h>
+#include <d3d11.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -37,7 +38,7 @@ bool ValidLimits(const RenderQueueLimits& l) noexcept {
         && l.maxReadyBytes <= 256 * MiB
         && l.maxPerimeterBytes && l.maxPerimeterBytes <= 64 * MiB
         && l.maxTransientBytes && l.maxTransientBytes <= 512 * MiB
-        && l.cacheBytes <= 8 * MiB && l.scratchBytes <= 256 * MiB;
+        && l.cacheBytes <= 8 * MiB;
 }
 
 bool ValidToken(const tracking::WorkToken& token) noexcept {
@@ -132,7 +133,8 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
         const auto margin = geometry::ShadowMarginPixels(inset);
         const double w = cw + 2. * (inset + margin), h = ch + 2. * (inset + margin);
-        if (!std::isfinite(w) || !std::isfinite(h) || w > 32768. || h > 32768.)
+        const auto dimensionLimit = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+        if (!std::isfinite(w) || !std::isfinite(h) || w > dimensionLimit || h > dimensionLimit)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
         const float ow = f.widthDip + 2.f * f.bandDip;
         const float oh = f.heightDip + 2.f * f.bandDip;
@@ -140,12 +142,11 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             + std::max(0.f, f.radiusDip - f.tuckDip) * (1.f - .7071067811865475244f) + 1.f;
         depth = std::min(depth, std::min(ow, oh) * .5f);
         const double narrow = std::ceil(depth * f.deviceScale) + 2. + margin;
-        const double output = 2. * narrow * (w + h) * 4.;
-        if (!std::isfinite(output) || output > static_cast<double>(limits.maxPerimeterBytes))
+        const double strips = 2. * narrow * (w + h) * 4.;
+        if (!std::isfinite(strips) || strips * 2. > static_cast<double>(limits.maxPerimeterBytes))
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
         auto tileSpec = r.tile;
         tileSpec.bandDip = f.bandDip;
-        tileSpec.deviceScale = f.deviceScale;
         const auto tile = BoundTile(tileSpec);
         auto retainedTiles = tile.retained, largestPixels = tile.pixels, largestCells = tile.cells;
         if (tileSpec.chart) {
@@ -162,10 +163,8 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
                 largestCells = std::max(largestCells, aux.cells);
             }
         }
-        const auto outputBytes = static_cast<std::size_t>(output);
-        b.readyBytes = errorBytes + sizeof(KnitPerimeter) + outputBytes + tile.retained;
-        b.transientBytes = b.requestBytes + sizeof(KnitPerimeter) + outputBytes
-            + static_cast<std::size_t>(3. * narrow * std::max(w, h) * 4.)
+        b.readyBytes = errorBytes + sizeof(KnitPerimeter) + retainedTiles;
+        b.transientBytes = b.requestBytes + sizeof(KnitPerimeter)
             + 2 * retainedTiles + 8 * largestPixels + largestCells;
         if (b.readyBytes > limits.maxReadyBytes || b.transientBytes > limits.maxTransientBytes)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
@@ -184,8 +183,9 @@ std::size_t ReadyBytes(const RenderReady& ready) noexcept {
     auto bytes = sizeof(RenderReady) + sizeof(RenderRequest)
         + (ready.request->tile.chart ? ready.request->tile.chart->ByteSize() : 0);
     if (const auto* perimeter = std::get_if<std::shared_ptr<const KnitPerimeter>>(&ready.outcome)) {
-        bytes += sizeof(KnitPerimeter) + (*perimeter)->tile->ByteSize();
-        for (const auto& piece : (*perimeter)->pieces) bytes += piece.image.ByteSize();
+        bytes += sizeof(KnitPerimeter);
+        for (const auto* tile : (*perimeter)->RetainedTiles())
+            if (tile) bytes += tile->ByteSize();
     }
     return bytes;
 }
@@ -293,7 +293,6 @@ struct RenderQueue::Impl {
         if (FAILED(com)) return;
         {
             knitting::TileCache cache(limits.cacheBytes);
-            KnitRasterScratch scratch(limits.scratchBytes);
             try {
 #ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
                 if (hooks.beforeFirstDequeue) hooks.beforeFirstDequeue(stop);
@@ -336,7 +335,7 @@ struct RenderQueue::Impl {
 #ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
                             std::uint32_t polls = 0;
 #endif
-                            const KnitRenderControl control{&scratch, [&] {
+                            const KnitRenderControl control{[&] {
 #ifdef WINDOW_SWEATERS_RENDER_QUEUE_TESTING
                                 if (hooks.duringRender) hooks.duringRender(*job.request, ++polls, stop);
 #endif
@@ -345,7 +344,7 @@ struct RenderQueue::Impl {
                                 return !Current(job);
                             }};
                             auto perimeter = std::make_shared<const KnitPerimeter>(
-                                KnitRaster::RenderPerimeter(job.request->frame, job.request->tile, cache, control));
+                                KnitPreparation::PreparePerimeter(job.request->frame, job.request->tile, cache, control));
                             result.outcome = std::move(perimeter);
                         } catch (const KnitRenderCancelled&) {
                             aborted = true;
@@ -369,11 +368,6 @@ struct RenderQueue::Impl {
                         status.tileGenerations = cache.GenerationCount();
                         status.cacheHits = cache.HitCount();
                         status.residentCacheBytes = cache.ResidentBytes();
-                        status.scratchBytes = scratch.ResidentBytes();
-                        const auto counts = scratch.GetStats();
-                        status.scratchFactories = counts.factories;
-                        status.scratchTargets = counts.targets;
-                        status.scratchUploads = counts.uploads;
                         if (aborted || !Current(job)) { ++status.staleCancelled; continue; }
                         auto bytes = ReadyBytes(result);
                         if (bytes > job.budget.readyBytes || bytes > limits.maxReadyBytes - status.readyBytes) {
@@ -401,7 +395,7 @@ struct RenderQueue::Impl {
         }
         {
             std::lock_guard lock(mutex);
-            status.active = status.transientBytes = status.residentCacheBytes = status.scratchBytes = 0;
+            status.active = status.transientBytes = status.residentCacheBytes = 0;
         }
         CoUninitialize();
     }

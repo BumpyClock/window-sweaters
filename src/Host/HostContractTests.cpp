@@ -6,6 +6,15 @@
 #include <stdexcept>
 #include <cmath>
 #include <algorithm>
+#include <string>
+#include <functional>
+#include <wrl/implements.h>
+
+namespace window_sweaters::rendering {
+struct OverlayPublicationTest {
+    static void SetDevice(Overlay& overlay, IDCompositionDevice* device) { overlay.composition_ = device; }
+};
+}
 
 namespace window_sweaters::host {
 void RunHostConsumerContracts();
@@ -212,39 +221,232 @@ void RenderPublicationTokens() {
         "Config/device/terminal invalidation retires every host gate without waiting for completion");
 }
 
+knitting::RasterImage ComposeCaptured(const rendering::KnitPerimeter& perimeter,
+    const std::array<knitting::RasterImage, 4>& captures) {
+    knitting::RasterImage image{perimeter.width, perimeter.height, perimeter.width * 4u, {}};
+    image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
+    for (std::size_t side = 0; side < captures.size(); ++side) {
+        const auto& piece = perimeter.pieces[side];
+        const auto& source = captures[side];
+        Check(perimeter.PieceValid(piece) && source.width == piece.width && source.height == piece.height
+            && source.stride == source.width * 4u
+            && source.pixels.size() == static_cast<std::size_t>(source.width) * source.height,
+            "Captured GPU pixels match prepared side geometry");
+        for (std::uint32_t y = 0; y < source.height; ++y)
+            for (std::uint32_t x = 0; x < source.width; ++x) {
+                const auto pixel = source.pixels[static_cast<std::size_t>(y) * source.width + x];
+                auto& destination = image.pixels[static_cast<std::size_t>(y + piece.y) * image.width + x + piece.x];
+                const auto inverse = 255u - (pixel >> 24);
+                std::uint32_t blended{};
+                for (int shift = 0; shift < 32; shift += 8) {
+                    const auto channel = ((pixel >> shift) & 255u) + (((destination >> shift) & 255u) * inverse + 127u) / 255u;
+                    blended |= std::min(255u, channel) << shift;
+                }
+                destination = blended;
+            }
+    }
+    return image;
+}
+
 void ResourceReservationBounds() {
     using namespace rendering;
     auto tile=std::make_shared<knitting::Tile>();
     auto perimeter=std::make_shared<KnitPerimeter>(); perimeter->tile=tile;
     perimeter->width=8; perimeter->height=8;
-    for (auto& piece:perimeter->pieces) piece.image={2,2,8,{0xff123456,0xff123456,0xff123456,0xff123456}};
-    ResourceLedger ledger(1024*1024,176);
+    for (auto& piece:perimeter->pieces) {
+        piece.width=piece.height=2;
+    }
+    ResourceLedger ledger(1024*1024,416);
     ResourceLedger::Lease first,alias,replacement;
-    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==80 &&
-        ledger.Status().uploadTransientBytes==16 && ledger.Status().surfaces==4,
-        "Four 2x2 BGRA surfaces reserve literal 64 bytes plus one 16-byte upload bitmap");
+    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==320 &&
+        ledger.Status().uploadTransientBytes==256 && ledger.Status().surfaces==4,
+        "Four 2x2 surfaces reserve 64 retained bytes plus 256 colour/height and coordinate bytes");
     first.EndUpload();
     const auto cpu=ledger.Status().retainedCpuBytes;
     Check(SUCCEEDED(ledger.Reserve(perimeter,alias)) && ledger.Status().retainedCpuBytes==cpu &&
-        ledger.Status().estimatedGpuBytes==144,"Aliased CPU perimeter and tile count once while each overlay has four surfaces");
+        ledger.Status().estimatedGpuBytes==384,"Aliased recipe and tile count once while each overlay has four surfaces");
     alias.EndUpload();
     Check(ledger.Reserve(perimeter,replacement)==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
         ledger.Status().estimatedGpuBytes==128 && ledger.Status().retainedCpuBytes==cpu,
         "Reserve-before-upload rejects old-plus-new replacement peak even when final surfaces would fit");
     alias.Reset();
     Check(SUCCEEDED(ledger.Reserve(perimeter,replacement)) && ledger.Status().retainedCpuBytes==cpu,
-        "Released overlay capacity permits replacement without recounting shared CPU");
+        "Released overlay capacity permits replacement without recounting shared tile backing");
     replacement.EndUpload(); first.Reset();
     Check(ledger.Status().retainedCpuBytes==cpu && ledger.Status().estimatedGpuBytes==64,
-        "One retained alias keeps CPU backing after old overlay is retired");
+        "One retained alias keeps tile backing after old overlay is retired");
     replacement.Reset();
     Check(!ledger.Status().retainedCpuBytes && !ledger.Status().estimatedGpuBytes &&
-        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=176,
-        "Last alias retires all CPU and known surface backing accurately");
-    perimeter->pieces[0].image.width=UINT32_MAX;
+        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=416,
+        "Last alias retires all retained tile and surface backing accurately");
+    perimeter->pieces[0].width=UINT32_MAX;
     Check(ledger.Reserve(perimeter,first)==E_INVALIDARG && !ledger.Status().reservations,
-        "Overflowed BGRA stride/dimensions cannot enter aggregate ledger");
+        "Overflowed GPU side dimensions cannot enter aggregate ledger");
 }
+void AuxiliaryTileReservationBounds() {
+    using namespace rendering;
+    auto tile = std::make_shared<knitting::Tile>();
+    auto patch = std::make_shared<knitting::Tile>();
+    auto cuff = std::make_shared<knitting::Tile>();
+    tile->image.pixels.resize(4); patch->image.pixels.resize(8); cuff->height.pixels.resize(12);
+    auto perimeter = std::make_shared<KnitPerimeter>();
+    perimeter->width = perimeter->height = 8;
+    perimeter->tile = tile;
+    perimeter->assembly.patch = patch; perimeter->assembly.cuff = cuff;
+    for (auto& piece : perimeter->pieces) piece.width = piece.height = 2;
+    const auto mainBytes = sizeof(knitting::Tile) + tile->image.pixels.capacity() * 4;
+    const auto auxiliaryBytes = 2 * sizeof(knitting::Tile) +
+        (patch->image.pixels.capacity() + cuff->height.pixels.capacity()) * 4;
+    const auto total = sizeof(KnitPerimeter) + mainBytes + auxiliaryBytes;
+    ResourceLedger ledger;
+    ResourceLedger::Lease first, alias, shared;
+    Check(SUCCEEDED(ledger.Reserve(perimeter, first)) && ledger.Status().retainedCpuBytes == total,
+        "GPU reservation includes distinct main, patch and cuff backing exactly once");
+    auto other = std::make_shared<KnitPerimeter>(*perimeter);
+    Check(SUCCEEDED(ledger.Reserve(other, shared)) &&
+        ledger.Status().retainedCpuBytes == total + sizeof(KnitPerimeter),
+        "Distinct GPU perimeters share main, patch and cuff allocations");
+    Check(SUCCEEDED(ledger.Reserve(perimeter, alias)) &&
+        ledger.Status().retainedCpuBytes == total + sizeof(KnitPerimeter),
+        "Aliased GPU perimeter adds no retained tile backing");
+    first.Reset(); shared.Reset();
+    Check(ledger.Status().retainedCpuBytes == total, "Remaining GPU alias retains every tile");
+    alias.Reset();
+    Check(ledger.Status().retainedCpuBytes == 0, "Final GPU release balances auxiliary tiles");
+    ResourceLedger limited(sizeof(KnitPerimeter) + mainBytes + auxiliaryBytes / 2);
+    Check(limited.Reserve(perimeter, first) == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
+        limited.Status().retainedCpuBytes == 0 && limited.Status().reservations == 0,
+        "Tile quota between main-only and complete GPU backing rejects reservation");
+    other->assembly.patch = tile; other->assembly.cuff = tile;
+    Check(SUCCEEDED(ledger.Reserve(other, first)) &&
+        ledger.Status().retainedCpuBytes == sizeof(KnitPerimeter) + mainBytes,
+        "Repeated tile pointers within GPU assembly count once");
+    first.Reset();
+    Check(ledger.Status().retainedCpuBytes == 0, "Repeated assembly pointers release once");
+}
+class PublicationDevice final : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IDCompositionDevice> {
+public:
+    Microsoft::WRL::ComPtr<IDCompositionDevice> native;
+    std::function<void()> duringCommit, duringWait;
+    HRESULT commitFailure = S_OK, waitFailure = S_OK;
+    HRESULT STDMETHODCALLTYPE Commit() override {
+        if (duringCommit) duringCommit();
+        return FAILED(commitFailure) ? commitFailure : native->Commit();
+    }
+    HRESULT STDMETHODCALLTYPE WaitForCommitCompletion() override {
+        if (duringWait) duringWait();
+        return FAILED(waitFailure) ? waitFailure : native->WaitForCommitCompletion();
+    }
+    HRESULT STDMETHODCALLTYPE GetFrameStatistics(DCOMPOSITION_FRAME_STATISTICS*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateTargetForHwnd(HWND, BOOL, IDCompositionTarget**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateVisual(IDCompositionVisual**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateSurface(UINT, UINT, DXGI_FORMAT, DXGI_ALPHA_MODE, IDCompositionSurface**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateVirtualSurface(UINT, UINT, DXGI_FORMAT, DXGI_ALPHA_MODE, IDCompositionVirtualSurface**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateSurfaceFromHandle(HANDLE, IUnknown**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateSurfaceFromHwnd(HWND, IUnknown**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateTranslateTransform(IDCompositionTranslateTransform**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateScaleTransform(IDCompositionScaleTransform**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateRotateTransform(IDCompositionRotateTransform**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateSkewTransform(IDCompositionSkewTransform**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateMatrixTransform(IDCompositionMatrixTransform**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateTransformGroup(IDCompositionTransform**, UINT, IDCompositionTransform**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateTranslateTransform3D(IDCompositionTranslateTransform3D**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateScaleTransform3D(IDCompositionScaleTransform3D**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateRotateTransform3D(IDCompositionRotateTransform3D**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateMatrixTransform3D(IDCompositionMatrixTransform3D**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateTransform3DGroup(IDCompositionTransform3D**, UINT, IDCompositionTransform3D**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateEffectGroup(IDCompositionEffectGroup**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateRectangleClip(IDCompositionRectangleClip**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateAnimation(IDCompositionAnimation**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CheckDeviceState(BOOL*) override { return E_NOTIMPL; }
+};
+
+void BatchPublication(HINSTANCE instance, HWND receiver, rendering::GraphicsDevice& graphics,
+    const std::shared_ptr<const rendering::KnitPerimeter>& perimeter, const RECT& bounds,
+    const RECT& clip, const RECT& content) {
+    using rendering::Overlay;
+    Overlay first, second;
+    Check(SUCCEEDED(first.Create(instance, receiver, graphics)) && SUCCEEDED(second.Create(instance, receiver, graphics)),
+        "Create two real publication batch overlays");
+    Check(SUCCEEDED(first.Upload(perimeter, bounds, clip, content)) && SUCCEEDED(second.Upload(perimeter, bounds, clip, content)),
+        "Establish two real retained predecessors");
+    const auto old = graphics.Resources().Status();
+    const auto counts = graphics.PublicationStatus();
+    const auto stage = [&] {
+        Check(SUCCEEDED(first.PrepareUpload(perimeter, bounds, clip, content)) &&
+            SUCCEEDED(second.PrepareUpload(perimeter, bounds, clip, content)), "Stage two unattached replacement roots");
+    };
+    stage();
+    const auto pending = graphics.Resources().Status();
+    Check(pending.reservations == old.reservations + 2 && pending.surfaces == old.surfaces + 8 &&
+        pending.uploadTransientBytes > old.uploadTransientBytes &&
+        graphics.PublicationStatus().commits == counts.commits && first.CommitCount() == 1 && second.CommitCount() == 1,
+        "Staging retains both predecessors and replacement leases without native publication");
+    std::array<Overlay*, 2> group{&first, &second};
+    std::array<Overlay*, 2> duplicate{&first, &first};
+    std::array<Overlay*, 9> oversized{};
+    oversized.fill(&first);
+    Check(Overlay::PublishUploads({}) == S_FALSE && Overlay::PublishUploads(oversized) == E_INVALIDARG,
+        "Empty batch issues no native work and publication is bounded to eight overlays");
+    Check(Overlay::PublishUploads(duplicate) == E_INVALIDARG && graphics.PublicationStatus().commits == counts.commits,
+        "Duplicate-overlay batch rejected before Commit");
+    {
+        rendering::GraphicsDevice otherGraphics;
+        Overlay other;
+        Check(SUCCEEDED(otherGraphics.Initialize()) && SUCCEEDED(other.Create(instance, receiver, otherGraphics)) &&
+            SUCCEEDED(other.PrepareUpload(perimeter, bounds, clip, content)), "Stage unrelated-device native root");
+        std::array<Overlay*, 2> mixed{&first, &other};
+        Check(Overlay::PublishUploads(mixed) == E_INVALIDARG && graphics.PublicationStatus().commits == counts.commits &&
+            otherGraphics.PublicationStatus().commits == 0 && graphics.Resources().Status().reservations == pending.reservations,
+            "Mixed-device group rejected before attaching or releasing either staged publication");
+    }
+    first.DiscardUpload(); second.DiscardUpload();
+    Check(graphics.Resources().Status().reservations == old.reservations &&
+        graphics.Resources().Status().surfaces == old.surfaces && SUCCEEDED(first.UpdatePlacement(bounds, clip)) &&
+        SUCCEEDED(second.UpdatePlacement(bounds, clip)) && first.CommitCount() == 1 && second.CommitCount() == 1,
+        "Canceling unattached batch preserves both previous publications and leases");
+    first.Hide(); second.Hide();
+    stage();
+    auto observed = Microsoft::WRL::Make<PublicationDevice>();
+    observed->native = graphics.Composition();
+    const auto retainUntilCompletion = [&] {
+        const auto status = graphics.Resources().Status();
+        Check(status.reservations == old.reservations + 2 && status.surfaces == old.surfaces + 8 &&
+            status.uploadTransientBytes > old.uploadTransientBytes,
+            "Predecessor and in-flight leases remain live at Commit and WaitForCommitCompletion");
+    };
+    observed->duringCommit = retainUntilCompletion;
+    observed->duringWait = retainUntilCompletion;
+    rendering::OverlayPublicationTest::SetDevice(first, observed.Get());
+    rendering::OverlayPublicationTest::SetDevice(second, observed.Get());
+    Check(SUCCEEDED(Overlay::PublishUploads(group)) && graphics.PublicationStatus().commits == counts.commits + 1 &&
+        graphics.PublicationStatus().waits == counts.waits + 1 && first.CommitCount() == 2 && second.CommitCount() == 2,
+        "Two native replacement publications share exactly one Commit and completion wait");
+    Check(graphics.Resources().Status().reservations == old.reservations &&
+        graphics.Resources().Status().surfaces == old.surfaces &&
+        graphics.Resources().Status().uploadTransientBytes == old.uploadTransientBytes,
+        "Completed batch retires both predecessor and transient leases");
+    rendering::OverlayPublicationTest::SetDevice(first, graphics.Composition());
+    rendering::OverlayPublicationTest::SetDevice(second, graphics.Composition());
+    for (const bool failWait : {false, true}) {
+        stage();
+        observed->commitFailure = failWait ? S_OK : DXGI_ERROR_DEVICE_RESET;
+        observed->waitFailure = failWait ? DXGI_ERROR_DEVICE_RESET : S_OK;
+        const auto firstWindow = first.Window(), secondWindow = second.Window();
+        rendering::OverlayPublicationTest::SetDevice(first, observed.Get());
+        rendering::OverlayPublicationTest::SetDevice(second, observed.Get());
+        Check(Overlay::PublishUploads(group) == DXGI_ERROR_DEVICE_RESET && !first.Window() && !second.Window() &&
+            !IsWindow(firstWindow) && !IsWindow(secondWindow) && !first.PreparedUploadId() && !second.PreparedUploadId() &&
+            graphics.Resources().Status().reservations + 2 == old.reservations &&
+            graphics.Resources().Status().surfaces + 8 == old.surfaces,
+            "Commit and completion failures retire every batch target and all old/new leases");
+        observed->commitFailure = observed->waitFailure = S_OK;
+        Check(SUCCEEDED(first.Create(instance, receiver, graphics)) && SUCCEEDED(second.Create(instance, receiver, graphics)) &&
+            SUCCEEDED(first.Upload(perimeter, bounds, clip, content)) && SUCCEEDED(second.Upload(perimeter, bounds, clip, content)),
+            "Failed batch members recreate and synchronously publish current content");
+    }
+}
+
 void NativePerimeterPublication() {
     struct Apartment {
         HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -301,11 +503,13 @@ void NativePerimeterPublication() {
     Check(SUCCEEDED(overlay.Upload(pixels, bounds, {clip.left, clip.top, clip.right, clip.bottom},
         {content.left, content.top, content.right, content.bottom},
         static_cast<float>(current.radiusDip * current.deviceScale),
-        static_cast<float>(current.deviceScale))), "Upload four real BGRA pieces with authoritative radius and source tuck");
+        static_cast<float>(current.deviceScale))), "Upload four prepared GPU sides with authoritative radius and source tuck");
     Check(EqualRect(&overlay.Bounds(), &bounds) && !IsWindowVisible(overlay.Window()),
         "Prepared upload remains hidden at today's physical position");
     Check(overlay.CommitCount() == 1, "Upload publishes with a single DComp commit");
     Check(SUCCEEDED(graphics.Composition()->WaitForCommitCompletion()), "Actual DComp upload commits");
+    BatchPublication(registration.hInstance, receiver.window, graphics, pixels, bounds,
+        {clip.left, clip.top, clip.right, clip.bottom}, {content.left, content.top, content.right, content.bottom});
     const auto before = queue->Status();
     const RECT next{50, 60, 511, 421};
     Check(SUCCEEDED(overlay.UpdatePlacement(next, {0, 0, 461, 361})), "Move already-prepared GPU perimeter without render submission");
@@ -324,13 +528,14 @@ void NativePerimeterPublication() {
     for (const auto scale : {1.f, 1.25f, 1.5f, 2.f}) {
         for (const auto radiusDip : {0.f, 4.f, 8.f}) {
             rendering::KnitFrameSpec frame;
+            frame.tuckDip = 6;
             frame.widthDip = 240; frame.heightDip = 140;
             frame.contentWidthPixels = static_cast<std::uint32_t>(240 * scale);
             frame.contentHeightPixels = static_cast<std::uint32_t>(140 * scale);
             frame.bandDip = 16; frame.radiusDip = radiusDip; frame.deviceScale = scale;
             knitting::TileCache cache;
             auto perimeter = std::make_shared<const rendering::KnitPerimeter>(
-                rendering::KnitRaster::RenderPerimeter(frame, {}, cache));
+                rendering::KnitPreparation::PreparePerimeter(frame, {}, cache));
             const auto inset = static_cast<LONG>(perimeter->contentInsetPixels);
             const RECT contentRect{inset, inset, inset + static_cast<LONG>(frame.contentWidthPixels),
                 inset + static_cast<LONG>(frame.contentHeightPixels)};
@@ -339,17 +544,15 @@ void NativePerimeterPublication() {
             std::array<knitting::RasterImage, 4> gpuPixels;
             Check(SUCCEEDED(overlay.Upload(perimeter, outer, fullClip, contentRect, radiusDip * scale, scale, &gpuPixels)),
                 "Upload real rounded/square/round-small source pieces and read masked DComp GPU pixels");
-            auto captured = *perimeter;
-            for (std::size_t side = 0; side < gpuPixels.size(); ++side) captured.pieces[side].image = std::move(gpuPixels[side]);
-            const auto image = rendering::KnitRaster::Compose(captured);
+            const auto image = ComposeCaptured(*perimeter, gpuPixels);
             bool antialiased{};
             for (const auto pixel : image.pixels) {
                 const auto a = pixel >> 24;
                 Check((pixel & 255) <= a && ((pixel >> 8) & 255) <= a && ((pixel >> 16) & 255) <= a,
-                    "Actual GPU rounded-edge channels remain valid premultiplied BGRA");
+                    "Actual DComp rounded-edge channels remain valid premultiplied BGRA");
                 antialiased = antialiased || (a > 0 && a < 255);
             }
-            Check(antialiased, "Actual GPU rounded ring retains antialiased edge coverage");
+            Check(antialiased, "Actual DComp rounded ring retains antialiased edge coverage");
             auto alpha = [&](int x, int y) {
                 Check(x >= 0 && y >= 0 && x < static_cast<int>(image.width) && y < static_cast<int>(image.height),
                     "Rounded corner pixel sample lies within perimeter");
@@ -357,7 +560,7 @@ void NativePerimeterPublication() {
             };
             const float r = radiusDip * scale;
             Check(alpha(static_cast<int>(image.width / 2), inset) > 0,
-                "Actual GPU retains original inward one-DIP tuck underneath verified target placement");
+                "Actual DComp retains original inward one-DIP tuck underneath verified target placement");
             for (int y = contentRect.top + 2; y < contentRect.bottom - 2; ++y) {
                 for (int x = contentRect.left + 2; x < contentRect.right - 2; ++x) {
                     const float px = static_cast<float>(x) + .5f, py = static_cast<float>(y) + .5f;
@@ -373,17 +576,17 @@ void NativePerimeterPublication() {
                     if (central) {
                         if (alpha(x, y) != 0) std::fprintf(stderr, "GPU interior radius=%g scale=%g x=%d y=%d alpha=%u\n",
                             radiusDip, scale, x - inset, y - inset, alpha(x, y));
-                        Check(alpha(x, y) == 0, "Actual GPU content-interior alpha is zero");
+                        Check(alpha(x, y) == 0, "Actual DComp content-interior alpha is zero");
                     }
                 }
             }
             if (r > 0) {
-                Check(alpha(inset, inset) > 0, "Actual GPU preserves yarn in rounded target bounding-box corner instead of rectangular erasure");
+                Check(alpha(inset, inset) > 0, "Actual DComp preserves yarn in rounded target bounding-box corner instead of rectangular erasure");
                 for (int sample = 1; sample < 12; ++sample) {
                     const float angle = static_cast<float>(sample) * 1.57079632679f / 12.f;
                     const int x = static_cast<int>(std::floor(inset + r - (r + 1.5f) * std::cos(angle)));
                     const int y = static_cast<int>(std::floor(inset + r - (r + 1.5f) * std::sin(angle)));
-                    Check(alpha(x, y) > 0, "Actual GPU yarn arc stays continuous outside the rounded content cutout");
+                    Check(alpha(x, y) > 0, "Actual DComp yarn arc stays continuous outside the rounded content cutout");
                 }
             } else {
                 Check(alpha(inset + static_cast<int>(std::ceil(scale)) + 1,
@@ -392,6 +595,7 @@ void NativePerimeterPublication() {
             }
         }
     }
+    std::puts("PASS: GPU DComp readback validates rounded/square/round-small masks at 1x/1.25x/1.5x/2x, transparent client interior and continuous corner yarn");
     {
         rendering::KnitFrameSpec tiny;
         tiny.widthDip = 12; tiny.heightDip = 8; tiny.bandDip = 16;
@@ -399,7 +603,7 @@ void NativePerimeterPublication() {
         tiny.contentWidthPixels = 15; tiny.contentHeightPixels = 10;
         knitting::TileCache tinyCache;
         const auto tinyPerimeter = std::make_shared<const rendering::KnitPerimeter>(
-            rendering::KnitRaster::RenderPerimeter(tiny, {}, tinyCache));
+            rendering::KnitPreparation::PreparePerimeter(tiny, {}, tinyCache));
         const auto tinyInset = static_cast<LONG>(tinyPerimeter->contentInsetPixels);
         const RECT tinyContent{tinyInset, tinyInset, tinyInset + 15, tinyInset + 10};
         const RECT tinyBounds{0, 0, static_cast<LONG>(tinyPerimeter->width), static_cast<LONG>(tinyPerimeter->height)};
@@ -411,7 +615,6 @@ void NativePerimeterPublication() {
             Check(oversized[side].pixels == capped[side].pixels,
                 "Actual GPU radius clamps to half content extent while retaining source tuck");
     }
-    std::puts("PASS: actual DComp GPU readback validates rounded/square/round-small masks at 1x/1.25x/1.5x/2x, transparent client interior and continuous corner yarn");
     Check(SUCCEEDED(queue->Stop()), "Stop actual worker before destroying receiver/device");
 }
 }
@@ -422,6 +625,7 @@ int RunHostContractTests() {
     StaleBatchPayloadUsesCurrentSnapshot();
     RenderPublicationTokens();
     ResourceReservationBounds();
+    AuxiliaryTileReservationBounds();
     NativePerimeterPublication();
     RunHostConsumerContracts();
     std::puts("PASS: host action/geometry contract assertions (scripted; no desktop windows launched)");

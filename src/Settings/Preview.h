@@ -1,6 +1,6 @@
 #pragma once
 #include "..\Contracts\Configuration.h"
-#include "..\Rendering\KnitRaster.h"
+#include "..\Rendering\KnitPreparation.h"
 #include "..\Integration\ImportedAppearance.h"
 #include <filesystem>
 #include <functional>
@@ -18,8 +18,9 @@ struct PreviewResult {
 };
 class Preview {
 public:
-    using Render=std::function<knitting::RasterImage(contracts::Configuration const&)>;
-    explicit Preview(std::function<void(std::shared_ptr<PreviewResult const>)> publish,Render render={},
+    using Render=std::function<knitting::RasterImage(rendering::KnitPerimeter const&)>;
+    using RenderFactory=std::function<Render()>;
+    explicit Preview(std::function<void(std::shared_ptr<PreviewResult const>)> publish,RenderFactory render_factory={},
         std::filesystem::path storage_directory={});
     ~Preview();
     Preview(Preview const&)=delete;

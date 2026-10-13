@@ -1,6 +1,7 @@
 #pragma once
 
 #include "..\Tracking\TrackingModel.h"
+#include "..\Rendering\KnitPreparation.h"
 
 namespace window_sweaters::host {
 

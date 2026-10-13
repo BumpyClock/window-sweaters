@@ -24,7 +24,7 @@
       <RuntimeLibrary Condition="'$(Configuration)' != 'Debug'">MultiThreaded</RuntimeLibrary>
       <ExceptionHandling>Sync</ExceptionHandling>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>d2d1.lib;windowscodecs.lib;ole32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>dxgi.lib;d3d11.lib;d2d1.lib;windowscodecs.lib;ole32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AppearanceTests.cpp" />
@@ -41,9 +41,15 @@
     <ClCompile Include="..\Knitting\KnitTile.cpp" />
     <ClCompile Include="..\Knitting\Chart.cpp" />
     <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
-    <ClCompile Include="..\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\Rendering\KnitPreparation.cpp" />
     <ClCompile Include="..\Designs\Catalogue.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
   </ItemGroup>
   <ItemGroup><ProjectReference Include="WindowSweaters.Host.Configuration.vcxproj"><Project>{D6DD6E18-4E6F-4524-BD4B-4F4D0C027503}</Project></ProjectReference></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <ClCompile Include="..\Rendering\GpuShader.cpp" />
+    <ClCompile Include="..\Rendering\KnitAssembler.cpp" />
+    <ClCompile Include="..\Rendering\GpuSnapshot.cpp" />
+  </ItemGroup>
+  <Import Project="..\Rendering\KnitShader.targets" />
 </Project>

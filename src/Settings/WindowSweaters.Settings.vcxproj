@@ -25,7 +25,7 @@
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary><RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
-    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>user32.lib;advapi32.lib;shell32.lib;ole32.lib;windowsapp.lib;runtimeobject.lib;d2d1.lib;windowscodecs.lib;propsys.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>dxgi.lib;d3d11.lib;user32.lib;advapi32.lib;shell32.lib;ole32.lib;windowsapp.lib;runtimeobject.lib;d2d1.lib;windowscodecs.lib;propsys.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
     <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
     <ResourceCompile><AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..;$(MSBuildThisFileDirectory)..\..\packaging\Assets;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ResourceCompile>
   </ItemDefinitionGroup>
