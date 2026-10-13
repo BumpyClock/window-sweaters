@@ -11,6 +11,7 @@
 #include <dxgi.h>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -280,6 +281,44 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
         }
         const auto screenshot = testing::ComposeStrips(*p, uploaded);
         SavePng(screenshot, (output / L"hidden-upload.png").c_str());
+        const auto maskedPixel = [&](std::uint32_t pixel, float x, float y) {
+            const float cx = std::clamp(x, float(exclusion.left + 10), float(exclusion.right - 10));
+            const float cy = std::clamp(y, float(exclusion.top + 10), float(exclusion.bottom - 10));
+            const float coverage = std::clamp(std::hypot(x - cx, y - cy) - 9.f + .5f, 0.f, 1.f);
+            std::uint32_t masked = 0;
+            for (int shift = 0; shift < 32; shift += 8)
+                masked |= std::uint32_t(std::floor(((pixel >> shift) & 255) * coverage + .5f)) << shift;
+            return masked;
+        };
+        auto referenceStrips = testing::ReferenceStrips(*p);
+        for (std::size_t side = 0; side < uploaded.size(); ++side) {
+            const auto& strip = p->pieces[side];
+            Require(uploaded[side].width == strip.width && uploaded[side].height == strip.height &&
+                unmasked[side].width == strip.width && unmasked[side].height == strip.height,
+                "Every uploaded strip preserves its physical dimensions");
+            std::size_t cleared = 0, retained = 0;
+            for (std::uint32_t y = 0; y < strip.height; ++y) {
+                for (std::uint32_t x = 0; x < strip.width; ++x) {
+                    const auto index = std::size_t(y) * strip.width + x;
+                    const float px = float(strip.x + x) + .5f, py = float(strip.y + y) + .5f;
+                    const auto original = unmasked[side].pixels[index];
+                    const auto expected = maskedPixel(original, px, py);
+                    Require(PixelError(expected, uploaded[side].pixels[index]) <= 2,
+                        "Every uploaded strip matches the independent rounded-hole mask within two channel levels");
+                    cleared += (original >> 24) > 0 && (expected >> 24) == 0;
+                    retained += (original >> 24) > 0 && expected == original;
+                    referenceStrips[side].pixels[index] = maskedPixel(referenceStrips[side].pixels[index], px, py);
+                }
+            }
+            Require(cleared > 0 && retained > 0, "Each strip exercises both excluded and retained yarn");
+        }
+        const auto referenceFrame = testing::ComposeStrips(*p, referenceStrips);
+        int maskPeak = 0;
+        std::size_t maskOutliers = 0;
+        const auto maskDifference = Difference(referenceFrame, screenshot, maskPeak, &maskOutliers);
+        const bool maskMatches = WithinParity(maskPeak, maskOutliers, p->tile->spec.sampling);
+        if (!maskMatches) SavePng(maskDifference, (output / L"hidden-upload-diff-32x.png").c_str());
+        Require(maskMatches, "Complete masked upload matches the independent CPU frame within backend parity limits");
         const auto alpha = [&](const RasterImage& image, int x, int y) {
             const auto& strip = p->pieces[0];
             Require(x >= int(strip.x) && y >= int(strip.y) &&
@@ -680,8 +719,8 @@ int wmain(int argc, wchar_t** argv) {
         const auto shaderLedger = std::make_shared<ResourceLedger>();
         testing::Gpu shader(device.Get(), shaderLedger);
         exactRasterizer = warp;
+        if (stripProbe) { StripProbe(shader, output); CoUninitialize(); return 0; }
         SnapshotContracts(shader, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE);
-        if (stripProbe) { StripProbe(shader, output); return 0; }
         if (benchmarksOnly) {
             Require(!warp, "Benchmarks require hardware");
             GenerationBenchmarks(shader, output);
