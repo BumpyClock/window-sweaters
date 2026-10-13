@@ -135,11 +135,11 @@ graphics device; first-use shader setup may occur in an initial sample. Warm
 samples reuse those CPU caches but allocate upload textures as production does.
 These are in-process comparison measurements, not a claim about whole-desktop
 performance. Hardware results must not be inferred from WARP. The D3D11 texture
-dimension limit of 16,384 pixels includes band and shadow padding. GPU queue
-admission and direct preparation reject larger dimensions before tile generation;
-the assembler also validates strip dimensions before device initialization. CPU
-strip preparation retains its existing dimension limit. Shader failures follow the existing
-HRESULT publication/recovery gates.
+dimension limit of 16,384 pixels includes band and shadow padding. Queue admission
+for both renderers and direct GPU preparation reject larger dimensions before tile
+generation; the assembler also validates strip dimensions before device initialization.
+Standalone CPU oracle preparation retains its separate 32,768-pixel dimension limit.
+Shader failures follow the existing HRESULT publication/recovery gates.
 
 ## Recorded batching measurement
 

@@ -135,7 +135,7 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
         const auto margin = geometry::ShadowMarginPixels(inset);
         const double w = cw + 2. * (inset + margin), h = ch + 2. * (inset + margin);
         const bool gpu = f.renderer == Renderer::Gpu;
-        const auto dimensionLimit = gpu ? D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION : 32768;
+        const auto dimensionLimit = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
         if (!std::isfinite(w) || !std::isfinite(h) || w > dimensionLimit || h > dimensionLimit)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
         const float ow = f.widthDip + 2.f * f.bandDip;

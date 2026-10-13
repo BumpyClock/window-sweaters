@@ -851,45 +851,46 @@ void GpuInputsAndBudget() {
         "Unknown renderer rejected without fallback");
 }
 
-void GpuDimensionAdmission() {
+void PublicationDimensionAdmission() {
     for (const float scale : {1.f, 1.25f}) {
         const std::uint32_t padding = scale == 1.f ? 12u : 16u;
-        for (const bool width : {false, true}) {
-            auto request = Request();
-            request.frame.renderer = Renderer::Gpu;
-            request.frame.deviceScale = scale;
-            auto& dimension = width ? request.frame.contentWidthPixels : request.frame.contentHeightPixels;
-            dimension = 16385u - padding;
-            Receiver rejected;
-            rejected.Start();
-            Check(rejected.queue->Submit(request) == S_OK, "Oversize GPU dimension yields typed completion");
-            rejected.Collect(1);
-            ExpectError(rejected.results[0], RenderErrorKind::ResourceQuota, Quota);
-            const auto status = rejected.queue->Status();
-            Check(status.renderPreparations == 0 && status.tileGenerations == 0 && status.quotaRejected == 1,
-                "GPU dimension rejected before preparation or tile allocation");
-            knitting::TileCache cache;
-            bool invalid = false;
-            try { (void)KnitRaster::RenderPerimeter(request.frame, request.tile, cache); }
-            catch (const std::invalid_argument&) { invalid = true; }
-            Check(invalid && cache.GenerationCount() == 0,
-                "Direct GPU preparation rejects oversize padded dimensions before tile allocation");
-            --dimension;
-            Receiver accepted;
-            accepted.Start();
-            Check(accepted.queue->Submit(request) == S_OK, "Exact GPU dimension limit accepted");
-            accepted.Collect(1);
-            const auto& perimeter = Perimeter(accepted.results[0]);
-            Check(perimeter.assembly && (width ? perimeter.width : perimeter.height) == 16384u,
-                "GPU limit includes band and shadow padding");
-            ++dimension;
-            request.frame.renderer = Renderer::Cpu;
-            ++request.token.appearanceRevision;
-            Check(accepted.queue->Submit(request) == S_OK, "CPU preparation keeps its existing dimension limit");
-            accepted.Collect(2);
-            const auto& cpu = Perimeter(accepted.results[1]);
-            Check(!cpu.assembly && (width ? cpu.width : cpu.height) == 16385u,
-                "GPU dimension limit does not narrow CPU strip preparation");
+        for (const auto renderer : {Renderer::Cpu, Renderer::Gpu}) {
+            for (const bool width : {false, true}) {
+                auto request = Request();
+                request.frame.renderer = renderer;
+                request.frame.deviceScale = scale;
+                auto& dimension = width ? request.frame.contentWidthPixels : request.frame.contentHeightPixels;
+                dimension = 16385u - padding;
+                Receiver rejected;
+                rejected.Start();
+                Check(rejected.queue->Submit(request) == S_OK, "Oversize publication dimension yields typed completion");
+                rejected.Collect(1);
+                ExpectError(rejected.results[0], RenderErrorKind::ResourceQuota, Quota);
+                const auto status = rejected.queue->Status();
+                Check(status.renderPreparations == 0 && status.tileGenerations == 0 && status.quotaRejected == 1,
+                    "Publication dimension rejected before preparation or tile allocation for either renderer");
+                knitting::TileCache cache;
+                if (renderer == Renderer::Gpu) {
+                    bool invalid = false;
+                    try { (void)KnitRaster::RenderPerimeter(request.frame, request.tile, cache); }
+                    catch (const std::invalid_argument&) { invalid = true; }
+                    Check(invalid && cache.GenerationCount() == 0,
+                        "Direct GPU preparation rejects oversize padded dimensions before tile allocation");
+                } else {
+                    const auto cpu = KnitRaster::RenderPerimeter(request.frame, request.tile, cache);
+                    Check(!cpu.assembly && (width ? cpu.width : cpu.height) == 16385u,
+                        "Standalone CPU oracle preparation keeps its separate dimension limit");
+                }
+                --dimension;
+                Receiver accepted;
+                accepted.Start();
+                Check(accepted.queue->Submit(request) == S_OK, "Exact publication dimension limit accepted");
+                accepted.Collect(1);
+                const auto& perimeter = Perimeter(accepted.results[0]);
+                Check(perimeter.assembly.has_value() == (renderer == Renderer::Gpu) &&
+                    (width ? perimeter.width : perimeter.height) == 16384u,
+                    "Shared publication limit includes band and shadow padding");
+            }
         }
     }
 }
@@ -1125,7 +1126,7 @@ int main() {
         std::pair{"stop notification lifetime", StopRemovesPostedNotifications},
         std::pair{"immutable chart/cache byte budget", ChartKeysAndCacheBudget},
         std::pair{"GPU immutable inputs/byte admission", GpuInputsAndBudget},
-        std::pair{"GPU padded texture dimension admission", GpuDimensionAdmission},
+        std::pair{"shared padded publication dimension admission", PublicationDimensionAdmission},
         std::pair{"owned receiver/thread", ReceiverOwnershipAndWrongThreadCalls},
         std::pair{"receiver start/post failure", StartRevalidatesReceiverAndPostFailureIsVisible},
         std::pair{"native PostMessage quota retirement", NativePostMessageQuotaFailureRetiresAcceptedWork},
