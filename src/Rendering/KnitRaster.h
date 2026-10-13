@@ -44,6 +44,15 @@ struct KnitPerimeter {
     std::array<KnitRasterPiece, 4> pieces;
     std::shared_ptr<const knitting::Tile> tile;
     std::optional<KnitAssembly> assembly;
+    std::array<const knitting::Tile*, 3> RetainedTiles() const noexcept {
+        std::array<const knitting::Tile*, 3> tiles{tile.get(),
+            assembly ? assembly->patch.get() : nullptr,
+            assembly ? assembly->cuff.get() : nullptr};
+        for (std::size_t i = 0; i < tiles.size(); ++i)
+            for (std::size_t j = 0; j < i; ++j)
+                if (tiles[i] == tiles[j]) { tiles[i] = nullptr; break; }
+        return tiles;
+    }
     bool PieceValid(const KnitRasterPiece& piece) const noexcept {
         const auto& image = piece.image;
         if (!piece.width || !piece.height || piece.x > width || piece.y > height ||

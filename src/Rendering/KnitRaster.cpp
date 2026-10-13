@@ -387,7 +387,6 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     if (2. * narrow * (width + height) > 16. * 1024. * 1024.)
         throw std::invalid_argument("Perimeter byte limit exceeded");
     tileSpec.bandDip = f.bandDip;
-    tileSpec.deviceScale = f.deviceScale;
     KnitPerimeter perimeter;
     perimeter.width = static_cast<std::uint32_t>(width);
     perimeter.height = static_cast<std::uint32_t>(height);

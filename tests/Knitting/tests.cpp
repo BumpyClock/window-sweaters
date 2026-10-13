@@ -181,7 +181,7 @@ void CacheAndInvalidInputs() {
         probe.Get(changed);
         Require(probe.GenerationCount() == previous + 1, "Complete cache key invalidates");
     };
-    auto changed = spec; changed.deviceScale = 1.25f; change(changed);
+    auto changed = spec;
     changed = spec; changed.chartRevision = 42; change(changed);
     changed = spec; changed.rasterScale = 2; change(changed);
     changed = spec; changed.sampling = Sampling::Nearest; change(changed);
@@ -197,10 +197,6 @@ void CacheAndInvalidInputs() {
     Invalid([&] { probe.Get(changed); }, "Unknown stitch rejected");
     changed = spec; changed.gauge.jitter = std::numeric_limits<float>::quiet_NaN();
     Invalid([&] { probe.Get(changed); }, "NaN gauge rejected");
-    changed = spec; changed.deviceScale = 0;
-    Invalid([&] { probe.Get(changed); }, "Zero scale rejected");
-    changed = spec; changed.deviceScale = 1e-38f;
-    Invalid([&] { probe.Get(changed); }, "Positive subnormal-scale tile specification rejected");
     changed = spec; changed.rasterScale = 9;
     Invalid([&] { probe.Get(changed); }, "Excess sampling rejected");
     changed = spec; changed.bandDip = 257;
@@ -219,6 +215,37 @@ RasterImage BandImage(const KnitPerimeter& perimeter) {
         for (std::uint32_t x = m; x < image.width - m; ++x)
             band.pixels.push_back(image.pixels[static_cast<std::size_t>(y) * image.width + x]);
     return band;
+}
+
+void DpiTileReuse() {
+    for (const auto sampling : {Sampling::Nearest, Sampling::Linear}) {
+        TileCache cache;
+        TileSpec tile;
+        tile.sampling = sampling;
+        KnitFrameSpec frame;
+        frame.widthDip = 73; frame.heightDip = 61;
+        frame.deviceScale = 1.5f;
+        const auto original = KnitRaster::RenderPerimeter(frame, tile, cache);
+        const auto generations = cache.GenerationCount();
+        const auto resident = cache.ResidentBytes();
+        for (const float scale : {MinimumDeviceScale, 1.f, 1.25f, 1.5f, 2.f, 3.f, MaximumDeviceScale}) {
+            frame.deviceScale = scale;
+            const auto reused = KnitRaster::RenderPerimeter(frame, tile, cache);
+            TileCache fresh;
+            const auto independent = KnitRaster::RenderPerimeter(frame, tile, fresh);
+            Require(reused.tile == original.tile && cache.GenerationCount() == generations &&
+                cache.ResidentBytes() == resident, "DPI presentation changes reuse tile pixels and cache bytes");
+            Require(reused.deviceScale == scale && reused.width == independent.width && reused.height == independent.height
+                && (scale == 1.5f || (reused.width != original.width && reused.height != original.height)),
+                "DPI presentation retains current physical size and scale");
+            Require(reused.tile->image.pixels == independent.tile->image.pixels
+                && reused.tile->height.pixels == independent.tile->height.pixels,
+                "DPI frame requests retain independently generated tile colour and stitch height pixels");
+            Require(reused.tile->spec.sampling == sampling &&
+                KnitRaster::Compose(reused).pixels == KnitRaster::Compose(independent).pixels,
+                "DPI cache reuse retains sampling and independently generated rendered pixels");
+        }
+    }
 }
 
 RasterImage BandFrame(const KnitFrameSpec& frame, TileSpec tile, TileCache& cache) {
@@ -624,6 +651,8 @@ void RenderBehavior(const std::filesystem::path& root) {
     Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Partial physical-dimension override rejected");
     invalid = frame; invalid.physicalPaddingPixels = 100;
     Invalid([&] { KnitRaster::RenderFrame(invalid, tile, cache); }, "Unrelated authoritative padding rejected");
+    invalid = frame; invalid.deviceScale = 0;
+    Invalid([&] { KnitRaster::RenderPerimeter(invalid, tile, cache); }, "Zero frame scale rejected");
     invalid = frame; invalid.deviceScale = 1e-38f;
     invalid.contentWidthPixels = 1000; invalid.contentHeightPixels = 241;
     Invalid([&] { KnitRaster::RenderPerimeter(invalid, tile, cache); },
@@ -887,10 +916,18 @@ void ChartContracts() {
     chartBudget.Get(recolored);
     Require(chartBudget.ResidentBytes() == 0, "Byte cache bounds include owned chart data, not only raster");
     for (float scale : {MinimumDeviceScale, 1.f, 1.25f, 1.5f, 2.f, MaximumDeviceScale}) {
-        auto scaled = spotify; scaled.deviceScale = scale;
-        auto scaledTile = cache.Get(scaled);
-        Require(scaledTile->layout.width_dip == 27 && scaledTile->image.width == 108,
-            "Device scale invalidation preserves source logical stitch gauge and raster sampling rule");
+        KnitFrameSpec frame;
+        frame.widthDip = 73; frame.heightDip = 61; frame.deviceScale = scale;
+        const auto reused = KnitRaster::RenderPerimeter(frame, spotify, cache);
+        TileCache fresh;
+        const auto independent = KnitRaster::RenderPerimeter(frame, spotify, fresh);
+        Require(reused.tile == tile && reused.deviceScale == scale
+            && reused.tile->layout.width_dip == 27 && reused.tile->image.width == 108,
+            "DPI frame requests share chart tiles and preserve source stitch gauge and raster sampling");
+        Require(reused.tile->image.pixels == independent.tile->image.pixels
+            && reused.tile->height.pixels == independent.tile->height.pixels
+            && KnitRaster::Compose(reused).pixels == KnitRaster::Compose(independent).pixels,
+            "DPI chart cache reuse matches independently generated tile and perimeter pixels");
     }
     Invalid([&] { Chart("", 0, 1, 1, {0}); }, "Empty chart identity rejected");
     Invalid([&] { Chart("bad", 0, 0, 1, {}); }, "Empty chart dimensions rejected");
@@ -1379,6 +1416,7 @@ int wmain(int argc, wchar_t** argv) {
         if (argc > 2 && std::wstring(argv[2]) == L"--metrics") { RendererMetrics(); CoUninitialize(); return 0; }
         PortableMath();
         CacheAndInvalidInputs();
+        DpiTileReuse();
         ScratchContracts();
         RenderBehavior(root);
         ChartContracts();

@@ -4,6 +4,7 @@
 #include "KnitPixel.h"
 #include "CopyPixel.h"
 #include <cmath>
+#include <bit>
 
 namespace window_sweaters::rendering {
 using Microsoft::WRL::ComPtr;
@@ -71,26 +72,41 @@ HRESULT GpuShader::Upload(const knitting::RasterImage& image, ComPtr<ID3D11Shade
     return result;
 }
 
-HRESULT GpuShader::Render(const KnitSources& sources, const KnitMask& mask, ID3D11RenderTargetView* target,
-    POINT offset) noexcept {
-    const bool knit = sources.heights != nullptr;
-    if (!target || !sources.colour || !sources.width || !sources.height ||
-        sources.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || sources.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
-        offset.x < 0 || offset.y < 0 || knit != (sources.parameters != nullptr) ||
-        (knit && !Valid(*sources.parameters)) || !Valid(mask)) return E_INVALIDARG;
-    HRESULT result = Initialize();
-    if (FAILED(result)) return result;
-    ComPtr<ID3D11Texture1D> coordinates[2];
-    ComPtr<ID3D11ShaderResourceView> coordinateViews[2];
-    for (int axis = 0; knit && axis < 2; ++axis) {
-        const auto& p = *sources.parameters;
-        const auto length = axis ? sources.height : sources.width;
-        std::vector<std::array<float, 2>> values;
-        try { values.resize(length); } catch (...) { return E_OUTOFMEMORY; }
+HRESULT GpuShader::CoordinateTable(std::uint32_t length, float origin, float scale,
+    std::shared_ptr<Coordinates>& table, ResourceLedger::Lease* upload) noexcept {
+    const auto originBits = std::bit_cast<std::uint32_t>(origin);
+    const auto scaleBits = std::bit_cast<std::uint32_t>(scale);
+    const auto matches = [&](const Coordinates& entry) {
+        return entry.length == length && entry.originBits == originBits && entry.scaleBits == scaleBits;
+    };
+    if (upload) {
+        table = upload->FindCache<Coordinates>(this, ResourceLedger::Lease::CacheKind::Coordinates, matches);
+        if (table) { table->tick = ++tick_; ++coordinateHits_; return S_OK; }
+    }
+    const auto found = std::find_if(coordinates_.begin(), coordinates_.end(), [&](const auto& entry) {
+        return matches(*entry);
+    });
+    if (found != coordinates_.end()) {
+        table = *found; table->tick = ++tick_; ++coordinateHits_;
+        return upload ? upload->PinCache(this, ResourceLedger::Lease::CacheKind::Coordinates, table) : S_OK;
+    }
+    try {
+        const auto bytes = std::size_t(length) * sizeof(std::array<float, 2>);
+        while (!coordinates_.empty() && (coordinates_.size() >= MaxCachedCoordinates ||
+            bytes > CacheByteLimit - cachedBytes_ || bytes > resources_->CacheCapacity(upload))) {
+            const auto oldest = std::min_element(coordinates_.begin(), coordinates_.end(),
+                [](const auto& a, const auto& b) { return a->tick < b->tick; });
+            cachedBytes_ -= std::size_t((*oldest)->length) * sizeof(std::array<float, 2>);
+            coordinates_.erase(oldest);
+        }
+        auto entry = std::make_shared<Coordinates>();
+        HRESULT result = resources_->ReserveCache(bytes, entry->lease, upload);
+        if (FAILED(result)) return result;
+        std::vector<std::array<float, 2>> values(length);
         // CPU float division fixes pixel-grid ties and fray hashes across GPU reciprocal implementations.
         for (std::uint32_t i = 0; i < length; ++i) {
-            const auto coordinate = (axis ? p.originY : p.originX) + (float(i) + .5f) / p.scale;
-            values[i] = {coordinate, std::floor(coordinate * p.scale)};
+            const auto coordinate = origin + (float(i) + .5f) / scale;
+            values[i] = {coordinate, std::floor(coordinate * scale)};
         }
         D3D11_TEXTURE1D_DESC desc{};
         desc.Width = length;
@@ -99,8 +115,36 @@ HRESULT GpuShader::Render(const KnitSources& sources, const KnitMask& mask, ID3D
         desc.Usage = D3D11_USAGE_IMMUTABLE;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         const D3D11_SUBRESOURCE_DATA data{values.data(), 0, 0};
-        result = device_->CreateTexture1D(&desc, &data, &coordinates[axis]);
-        if (SUCCEEDED(result)) result = device_->CreateShaderResourceView(coordinates[axis].Get(), nullptr, &coordinateViews[axis]);
+        ComPtr<ID3D11Texture1D> texture;
+        result = device_->CreateTexture1D(&desc, &data, &texture);
+        if (SUCCEEDED(result)) result = device_->CreateShaderResourceView(texture.Get(), nullptr, &entry->view);
+        if (FAILED(result)) return result;
+        ++coordinateUploads_;
+        entry->length = length; entry->originBits = originBits; entry->scaleBits = scaleBits; entry->tick = ++tick_;
+        if (upload) {
+            result = upload->PinCache(this, ResourceLedger::Lease::CacheKind::Coordinates, entry);
+            if (FAILED(result)) return result;
+        }
+        coordinates_.push_back(entry); cachedBytes_ += bytes;
+        table = std::move(entry);
+        return S_OK;
+    } catch (...) { return E_OUTOFMEMORY; }
+}
+
+HRESULT GpuShader::Render(const KnitSources& sources, const KnitMask& mask, ID3D11RenderTargetView* target,
+    POINT offset, ResourceLedger::Lease* upload) noexcept {
+    const bool knit = sources.heights != nullptr;
+    if (!target || !sources.colour || !sources.width || !sources.height ||
+        sources.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || sources.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+        offset.x < 0 || offset.y < 0 || knit != (sources.parameters != nullptr) ||
+        (knit && !Valid(*sources.parameters)) || !Valid(mask)) return E_INVALIDARG;
+    HRESULT result = Initialize();
+    if (FAILED(result)) return result;
+    std::shared_ptr<Coordinates> coordinates[2];
+    for (int axis = 0; knit && axis < 2; ++axis) {
+        const auto& p = *sources.parameters;
+        result = CoordinateTable(axis ? sources.height : sources.width, axis ? p.originY : p.originX,
+            p.scale, coordinates[axis], upload);
         if (FAILED(result)) return result;
     }
     const Placement placement{{mask.left, mask.top, mask.right, mask.bottom},
@@ -113,15 +157,23 @@ HRESULT GpuShader::Render(const KnitSources& sources, const KnitMask& mask, ID3D
     context_->PSSetShader(knit ? knit_.Get() : copy_.Get(), nullptr, 0);
     ID3D11Buffer* buffers[] = {parameters_.Get(), placement_.Get()};
     context_->PSSetConstantBuffers(0, 2, buffers);
-    ID3D11ShaderResourceView* views[] = {sources.colour, sources.heights, coordinateViews[0].Get(), coordinateViews[1].Get()};
+    ID3D11ShaderResourceView* views[] = {sources.colour, sources.heights,
+        knit ? coordinates[0]->view.Get() : nullptr, knit ? coordinates[1]->view.Get() : nullptr};
     context_->PSSetShaderResources(0, knit ? 4 : 1, views);
     context_->OMSetRenderTargets(1, &target, nullptr);
     const D3D11_VIEWPORT viewport{float(offset.x), float(offset.y), float(sources.width), float(sources.height), 0, 1};
     context_->RSSetViewports(1, &viewport);
     context_->Draw(3, 0);
     if (knit) ++draws_;
-    context_->ClearState();
-    context_->Flush();
+    ID3D11ShaderResourceView* emptyViews[4]{};
+    context_->PSSetShaderResources(0, 4, emptyViews);
+    context_->OMSetRenderTargets(0, nullptr, nullptr);
+    return device_->GetDeviceRemovedReason();
+}
+
+HRESULT GpuShader::Submit() noexcept {
+    if (!device_) return E_UNEXPECTED;
+    if (context_) context_->Flush();
     return device_->GetDeviceRemovedReason();
 }
 }

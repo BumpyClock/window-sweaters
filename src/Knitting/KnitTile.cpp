@@ -69,7 +69,7 @@ bool SameSpec(const TileSpec& a, const TileSpec& b) {
     }
     return a.bandDip == b.bandDip && a.baseArgb == b.baseArgb && a.stitch == b.stitch
         && a.material == b.material && a.chartRevision == b.chartRevision
-        && a.deviceScale == b.deviceScale && a.rasterScale == b.rasterScale
+        && a.rasterScale == b.rasterScale
         && a.sampling == b.sampling && GaugeFields(a.gauge) == GaugeFields(b.gauge) && sameChart;
 }
 
@@ -340,8 +340,7 @@ std::shared_ptr<const Tile> MakeTile(const TileSpec& spec) {
 
 TileSpec NormalizeTileSpec(TileSpec spec) {
     if (!ws_knit_validate_gauge(&spec.gauge) || !std::isfinite(spec.bandDip)
-        || spec.bandDip > 256.f || !std::isfinite(spec.deviceScale)
-        || spec.deviceScale < MinimumDeviceScale || spec.deviceScale > MaximumDeviceScale
+        || spec.bandDip > 256.f
         || spec.rasterScale < 0 || spec.rasterScale > 8
         || (spec.stitch != Stitch::Stockinette && spec.stitch != Stitch::Rib && spec.stitch != Stitch::Garter)
         || (spec.material != Material::Plain && spec.material != Material::Raised)

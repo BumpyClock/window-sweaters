@@ -27,6 +27,10 @@
     <Link><SubSystem>Console</SubSystem><AdditionalDependencies>d3d11.lib;dxgi.lib;dcomp.lib;d2d1.lib;windowscodecs.lib;ole32.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="GpuReadback.h" />
+    <ClInclude Include="GpuCacheTests.h" />
+  </ItemGroup>
+  <ItemGroup>
     <ClCompile Include="GpuShaderTests.cpp" />
     <ClCompile Include="..\..\src\Rendering\GpuShader.cpp" />
     <ClCompile Include="..\..\src\Rendering\KnitAssembler.cpp" />

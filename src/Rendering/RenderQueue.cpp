@@ -148,7 +148,6 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
         const double output = gpu ? 0. : strips;
         auto tileSpec = r.tile;
         tileSpec.bandDip = f.bandDip;
-        tileSpec.deviceScale = f.deviceScale;
         const auto tile = BoundTile(tileSpec);
         auto retainedTiles = tile.retained, largestPixels = tile.pixels, largestCells = tile.cells;
         if (tileSpec.chart) {
@@ -166,7 +165,7 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             }
         }
         const auto outputBytes = static_cast<std::size_t>(output);
-        b.readyBytes = errorBytes + sizeof(KnitPerimeter) + outputBytes + tile.retained;
+        b.readyBytes = errorBytes + sizeof(KnitPerimeter) + outputBytes + (gpu ? retainedTiles : tile.retained);
         b.transientBytes = b.requestBytes + sizeof(KnitPerimeter) + outputBytes
             + (gpu ? 0 : static_cast<std::size_t>(3. * narrow * std::max(w, h) * 4.))
             + 2 * retainedTiles + 8 * largestPixels + largestCells;
@@ -187,7 +186,9 @@ std::size_t ReadyBytes(const RenderReady& ready) noexcept {
     auto bytes = sizeof(RenderReady) + sizeof(RenderRequest)
         + (ready.request->tile.chart ? ready.request->tile.chart->ByteSize() : 0);
     if (const auto* perimeter = std::get_if<std::shared_ptr<const KnitPerimeter>>(&ready.outcome)) {
-        bytes += sizeof(KnitPerimeter) + (*perimeter)->tile->ByteSize();
+        bytes += sizeof(KnitPerimeter);
+        for (const auto* tile : (*perimeter)->RetainedTiles())
+            if (tile) bytes += tile->ByteSize();
         for (const auto& piece : (*perimeter)->pieces) bytes += piece.image.ByteSize();
     }
     return bytes;

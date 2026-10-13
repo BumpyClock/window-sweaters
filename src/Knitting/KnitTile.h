@@ -49,7 +49,6 @@ struct TileSpec {
     Stitch stitch = Stitch::Stockinette;
     Material material = Material::Plain;
     std::uint64_t chartRevision = 0;
-    float deviceScale = 1.f;
     int rasterScale = 0;
     Sampling sampling = Sampling::Linear;
     std::shared_ptr<const Chart> chart;

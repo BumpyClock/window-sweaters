@@ -691,6 +691,10 @@ private:
         unsigned iconAttempts{};
         bool iconPending{};
     };
+    struct PublicationCandidate {
+        std::shared_ptr<const window_sweaters::rendering::RenderRequest> request;
+        std::shared_ptr<const window_sweaters::rendering::KnitPerimeter> perimeter;
+    };
     struct Counters {
         std::uint64_t creates{}, removes{}, geometryUpdates{}, draws{}, pureMoves{};
         std::uint64_t hides{}, shows{}, reorders{}, staleActions{}, placementFailures{};
@@ -1803,11 +1807,184 @@ private:
         return S_FALSE;
     }
 
+    void PublishRendered(std::span<const PublicationCandidate> candidates) {
+        struct Prepared {
+            PublicationCandidate candidate;
+            window_sweaters::geometry::RenderInput geometry;
+            Overlay* overlay;
+            std::uint64_t uploadId;
+            bool placed{};
+        };
+        const auto uploadFailure = [&](const auto& request, HRESULT result) {
+            auto entry = Find(request.token.target);
+            if (!entry || !recovery_.CanRender(request.deviceGeneration) ||
+                request.configRevision != renderRevision_ || request.token.appearanceRevision != entry->renderEpoch) return;
+            const auto geometry = CurrentGeometry(*entry);
+            if (!geometry || !Matches(request, *entry, *geometry)) return;
+            Hide(*entry);
+            if (result == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA)) {
+                entry->render.resourceRetry = request;
+                if (std::find(resourceRetries_.begin(), resourceRetries_.end(), entry->state.target) == resourceRetries_.end())
+                    resourceRetries_.push_back(entry->state.target);
+                entry->overlay.ReleaseContent();
+                entry->render.prepared.reset();
+                ++counters_.renderErrors;
+                probeDirty_ = true;
+                LogError(L"aggregate retained-resource admission; decoration suppressed", result);
+            } else {
+                LogError(L"knit perimeter GPU upload; decoration hidden", result);
+                entry->render.failed = request;
+                ++counters_.renderErrors;
+            }
+        };
+        std::vector<Prepared> prepared;
+        prepared.reserve(8);
+        const auto publish = [&] {
+            if (prepared.empty()) return;
+            const auto stale = [&](const auto& item) {
+                const auto& request = *item.candidate.request;
+                auto entry = Find(request.token.target);
+                if (!entry || &entry->overlay != item.overlay || entry->overlay.PreparedUploadId() != item.uploadId) {
+                    ++counters_.staleResults;
+                    return true;
+                }
+                const auto geometry = CurrentGeometry(*entry);
+                const bool eligible = EligibleNow(*entry) && geometry && entry->visibilityToken &&
+                    entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken);
+                if (eligible && Matches(request, *entry, *geometry)) return false;
+                entry->overlay.DiscardUpload();
+                if (!eligible) Hide(*entry);
+                ++counters_.staleResults;
+                return true;
+            };
+            std::vector<Prepared> current;
+            current.reserve(prepared.size());
+            for (auto& item : prepared)
+                if (!stale(item)) current.push_back(std::move(item));
+            prepared = std::move(current);
+            if (prepared.empty()) return;
+            std::array<Overlay*, 8> overlays{};
+            for (std::size_t i = 0; i < prepared.size(); ++i) overlays[i] = prepared[i].overlay;
+            const auto generation = prepared.front().candidate.request->deviceGeneration;
+            const HRESULT result = Overlay::PublishUploads({overlays.data(), prepared.size()});
+            if (FAILED(result)) {
+                for (const auto& item : prepared) uploadFailure(*item.candidate.request, result);
+                prepared.clear();
+                GpuFailure(L"GPU perimeter batch publication recovery", result, generation);
+                return;
+            }
+            auto completed = std::move(prepared);
+            prepared.clear();
+            for (auto& item : completed) {
+                item.overlay = nullptr;
+                const auto& request = *item.candidate.request;
+                auto entry = Find(request.token.target);
+                if (!entry || !recovery_.CanRender(request.deviceGeneration)) continue;
+                entry->render.prepared = request;
+                entry->render.prepared->clipRelativeToOuter = window_sweaters::host::TrackedRect(item.geometry.clipRelativeToOuter);
+                entry->state.appliedRect = window_sweaters::host::TrackedRect(item.geometry.physicalTargetBounds);
+                ++counters_.uploads;
+                ++counters_.draws;
+                ++counters_.geometryUpdates;
+                const auto placement = entry->overlay.UpdatePlacement(NativeRect(item.geometry.physicalOuterBounds),
+                    NativeRect(item.geometry.clipRelativeToOuter));
+                if (FAILED(placement)) {
+                    Hide(*entry);
+                    LogError(L"knit publication placement", placement);
+                    GpuFailure(L"GPU perimeter placement recovery", placement, request.deviceGeneration);
+                } else item.placed = true;
+            }
+            for (const auto& item : completed) {
+                const auto& request = *item.candidate.request;
+                if (!item.placed || !recovery_.CanRender(request.deviceGeneration)) continue;
+                auto entry = Find(request.token.target);
+                if (!entry) continue;
+                const Action action{ActionKind::Show, request.token.target, request.targetBounds, 0,
+                    entry->state.appearanceRevision};
+                if (!VisibilityAllows(request.token.target) || !Validate(action)) {
+                    ++counters_.staleResults;
+                    continue;
+                }
+                entry = Find(request.token.target);
+                if (!entry) continue;
+                const auto geometry = CurrentGeometry(*entry);
+                if (!entry->render.prepared || !window_sweaters::host::SamePreparation(*entry->render.prepared, request) ||
+                    !geometry || !Matches(request, *entry, *geometry)) {
+                    ++counters_.staleResults;
+                    continue;
+                }
+                const auto shown = ShowCurrent(request.token.target, geometry);
+                if (FAILED(shown)) {
+                    if (auto remaining = Find(request.token.target)) Hide(*remaining);
+                    LogError(L"knit publication placement", shown);
+                }
+            }
+            probeDirty_ = true;
+        };
+        for (const auto& candidate : candidates) {
+            const auto& request = *candidate.request;
+            auto entry = Find(request.token.target);
+            if (!entry || !recovery_.CanRender(request.deviceGeneration)) { ++counters_.staleResults; continue; }
+            const auto geometry = CurrentGeometry(*entry);
+            if (!EligibleNow(*entry) || !geometry || !entry->visibilityToken ||
+                !entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken)) {
+                Hide(*entry);
+                ++counters_.staleResults;
+                continue;
+            }
+            if (!Matches(request, *entry, *geometry)) { ++counters_.staleResults; continue; }
+            const auto prepare = [&] {
+                return entry->overlay.PrepareUpload(candidate.perimeter, NativeRect(geometry->physicalOuterBounds),
+                    NativeRect(geometry->clipRelativeToOuter), NativeRect(geometry->targetRelativeToOuter),
+                    static_cast<float>(geometry->radiusDip * geometry->deviceScale),
+                    static_cast<float>(request.frame.tuckDip * geometry->deviceScale));
+            };
+            HRESULT result = prepare();
+            if (result == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) && !prepared.empty()) {
+                publish();
+                entry = Find(request.token.target);
+                if (!entry || !recovery_.CanRender(request.deviceGeneration)) continue;
+                const auto fresh = CurrentGeometry(*entry);
+                if (!EligibleNow(*entry) || !fresh ||
+                    !entry->visibilityToken || !entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken)) {
+                    Hide(*entry);
+                    ++counters_.staleResults;
+                    continue;
+                }
+                if (!Matches(request, *entry, *fresh)) { ++counters_.staleResults; continue; }
+                result = entry->overlay.PrepareUpload(candidate.perimeter, NativeRect(fresh->physicalOuterBounds),
+                    NativeRect(fresh->clipRelativeToOuter), NativeRect(fresh->targetRelativeToOuter),
+                    static_cast<float>(fresh->radiusDip * fresh->deviceScale),
+                    static_cast<float>(request.frame.tuckDip * fresh->deviceScale));
+                if (SUCCEEDED(result)) {
+                    prepared.push_back({candidate, *fresh, &entry->overlay, entry->overlay.PreparedUploadId()});
+                    continue;
+                }
+            }
+            if (FAILED(result)) {
+                if (window_sweaters::rendering::GraphicsRecovery::IsRecoverable(result)) {
+                    for (const auto& item : prepared) item.overlay->DiscardUpload();
+                    prepared.clear();
+                    uploadFailure(request, result);
+                    GpuFailure(L"GPU perimeter upload recovery", result, request.deviceGeneration);
+                } else {
+                    publish();
+                    if (recovery_.CanRender(request.deviceGeneration)) uploadFailure(request, result);
+                }
+                continue;
+            }
+            prepared.push_back({candidate, *geometry, &entry->overlay, entry->overlay.PreparedUploadId()});
+        }
+        publish();
+    }
+
     void DrainRendered(WPARAM cookie, LPARAM reserved) {
         ConfigurationCurrent();
         std::vector<window_sweaters::rendering::RenderReady> results;
         const HRESULT drained = queue_->Drain(cookie, reserved, results);
         if (FAILED(drained)) { QueueFailure(L"render result drain", drained); return; }
+        std::vector<PublicationCandidate> candidates;
+        candidates.reserve(8);
         for (const auto& ready : results) {
             const auto& request = *ready.request;
             if (!recovery_.CanRender(request.deviceGeneration)) { ++counters_.staleResults; continue; }
@@ -1855,45 +2032,13 @@ private:
                 ++counters_.staleResults;
                 continue;
             }
-            HRESULT result = entry->overlay.Upload(perimeter, NativeRect(publication->physicalOuterBounds),
-                NativeRect(publication->clipRelativeToOuter), NativeRect(publication->targetRelativeToOuter),
-                static_cast<float>(publication->radiusDip * publication->deviceScale),
-                static_cast<float>(request.frame.tuckDip * publication->deviceScale));
-            if (FAILED(result)) {
-                Hide(*entry);
-                if (result==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA)) {
-                    entry->render.resourceRetry=request;
-                    if (std::find(resourceRetries_.begin(),resourceRetries_.end(),entry->state.target)==resourceRetries_.end())
-                        resourceRetries_.push_back(entry->state.target);
-                    entry->overlay.ReleaseContent();
-                    entry->render.prepared.reset();
-                    ++counters_.renderErrors;
-                    probeDirty_=true;
-                    LogError(L"aggregate retained-resource admission; decoration suppressed",result);
-                    continue;
-                }
-                LogError(L"knit perimeter GPU upload; decoration hidden", result);
-                if (window_sweaters::rendering::GraphicsRecovery::IsRecoverable(result)) {
-                    GpuFailure(L"GPU perimeter upload recovery", result, request.deviceGeneration);
-                    continue;
-                }
-                entry->render.failed = request;
-                ++counters_.renderErrors;
-                continue;
+            candidates.push_back({ready.request, perimeter});
+            if (candidates.size() == 8) {
+                PublishRendered(candidates);
+                candidates.clear();
             }
-            entry->render.prepared = request;
-            entry->render.prepared->clipRelativeToOuter = window_sweaters::host::TrackedRect(publication->clipRelativeToOuter);
-            entry->state.appliedRect = window_sweaters::host::TrackedRect(publication->physicalTargetBounds);
-            ++counters_.uploads;
-            ++counters_.draws;
-            ++counters_.geometryUpdates;
-            result = ShowCurrent(request.token.target, publication);
-            if (FAILED(result)) {
-                if (auto remaining = Find(request.token.target)) Hide(*remaining);
-                LogError(L"knit publication placement", result);
-            }
-            probeDirty_ = true;
         }
+        PublishRendered(candidates);
         RetryRenders();
         RetryResourceRenders();
     }
@@ -2508,10 +2653,10 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
     const auto beforeDrain = host.counters_;
     pump(prepared);
     require(host.entries_.at(10001)->presentationVisible && host.counters_.uploads == beforeDrain.uploads + 1 &&
-        host.counters_.workValidations == beforeDrain.workValidations + 2 &&
-        host.counters_.visibilityObservations == beforeDrain.visibilityObservations + 1 &&
-        host.counters_.geometryQueries == beforeDrain.geometryQueries + 2,
-        "Drained result shows with its post-probe validation and geometry; only the pre-probe gate repeats them");
+        host.counters_.workValidations == beforeDrain.workValidations + 3 &&
+        host.counters_.visibilityObservations == beforeDrain.visibilityObservations + 2 &&
+        host.counters_.geometryQueries == beforeDrain.geometryQueries + 5,
+        "Drained result rechecks current geometry at staging and publication, then validates visibility and lifetime before showing");
     require(host.counters_.uploads == firstUploads + 1 &&
         host.entries_.at(10001)->render.prepared->frame.bandDip == 24.0f &&
         host.entries_.at(10001)->overlay.Bounds().right - host.entries_.at(10001)->overlay.Bounds().left == 373,
@@ -3889,6 +4034,92 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
     }
     require(SUCCEEDED(host.graphics_.Composition()->WaitForCommitCompletion()),
         "Consumer contract native publications commit");
+    {
+        using namespace window_sweaters;
+        ContractState batchContract;
+        batchContract.policy.SetNotificationsReady(true);
+        batchContract.policy.SetSession(visibility::SessionState::Interactive);
+        batchContract.policy.SetPower(visibility::PowerState::Awake);
+        batchContract.policy.SetDisplay(visibility::DisplayState::On);
+        Host batch(host.instance_, options, configuration);
+        batch.contract_ = &batchContract;
+        batch.window_ = CreateWindowExW(0, HostClass, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, host.instance_, &batch);
+        require(batch.window_ && SUCCEEDED(batch.graphics_.Initialize()) &&
+            SUCCEEDED(rendering::RenderQueue::Create(batch.window_, batch.queueLimits_, batch.queue_)) &&
+            SUCCEEDED(batch.queue_->Start(0, DeviceGeneration)), "Create isolated actual Host multi-ready publication fixture");
+        std::array<AliveWindow, 2> targets;
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            auto& target = targets[i];
+            target.hwnd = 41000 + i; target.identity = {GetCurrentProcessId(), 1234, target.hwnd};
+            target.className = L"OrdinaryApp"; target.dpi = 96; target.rect = {100, 100, 401, 301};
+            batchContract.geometry.emplace(target.hwnd, geometry::WindowFacts{
+                {100, 100, 401, 301}, {0, 0, 1920, 1080}, {0, 0, 1920, 1040},
+                96, 1, false, geometry::CornerPreference::Round, geometry::CornerEligibility::StandardFrame});
+            require(SUCCEEDED(batch.ApplyBatch(batchContract.model.Observe(target, Dirty::Lifecycle, 0))),
+                "Submit both native Host publication candidates without draining worker messages");
+        }
+        const auto drainTwo = [&] {
+            const auto deadline = GetTickCount64() + 10000;
+            while (batch.queue_->Status().ready < 2 && GetTickCount64() < deadline) Sleep(5);
+            require(batch.queue_->Status().ready == 2, "Accumulate two actual ready results before one Host drain");
+            MSG notification{};
+            require(PeekMessageW(&notification, batch.window_, rendering::RenderQueue::ReadyMessage,
+                rendering::RenderQueue::ReadyMessage, PM_REMOVE) != FALSE, "Actual two-ready batch has one owned notification");
+            DispatchMessageW(&notification);
+        };
+        const auto initialCommits = batch.graphics_.PublicationStatus();
+        drainTwo();
+        require(batch.counters_.uploads == 2 && batch.graphics_.PublicationStatus().commits == initialCommits.commits + 1 &&
+            batch.graphics_.PublicationStatus().waits == initialCommits.waits + 1 &&
+            batch.entries_.at(41000)->presentationVisible && batch.entries_.at(41001)->presentationVisible,
+            "Actual Host DrainRendered publishes two ready overlays using one native Commit and completion wait");
+        auto next = batch.committed_; ++next.revision; next.border_width_dip += 1;
+        batch.ApplyConfiguration(next);
+        for (const auto& target : targets)
+            require(SUCCEEDED(batch.ApplyBatch(batchContract.model.Observe(target, Dirty::Appearance, GetTickCount64()))),
+                "Prepare two replacement candidates for cross-target pumping regression");
+        batchContract.duringVisibilityProbe = [&] {
+            batchContract.duringVisibilityProbe = [&] {
+                auto entry = batch.Find(batch.entries_.at(41000)->state.target);
+                const auto target = entry->state.target;
+                batch.AdvanceRenderEpoch(*entry);
+                require(batch.PlaceAndShow(target) == S_FALSE, "Nested later-candidate probe submits a newer first-target request");
+                const auto deadline = GetTickCount64() + 10000;
+                while (batch.queue_->Status().ready == 0 && GetTickCount64() < deadline) Sleep(5);
+                MSG notification{};
+                require(batch.queue_->Status().ready == 1 && PeekMessageW(&notification, batch.window_,
+                    rendering::RenderQueue::ReadyMessage, rendering::RenderQueue::ReadyMessage, PM_REMOVE),
+                    "Nested newer first-target result has its own ready notification");
+                DispatchMessageW(&notification);
+                require(batch.entries_.at(41000)->presentationVisible && batch.entries_.at(41000)->render.prepared &&
+                    batch.entries_.at(41000)->render.prepared->token.appearanceRevision == batch.entries_.at(41000)->renderEpoch,
+                    "Nested newer first-target publication is current and visible before outer drain resumes");
+            };
+        };
+        const auto nestedCommits = batch.graphics_.PublicationStatus();
+        drainTwo();
+        require(batch.entries_.at(41000)->presentationVisible && batch.entries_.at(41001)->presentationVisible &&
+            batch.counters_.uploads == 4 && batch.graphics_.PublicationStatus().commits == nestedCommits.commits + 2,
+            "Outer gathered stale candidate cannot hide a newer first-target publication from later-candidate pumping");
+        next = batch.committed_; ++next.revision; next.border_width_dip += 1;
+        batch.ApplyConfiguration(next);
+        for (const auto& target : targets)
+            require(SUCCEEDED(batch.ApplyBatch(batchContract.model.Observe(target, Dirty::Appearance, GetTickCount64()))),
+                "Prepare two replacement candidates for gathered-target removal regression");
+        batchContract.duringVisibilityProbe = [&] {
+            batchContract.duringVisibilityProbe = [&] {
+                require(SUCCEEDED(batch.ApplyBatch(batchContract.model.Observe(DestroyedWindow{41000}, Dirty::Lifecycle, GetTickCount64()))),
+                    "Second candidate visibility probe retires already gathered first candidate");
+            };
+        };
+        const auto replacementCommits = batch.graphics_.PublicationStatus();
+        drainTwo();
+        require(!batch.entries_.contains(41000) && batch.entries_.at(41001)->render.prepared &&
+            batch.entries_.at(41001)->presentationVisible && batch.counters_.uploads == 5 &&
+            batch.graphics_.PublicationStatus().commits == replacementCommits.commits + 1 && batch.counters_.staleResults > 0,
+            "Actual Host batch discards a gathered target retired by later validation before native publication");
+        batch.Shutdown();
+    }
     {
         using namespace window_sweaters;
         ContractState pressureContract;

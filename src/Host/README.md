@@ -282,19 +282,32 @@ GPU requests stop after the tiles: the perimeter carries a `KnitAssembly` (the
 normalised frame, corner patch and cuff tiles, and per-side shader parameters)
 and no strip pixels. Both paths draw strips through `DrawKnitStrip`.
 
-On the receiver thread, `Overlay::Upload` publishes each side straight into its
+On the receiver thread, `Overlay::PrepareUpload` draws each side straight into its
 DirectComposition surface. For a GPU perimeter, `KnitAssembler` first draws the
 colour and height strips with hardware D2D on the shared D3D11 device. Embedded
 HLSL then applies relief lighting, fray, drop shadow and the content cut-out. A
 CPU perimeter uploads its shaded strip and uses the same cut-out shader. The
 cut-out is a signed-distance rounded rectangle, not D2D geometry coverage. Normal
-publication performs no GPU readback.
+publication performs no GPU readback. The host gathers at most eight ready
+perimeters, checks their current geometry and visibility, then publishes their
+prepared roots with one GPU submission, DirectComposition commit and completion
+wait. Standalone `Overlay::Upload` remains synchronous. Unattached roots can be
+discarded without changing retained content. Both previous content and replacement
+leases remain live until the batch completes. Commit or completion failure retires
+every affected native target before releasing either generation's resources.
+The host checks target lifetime and visibility again before showing completed
+content. If staging exhausts admission capacity, it completes the staged prefix
+and retries the next perimeter once before suppressing it.
 
 Shader execution is restricted to uploads; idle and pure movement do not submit
 draws. The local probe adds `renderer` and `shader_draws`; `shader_draws` counts
 GPU relief draws only and resets when the shared graphics device is recreated.
-GPU resource admission charges the colour and height upload textures and
-coordinate tables as transient GPU bytes, and charges no CPU strip bytes. The
+GPU resource admission reserves the whole upload working set before drawing:
+colour and height textures, tile bitmaps, coordinate tables and retained surfaces.
+Tile bitmap and coordinate-table cache leases receive budget from that reservation
+when populated, so persistent caches remain included in estimated GPU bytes after
+upload completion. CPU strip bytes are absent for GPU perimeters. Cache admission
+is bounded; quota pressure clears caches and retries admission once. The
 existing hardware-initialization WARP fallback remains; it does not change the
 selected renderer.
 

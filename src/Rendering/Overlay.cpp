@@ -85,8 +85,9 @@ HRESULT GraphicsDevice::Initialize(D3D_DRIVER_TYPE driver) noexcept {
     }
     if (FAILED(result)) return result;
     try {
-        shader_ = std::make_shared<GpuShader>(graphics_.Get());
-        assembler_ = std::make_shared<KnitAssembler>(graphics_.Get());
+        shader_ = std::make_shared<GpuShader>(graphics_.Get(), resources_);
+        assembler_ = std::make_shared<KnitAssembler>(graphics_.Get(), resources_);
+        publicationStats_ = std::make_shared<PublicationStatistics>();
     } catch (...) { return E_OUTOFMEMORY; }
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
@@ -140,6 +141,7 @@ HRESULT Overlay::Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& gra
     resources_ = graphics.ResourceOwner();
     shader_ = graphics.Shader();
     assembler_ = graphics.Assembler();
+    publicationStats_ = graphics.PublicationOwner();
     HRESULT result = composition_->CreateTargetForHwnd(window_, TRUE, target_.ReleaseAndGetAddressOf());
     if (FAILED(result)) return result;
     result = composition_->CreateVisual(visual_.ReleaseAndGetAddressOf());
@@ -149,10 +151,10 @@ HRESULT Overlay::Create(HINSTANCE instance, HWND hostWindow, GraphicsDevice& gra
 
 HRESULT Overlay::UploadPiece(const KnitPerimeter& perimeter, std::size_t side, const RECT& exclusion,
     float radiusPixels, float tuckPixels, Microsoft::WRL::ComPtr<IDCompositionSurface>& surface,
-    knitting::RasterImage* uploadedPixels) noexcept {
+    knitting::RasterImage* uploadedPixels, ResourceLedger::Lease* reservation) noexcept {
     const auto& piece = perimeter.pieces[side];
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> colour, heights;
-    HRESULT result = perimeter.assembly ? assembler_->Assemble(perimeter, side, colour, heights)
+    HRESULT result = perimeter.assembly ? assembler_->Assemble(perimeter, side, colour, heights, reservation)
         : shader_->Upload(piece.image, colour);
     if (FAILED(result)) return result;
     result = composition_->CreateSurface(piece.width, piece.height,
@@ -182,7 +184,7 @@ HRESULT Overlay::UploadPiece(const KnitPerimeter& perimeter, std::size_t side, c
     mask.hole = mask.right > mask.left && mask.bottom > mask.top;
     const KnitSources sources{piece.width, piece.height, colour.Get(), heights.Get(),
         perimeter.assembly ? &perimeter.assembly->parameters[side] : nullptr};
-    if (SUCCEEDED(result)) result = shader_->Render(sources, mask, target.Get(), offset);
+    if (SUCCEEDED(result)) result = shader_->Render(sources, mask, target.Get(), offset, reservation);
     if (SUCCEEDED(result) && uploadedPixels)
         result = ReadRegion(texture.Get(), subresource, offset, piece.width, piece.height, *uploadedPixels);
     target.Reset();
@@ -197,6 +199,18 @@ HRESULT Overlay::UploadPiece(const KnitPerimeter& perimeter, std::size_t side, c
 HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RECT& bounds,
     const RECT& clip, const RECT& exclusion, float radiusPixels, float tuckPixels,
     std::array<knitting::RasterImage, 4>* uploadedPixels) noexcept {
+    HRESULT result = PrepareUpload(std::move(perimeter), bounds, clip, exclusion,
+        radiusPixels, tuckPixels, uploadedPixels);
+    if (FAILED(result)) return result;
+    Overlay* overlay = this;
+    result = PublishUploads({&overlay, 1});
+    return FAILED(result) ? result : UpdatePlacement(bounds, clip);
+}
+
+HRESULT Overlay::PrepareUpload(std::shared_ptr<const KnitPerimeter> perimeter, const RECT& bounds,
+    const RECT& clip, const RECT& exclusion, float radiusPixels, float tuckPixels,
+    std::array<knitting::RasterImage, 4>* uploadedPixels) noexcept {
+    DiscardUpload();
     if (!window_ || !perimeter || !perimeter->width || !perimeter->height ||
         perimeter->width > 32768 || perimeter->height > 32768 ||
         std::int64_t{bounds.right} - bounds.left != perimeter->width ||
@@ -216,7 +230,12 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
     }
     if (bytes > 64ull * 1024 * 1024) return E_OUTOFMEMORY;
     ResourceLedger::Lease reservation;
-    const auto admitted=resources_->Reserve(perimeter,reservation);
+    auto admitted=resources_->Reserve(perimeter,reservation);
+    if (admitted == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA)) {
+        shader_->ClearCache();
+        assembler_->ClearCache();
+        admitted = resources_->Reserve(perimeter, reservation);
+    }
     if (FAILED(admitted)) return admitted;
     Microsoft::WRL::ComPtr<IDCompositionVisual> nextRoot;
     std::array<Microsoft::WRL::ComPtr<IDCompositionSurface>, 4> surfaces;
@@ -224,7 +243,7 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
     for (std::size_t i = 0; i < surfaces.size() && SUCCEEDED(result); ++i) {
         const auto& piece = perimeter->pieces[i];
         result = UploadPiece(*perimeter, i, exclusion, radiusPixels, tuckPixels, surfaces[i],
-            uploadedPixels ? &(*uploadedPixels)[i] : nullptr);
+            uploadedPixels ? &(*uploadedPixels)[i] : nullptr, &reservation);
         Microsoft::WRL::ComPtr<IDCompositionVisual> child;
         if (SUCCEEDED(result)) result = composition_->CreateVisual(child.ReleaseAndGetAddressOf());
         if (SUCCEEDED(result)) result = child->SetContent(surfaces[i].Get());
@@ -235,18 +254,60 @@ HRESULT Overlay::Upload(std::shared_ptr<const KnitPerimeter> perimeter, const RE
     if (FAILED(result)) return result;
     result = nextRoot->SetClip(D2D1::RectF(static_cast<float>(clip.left), static_cast<float>(clip.top),
         static_cast<float>(clip.right), static_cast<float>(clip.bottom)));
-    if (SUCCEEDED(result)) result = target_->SetRoot(nextRoot.Get());
-    if (SUCCEEDED(result)) result = composition_->Commit();
-    if (SUCCEEDED(result)) result = composition_->WaitForCommitCompletion();
-    if (FAILED(result)) { Destroy(); return result; }
-    ++commits_;
-    visual_ = std::move(nextRoot);
-    surfaces_ = std::move(surfaces);
-    perimeter_ = std::move(perimeter);
-    reservation.EndUpload();
-    resourceLease_=std::move(reservation);
-    clip_ = clip;
-    return UpdatePlacement(bounds, clip);
+    if (FAILED(result)) return result;
+    pendingUpload_.emplace(PendingUpload{std::move(reservation), std::move(nextRoot),
+        std::move(surfaces), std::move(perimeter), clip});
+    ++uploadId_;
+    return S_OK;
+}
+
+HRESULT Overlay::PublishUploads(std::span<Overlay* const> overlays) noexcept {
+    if (overlays.empty()) return S_FALSE;
+    if (overlays.size() > 8 || !overlays.front()) return E_INVALIDARG;
+    const auto composition = overlays.front()->composition_;
+    for (std::size_t i = 0; i < overlays.size(); ++i) {
+        const auto overlay = overlays[i];
+        if (!overlay || !overlay->window_ || !overlay->target_ || !overlay->pendingUpload_ ||
+            !composition || overlay->composition_.Get() != composition.Get() ||
+            std::find(overlays.begin(), overlays.begin() + i, overlay) != overlays.begin() + i)
+            return E_INVALIDARG;
+    }
+    HRESULT result = overlays.front()->shader_->Submit();
+    for (const auto overlay : overlays) {
+        if (FAILED(result)) break;
+        result = overlay->target_->SetRoot(overlay->pendingUpload_->visual.Get());
+        if (FAILED(result)) break;
+    }
+    if (SUCCEEDED(result)) {
+        ++overlays.front()->publicationStats_->commits;
+        result = composition->Commit();
+    }
+    if (SUCCEEDED(result)) {
+        ++overlays.front()->publicationStats_->waits;
+        result = composition->WaitForCommitCompletion();
+    }
+    if (FAILED(result)) {
+        for (const auto overlay : overlays) {
+            overlay->Hide();
+            overlay->target_.Reset();
+            DestroyWindow(overlay->window_);
+            overlay->window_ = nullptr;
+        }
+        for (const auto overlay : overlays) overlay->Destroy();
+        return result;
+    }
+    for (const auto overlay : overlays) {
+        auto& pending = *overlay->pendingUpload_;
+        overlay->visual_ = std::move(pending.visual);
+        overlay->surfaces_ = std::move(pending.surfaces);
+        overlay->perimeter_ = std::move(pending.perimeter);
+        pending.lease.EndUpload();
+        overlay->resourceLease_ = std::move(pending.lease);
+        overlay->clip_ = pending.clip;
+        ++overlay->commits_;
+        overlay->DiscardUpload();
+    }
+    return S_OK;
 }
 
 HRESULT Overlay::UpdatePlacement(const RECT& next, const RECT& clip) noexcept {
@@ -291,6 +352,7 @@ void Overlay::Destroy() noexcept {
     resources_.reset();
     shader_.reset();
     assembler_.reset();
+    publicationStats_.reset();
     if (window_) DestroyWindow(window_);
     window_ = nullptr;
     bounds_ = clip_ = {};
@@ -299,9 +361,10 @@ void Overlay::Destroy() noexcept {
 
 void Overlay::ReleaseContent() noexcept {
     Hide();
+    DiscardUpload();
     if (!perimeter_ && !visual_) return;
     auto detached=target_?target_->SetRoot(nullptr):S_OK;
-    if (SUCCEEDED(detached) && composition_) {
+    if (SUCCEEDED(detached) && target_ && composition_) {
         detached=composition_->Commit();
         if (SUCCEEDED(detached)) detached=composition_->WaitForCommitCompletion();
     }

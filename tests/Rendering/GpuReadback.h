@@ -29,37 +29,45 @@ inline HRESULT Complete(ID3D11Device* device) noexcept {
 }
 
 struct Gpu {
-    explicit Gpu(ID3D11Device* device) noexcept : shader(device), assembler(device) {}
+    explicit Gpu(ID3D11Device* device, std::shared_ptr<ResourceLedger> resources = {})
+        : shader(device, resources), assembler(device, std::move(resources)) {}
     ID3D11Device* Device() const noexcept { return shader.Device(); }
     std::uint64_t DrawCount() const noexcept { return shader.DrawCount(); }
     GpuShader shader;
     KnitAssembler assembler;
 };
 
-inline HRESULT Shade(Gpu& gpu, const KnitPerimeter& perimeter, std::size_t side,
+inline HRESULT Shade(Gpu& gpu, const KnitSources& sources,
     Microsoft::WRL::ComPtr<ID3D11Texture2D>& texture) noexcept {
     using Microsoft::WRL::ComPtr;
     texture.Reset();
+    if (!gpu.Device()) return E_INVALIDARG;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = sources.width; desc.Height = sources.height;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    HRESULT result = gpu.Device()->CreateTexture2D(&desc, nullptr, &texture);
+    ComPtr<ID3D11RenderTargetView> target;
+    if (SUCCEEDED(result)) result = gpu.Device()->CreateRenderTargetView(texture.Get(), nullptr, &target);
+    if (SUCCEEDED(result)) result = gpu.shader.Render(sources, {}, target.Get(), {});
+    return result;
+}
+
+inline HRESULT Shade(Gpu& gpu, const KnitPerimeter& perimeter, std::size_t side,
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>& texture) noexcept {
+    using Microsoft::WRL::ComPtr;
     if (!gpu.Device() || side >= perimeter.pieces.size()) return E_INVALIDARG;
     const auto& piece = perimeter.pieces[side];
     ComPtr<ID3D11ShaderResourceView> colour, heights;
     HRESULT result = perimeter.assembly ? gpu.assembler.Assemble(perimeter, side, colour, heights)
         : gpu.shader.Upload(piece.image, colour);
     if (FAILED(result)) return result;
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = piece.width; desc.Height = piece.height;
-    desc.MipLevels = desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET;
-    result = gpu.Device()->CreateTexture2D(&desc, nullptr, &texture);
-    ComPtr<ID3D11RenderTargetView> target;
-    if (SUCCEEDED(result)) result = gpu.Device()->CreateRenderTargetView(texture.Get(), nullptr, &target);
     const KnitSources sources{piece.width, piece.height, colour.Get(), heights.Get(),
         perimeter.assembly ? &perimeter.assembly->parameters[side] : nullptr};
-    if (SUCCEEDED(result)) result = gpu.shader.Render(sources, {}, target.Get(), {});
-    return result;
+    return Shade(gpu, sources, texture);
 }
 
 inline HRESULT Readback(ID3D11Texture2D* texture, knitting::RasterImage& image) noexcept {

@@ -565,6 +565,47 @@ void AuxiliaryChartTilesAndPathQuotas() {
           "Chart path quota stops before native scratch/path allocation");
 }
 
+void GpuAuxiliaryReadyBytes() {
+    Receiver receiver;
+    receiver.Start();
+    auto request = Request();
+    request.frame.renderer = Renderer::Gpu;
+    knitting::ChartAppearance look;
+    look.flags = designs::ChartSolidCorners | designs::ChartOuterCuff;
+    look.cornerArgb = 0xff663322;
+    look.cuffArgb = 0xff112244;
+    request.tile.chart = std::make_shared<const knitting::Chart>("gpu-auxiliary-chart", 1, 2, 2,
+        std::vector<std::uint32_t>{0, 0xffaabbcc, 0xffaabbcc, 0}, look);
+    Check(receiver.queue->Submit(request) == S_OK, "GPU chart with both auxiliary tiles");
+    receiver.Wait([&] { return receiver.queue->Status().ready == 1; });
+    const auto readyBytes = receiver.queue->Status().readyBytes;
+    receiver.Collect(1);
+    const auto& p = Perimeter(receiver.results[0]);
+    Check(p.assembly && p.assembly->patch && p.assembly->cuff
+        && p.tile != p.assembly->patch && p.tile != p.assembly->cuff
+        && p.assembly->patch != p.assembly->cuff, "GPU chart retains three distinct tiles");
+    const auto pixels = [](const knitting::Tile& tile) {
+        return (std::size_t{tile.image.width} * tile.image.height
+            + std::size_t{tile.height.width} * tile.height.height) * sizeof(std::uint32_t);
+    };
+    const auto mainOnly = sizeof(RenderReady) + sizeof(RenderRequest) + sizeof(KnitPerimeter)
+        + 2 * request.tile.chart->ByteSize() + pixels(*p.tile);
+    const auto expected = mainOnly + pixels(*p.assembly->patch) + pixels(*p.assembly->cuff);
+    Check(readyBytes == expected, "GPU ready bytes include main, corner and cuff pixel storage exactly once");
+    Check(receiver.queue->Status().readyBytes == 0, "Draining GPU auxiliary tiles releases ready bytes");
+    RenderQueueLimits limits;
+    limits.maxReadyBytes = expected - 1;
+    Check(mainOnly + sizeof(knitting::Tile) < limits.maxReadyBytes,
+        "GPU ready quota lies between main-only estimate and actual retained bytes");
+    Receiver bounded;
+    bounded.Start(limits);
+    Check(bounded.queue->Submit(request) == S_OK, "Over-budget auxiliary GPU request gets typed completion");
+    bounded.Collect(1);
+    ExpectError(bounded.results[0], RenderErrorKind::ResourceQuota, Quota);
+    Check(bounded.queue->Status().renderPreparations == 0,
+        "GPU ready estimate rejects auxiliary tile bytes before rendering");
+}
+
 void DenseChartTransientReservationCoversActualCorePeak() {
     static_assert(sizeof(knitting::detail::YarnCell) == 12);
     constexpr std::size_t cellBytes = 2501568;
@@ -1033,6 +1074,7 @@ int main() {
         std::pair{"ready cancellation/coalesced wake", ReadyCancellationAndNotificationCoalescing},
         std::pair{"active/ready appearance retirement", NewAppearanceRetiresActiveAndReadyResults},
         std::pair{"auxiliary chart counters/path quota", AuxiliaryChartTilesAndPathQuotas},
+        std::pair{"GPU auxiliary ready bytes/quota", GpuAuxiliaryReadyBytes},
         std::pair{"dense chart actual transient peak", DenseChartTransientReservationCoversActualCorePeak},
         std::pair{"cold-start configuration revision zero", ColdStartConfigurationRevisionZero},
         std::pair{"bounded lifetime ledger", BoundedLifetimeLedger},

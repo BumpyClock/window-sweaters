@@ -20,13 +20,26 @@ lighting, fray erosion and drop shadow. CPU constructs one-dimensional coordinat
 tables so GPU reciprocal rounding cannot change integer fray hashes or shadow
 ownership at exact pixel-grid ties.
 
+Monitor DPI changes reuse the same immutable colour and height tile pixels when
+the raster scale and other raster inputs stay equal. Strip geometry, physical
+dimensions and sampling still use the current frame scale. The native tile bitmap
+cache also reuses these tiles. Coordinate textures are cached by length, origin
+and scale. Both caches reserve aggregate GPU quota before allocation; overlay
+release retains cached bytes, and cache eviction or device destruction releases
+them.
+
 Both paths draw each side straight into its retained DComp surface. The content
 cut-out is applied in HLSL as a signed-distance rounded rectangle; the CPU path
 uses a copy shader with the same cut-out. Production does not read back GPU
 pixels, run an idle render loop, or resubmit draws for pure movement. Queue and
-resource-ledger admission charge GPU upload textures and coordinate tables as
-transient GPU bytes. GPU allocations remain estimates, not driver residency
-measurements.
+resource-ledger admission reserve the GPU working set before preparation. The
+queue estimate includes transient strip and coordinate bytes. The resource ledger
+also reserves worst-case native tile and coordinate cache bytes, transfers actual
+allocations to persistent cache leases, and drops unused cache budget and strip
+temporaries after publication. GPU allocations remain estimates, not driver residency
+measurements. Retained CPU accounting includes the main tile and GPU assembly
+corner/cuff tiles, deduplicated by pointer in the resource ledger. Queue ready
+admission includes all three tiles for GPU chart requests.
 
 The mitre masks overlap by 1/8 pixel. Without the overlap, their aliased 45°
 edges pass through pixel centres, and software and hardware D2D resolve those
@@ -56,20 +69,35 @@ every theme with four width/scale combinations (2/1x, 10/1.25x, 24/2x, 64/3x),
 both materials and square/rounded corners, every authored chart, both sampling
 modes, both anchors, dimming, arbitrary literal RGB chart cells, fractional and
 extreme supported scales, physical padding and tiny frames. Pixel readbacks
-are compared with CPU reference output. WARP D2D matches software D2D, so WARP
+are compared with CPU reference output. Every matrix case also uploads identical
+software-prepared colour and height strips to the shader and applies CPU ring
+lighting, relief, fray and shadow to those same inputs. This shader-only check
+allows at most two channel levels on both hardware and WARP. Adapter metadata
+records its separate maximum error and the number of pixels changed above the
+tolerance by each shading stage. The matrix requires all four stages to change
+pixels above tolerance and includes one shared solid tile used for both corner
+and cuff brushes.
+
+The complete strip-assembly comparison has a separate gate. WARP D2D matches software D2D, so WARP
 runs keep a two-level maximum channel error. Hardware D2D anti-aliases geometry
 edges and resolves nearest-neighbour texel ties differently, so hardware runs
 allow up to 96 levels per channel for linear sampling, and at most 64 pixels
-beyond 96 levels for nearest sampling. On the AMD Radeon 860M the measured worst
-cases were 88 and 34. `GpuShaderTests --strip-probe` compares software and
-hardware strips before shading. Premultiplied bounds and transparent client interiors are
-asserted independently.
+beyond 96 levels for nearest sampling. `GpuShaderTests --strip-probe` compares software and
+hardware strips before shading. `--shader-only` runs only the identical-input
+matrix and cache contracts. `--contracts-only` runs shared corner/cuff parity,
+cache quota and hidden upload/recreation contracts. `--benchmarks-only` runs
+hardware timings. Premultiplied bounds and transparent client interiors are
+asserted independently. Upload-mask samples lie inside retained strips at a straight
+edge and rounded corner; an unmasked readback proves the excluded samples contain
+opaque yarn. Mask fixtures use a six-DIP source tuck and a one-DIP upload tuck
+to test upload exclusion independently of the source ring cutout. Hidden DComp mask checks run CPU and GPU frames at 1x, 1.25x, 1.5x
+and 2x with square, round-small and round corners.
 
 Hidden Host contracts additionally cover all catalogue selections, stitch/material
 variants, clipping, lifetime gates, movement reuse, aggregate quotas and injected
 graphics recovery. GPU selection is asserted at preparation and draw submission.
-The fixture probe reports `renderer` and `shader_draws`; the latter counts draw
-submissions for the current graphics-device generation and resets on recreation.
+The fixture probe reports `renderer` and `shader_draws`; the latter counts GPU
+relief draws only for the current graphics-device generation and resets on recreation.
 Recovery tests recreate real D3D/DComp objects but do not force an actual driver
 reset. Retained-idle checks observe draw counters, not GPU power consumption.
 
@@ -89,8 +117,15 @@ reset. Retained-idle checks observe draw counters, not GPU power consumption.
   DComp commit completion and explicit GPU completion. No PNG or pixel readback
   is timed. Commit timing can include compositor cadence and scheduling.
   Each sample also records retained CPU bytes and estimated GPU surface bytes
-  after upload; these exclude queue/tile/scratch caches, total process memory,
-  the hardware tile-bitmap cache and transient shader resources.
+  after upload. Estimated GPU bytes include native tile/coordinate caches and
+  retained surfaces; they exclude total process memory and queue/CPU tile/scratch
+  caches. Upload-transient resources are released after publication.
+- `multi-overlay-benchmark.csv`: eight hidden GPU overlays, each with a different
+  frame size, published individually or in one batch. Each sample includes DComp
+  completion, explicit GPU completion, commit/wait counts and native cache upload
+  counts. Each theme/publication mode has one cold and nine warm samples; the
+  cold sample starts with a new graphics device. Preparation of CPU tiles and
+  creation of windows/devices are outside the timing.
 - Summary CSVs: means, medians and ranges for five cold and twenty warm samples
   per backend/theme, using 620x140 DIP at 2x for Spotify, Messages and Notes.
 
@@ -101,3 +136,18 @@ These are in-process comparison measurements, not a claim about whole-desktop
 performance. Hardware results must not be inferred from WARP. The D3D11 texture
 dimension limit is checked explicitly and shader failures follow the existing
 HRESULT publication/recovery gates.
+
+## Recorded batching measurement
+
+[Raw samples from 2026-10-12](measurements/gpu-batching-2026-10-12.csv) were
+captured on Windows with AMD Radeon 860M graphics using the x64 Release build
+of this implementation before commit. Eight hidden overlays with different frame
+sizes were published individually or in one batch. Each theme/publication mode
+has one cold sample followed by nine warm samples. Timing includes GPU completion
+and DirectComposition commit completion; device/window creation and CPU tile
+preparation are excluded.
+
+Spotify's warm median fell from 133.579 ms to 66.7576 ms with batching. Commits
+and waits fell from eight each to one each. All 54 warm samples recorded zero
+native tile and coordinate uploads. These measurements cover hidden publication,
+not whole-desktop presentation.

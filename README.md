@@ -79,6 +79,20 @@ The CPU backend uses the same cut-out shader to publish its CPU-shaded strips.
 Neither backend runs a continuous render loop or regenerates pixels for pure
 movement. Shader failures are reported rather than falling back to CPU rendering.
 
+`TileSpec` describes reusable raster content; device scale belongs to
+`KnitFrameSpec` and `KnitPerimeter`, so monitor DPI changes share tile pixels.
+
+The shared graphics device reuses native tile bitmaps and separate brushes for
+main, corner and cuff transforms within a 32 MiB cache. Shader coordinate tables
+reuse the exact CPU division results within a 1 MiB cache. Both evict before new
+allocations and count retained GPU bytes against the same admission limit as
+border surfaces. These are allocation estimates, not measured driver residency.
+Cache charges remain after an overlay releases its border. Clearing shared
+device caches releases charges after any staged uploads finish or are canceled.
+Oversized tiles use charged temporary
+uploads. Each publication batch submits drawing once, then commits and waits
+once for all prepared borders; pure movement reuses the published surfaces.
+
 Hardware Direct2D anti-aliases edges differently from software Direct2D, so GPU
 borders can differ slightly from the CPU reference at partly covered edge pixels
 and at nearest-neighbour stitch texel ties.
