@@ -5,6 +5,7 @@ param(
     [string]$Version = '0.1.0.0',
     [ValidateSet('x64', 'ARM64')][string[]]$Architectures = @('x64', 'ARM64'),
     [string]$NativeOutputRoot,
+    [string]$MSBuild,
     [switch]$Bundle
 )
 $ErrorActionPreference = 'Stop'
@@ -13,11 +14,14 @@ if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$' -or @($Version.Split('.') | Where-
 }
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
 if ($NativeOutputRoot) { $NativeOutputRoot = [IO.Path]::GetFullPath($NativeOutputRoot).TrimEnd('\') }
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-if (!(Test-Path $vswhere)) { throw 'Visual Studio Installer vswhere.exe is required.' }
-$msbuild = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\Current\Bin\MSBuild.exe' | Select-Object -First 1
-if (!$msbuild) { throw 'Install Visual Studio MSBuild and Windows Application Packaging Project tools.' }
-$vs = [IO.Path]::GetFullPath((Join-Path (Split-Path $msbuild -Parent) '..\..\..'))
+if (!$MSBuild) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (!(Test-Path $vswhere)) { throw 'Visual Studio Installer vswhere.exe is required.' }
+    $MSBuild = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\Current\Bin\MSBuild.exe' | Select-Object -First 1
+    if (!$MSBuild) { throw 'Install Visual Studio MSBuild and Windows Application Packaging Project tools.' }
+}
+if (!(Test-Path -LiteralPath $MSBuild -PathType Leaf)) { throw "MSBuild not found: $MSBuild" }
+$vs = [IO.Path]::GetFullPath((Join-Path (Split-Path $MSBuild -Parent) '..\..\..'))
 foreach ($required in @(
     (Join-Path $vs 'MSBuild\Microsoft\DesktopBridge\Microsoft.DesktopBridge.targets'),
     (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\10.0.26100.0\x64\makeappx.exe')
@@ -44,13 +48,14 @@ foreach ($platform in $Architectures) {
     $arguments = @(
         (Join-Path $root 'packaging\WindowSweaters.Package.wapproj'),
         '/nologo', '/v:minimal', '/t:Build', '/p:Configuration=Release', "/p:Platform=$platform",
-        "/p:PackageChannel=$Channel", "/p:PackageVersion=$Version", '/p:AppxPackageSigningEnabled=false'
+        "/p:PackageChannel=$Channel", "/p:PackageVersion=$Version", '/p:AppxPackageSigningEnabled=false',
+        '/p:AppxBundle=Never', '/p:BuildingInsideVisualStudio=false'
     )
     if ($NativeOutputRoot) { $arguments += "/p:NativeOutputRoot=$NativeOutputRoot" }
     if ($StoreIdentityProps) {
         $arguments += "/p:StoreIdentityProps=$((Resolve-Path -LiteralPath $StoreIdentityProps).Path)"
     }
-    & $msbuild @arguments
+    & $MSBuild @arguments
     if ($LASTEXITCODE -ne 0) { throw "Unsigned $platform package build/validation failed (MSBuild exit $LASTEXITCODE)." }
 }
 if ($Bundle) {

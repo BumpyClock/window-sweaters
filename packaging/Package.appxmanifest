@@ -26,12 +26,6 @@
         <uap:DefaultTile Square71x71Logo="Assets\Square71x71Logo.png"
                          Wide310x150Logo="Assets\Wide310x150Logo.png" Square310x310Logo="Assets\Square310x310Logo.png" />
       </uap:VisualElements>
-    </Application>
-    <Application Id="Host" Executable="WindowSweaters.Host.exe" EntryPoint="Windows.FullTrustApplication"
-                 uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
-      <uap:VisualElements DisplayName="Window Sweaters background host (Development)" Description="Draw knitted window borders."
-                          BackgroundColor="#173638" Square150x150Logo="Assets\Square150x150Logo.png"
-                          Square44x44Logo="Assets\Square44x44Logo.png" AppListEntry="none" />
       <Extensions>
         <desktop:Extension Category="windows.startupTask" Executable="WindowSweaters.Host.exe" EntryPoint="Windows.FullTrustApplication">
           <desktop:StartupTask TaskId="WindowSweatersStartup" Enabled="false" DisplayName="Window Sweaters (Development)" />

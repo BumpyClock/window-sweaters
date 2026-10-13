@@ -171,7 +171,6 @@ foreach ($relative in @($payload.Keys | Where-Object { $_ -match '(?i)\.(dll|exe
         }
     }
 }
-& (Join-Path $PSScriptRoot 'Generate-Assets.ps1') -OutputDirectory (Join-Path $PSScriptRoot 'Assets')
 foreach ($asset in Get-ChildItem (Join-Path $PSScriptRoot 'Assets') -Filter '*.png') {
     Add-Payload $asset.FullName "Assets\$($asset.Name)" 'original yarn artwork'
 }
@@ -209,10 +208,9 @@ $manifest.Package.Identity.Version = $Version
 $manifest.Package.Identity.ProcessorArchitecture = $Platform.ToLowerInvariant()
 $manifest.Package.Properties.DisplayName = $DisplayName
 $manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName
-$applications = @($manifest.Package.Applications.Application)
-$applications[0].VisualElements.DisplayName = $DisplayName
-$applications[1].VisualElements.DisplayName = "$DisplayName background host"
-$applications[1].Extensions.Extension.StartupTask.DisplayName = $DisplayName
+$settings = $manifest.Package.Applications.Application
+$settings.VisualElements.DisplayName = $DisplayName
+$settings.Extensions.Extension.StartupTask.DisplayName = $DisplayName
 $manifest.Save((Join-Path $stagePath 'AppxManifest.xml'))
 [void](& (Join-Path $PSScriptRoot 'Test-NativeBuild.ps1') -Platform $Platform -NativeOutputRoot $NativeOutputRoot)
 foreach ($exe in $applicationInputs.Keys) {

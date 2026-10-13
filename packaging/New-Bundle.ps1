@@ -47,6 +47,7 @@ foreach ($platform in $Architectures) {
 $first = $validated[$Architectures[0].ToLowerInvariant()].Report
 foreach ($entry in $validated.Values) {
     if ($entry.Report.Identity -ne $first.Identity -or $entry.Report.Publisher -ne $first.Publisher -or
+        $entry.Report.PublisherDisplayName -cne $first.PublisherDisplayName -or
         $entry.Report.SourceSHA256 -ne $first.SourceSHA256) {
         throw 'All bundle inputs must have identical identity, publisher, version and corresponding-source hashes.'
     }
@@ -116,6 +117,9 @@ try {
                 $appIdentity.Publisher -ne $first.Publisher -or $appIdentity.Version -ne $Version) {
                 throw "Unbundled $architecture identity differs from its validation report."
             }
+            if ($appManifest.Package.Properties.PublisherDisplayName -cne $report.PublisherDisplayName) {
+                throw "Unbundled $architecture publisher display name differs from its validation report."
+            }
         } finally { $msix.Dispose() }
         $innerReports += [ordered]@{
             Platform = $report.Platform; Architecture = $architecture; Package = $report.Package; SHA256 = $report.SHA256; Signed = $false
@@ -132,7 +136,7 @@ foreach ($entry in $validated.Values) {
 }
 [ordered]@{
     Bundle = [IO.Path]::GetFileName($bundle); SHA256 = (Get-FileHash -LiteralPath $bundle).Hash
-    Identity = $first.Identity; Publisher = $first.Publisher; Version = $Version
+    Identity = $first.Identity; Publisher = $first.Publisher; PublisherDisplayName = $first.PublisherDisplayName; Version = $Version
     Architectures = @($innerReports.Architecture | Sort-Object)
     InnerPackages = @($innerReports | Sort-Object Architecture); SourceSHA256 = $first.SourceSHA256
     SourceFiles = $first.SourceFiles

@@ -47,7 +47,9 @@ if (Test-Path -LiteralPath $archiveInventory -PathType Leaf) {
 } elseif (Test-Path -LiteralPath (Join-Path $rootPath '.git')) {
     $listed = & git -C $rootPath ls-files --cached --others --exclude-standard
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate repository corresponding source.' }
-    $paths = @($listed | Where-Object { $_ -ne $inventoryRelative -and (Test-SourcePath $_) } | Sort-Object -Unique)
+    $deleted = @(& git -C $rootPath ls-files --deleted)
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate deleted repository source.' }
+    $paths = @($listed | Where-Object { $_ -notin $deleted -and $_ -ne $inventoryRelative -and (Test-SourcePath $_) } | Sort-Object -Unique)
 } else {
     throw 'Corresponding source requires repository .git metadata or packaging\SourceInventory.json from the distributed source archive.'
 }

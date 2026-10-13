@@ -19,7 +19,7 @@ Or use Visual Studio 2026 Enterprise MSBuild directly:
 
 ```powershell
 & 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe' `
-  .\packaging\WindowSweaters.Package.wapproj /t:Build /p:Configuration=Release /p:Platform=x64
+  .\packaging\WindowSweaters.Package.wapproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:AppxBundle=Never
 ```
 
 That command-line WAP build still skips launch (`DoNotLaunchApp` is true
@@ -83,6 +83,38 @@ After Stop Debugging, Visual Studio **Start Without Debugging** launched a
 fresh packaged Settings process with the same responsive Connected UI. Both
 launch paths were verified.
 
+## Visual Studio bundles
+
+Visual Studio **Publish > Create App Packages** can request **Generate app
+bundle: Always** with **Release x64** and **Release ARM64** selected.
+`AppxBundle=Always` routes bundle creation through the same validated MakeAppx
+path as `scripts\package.ps1 -Bundle`, instead of WAP's PRI-splitting pipeline.
+The selected `AppxBundlePlatforms` must be `x64`, `ARM64`, or both separated
+by `|`; duplicate and unsupported architectures are rejected.
+
+The bundle build refreshes native Release outputs for every selected
+architecture, builds and validates each unsigned WAP MSIX, then bundles those
+MSIX files without changing their bytes. The final bundle path is reported
+to Visual Studio through its packaging information file and build output.
+Artifacts remain under `packaging\artifacts\<PackageChannel>\<PackageVersion>`.
+Use `AppxBundle=Never` for a single-platform MSIX and the normal development
+build path. A saved `Always` setting also creates a bundle on normal package
+builds; it is not limited to the publish wizard.
+
+`PackageChannel`, `PackageVersion`, and `StoreIdentityProps` remain the
+project's identity/version inputs. If the wizard sets
+`UapAppxPackageBuildMode` to `StoreUpload` or `StoreAndSideload` and
+`PackageChannel` is unset, WAP now selects Store. It previously kept the
+Development default, so Store-mode packages still used checked-in
+development metadata. An explicit Development channel with Store
+publishing mode is rejected. `scripts\package.ps1` still defaults to
+Development unless `-Channel Store`. Bundle creation does not enable
+signing, installation, Store association, upload, or publication. Store
+builds still require the local Partner Center identity file. Selecting
+wizard options that enable signing is rejected rather than silently
+producing a different artifact. ARM64 packaging validation does not
+establish ARM64 execution.
+
 ## Development versus Store
 
 The checked-in identity is **not a Store identity**:
@@ -93,33 +125,63 @@ The checked-in identity is **not a Store identity**:
 - Display name: `Window Sweaters (Development)`
 - Version: `0.1.0.0`
 
+The Store wizard previously generated that development metadata because
+`PackageChannel` stayed at its Development default while publishing mode
+was `StoreUpload` or `StoreAndSideload`. Store rejected PublisherDisplayName
+`Window Sweaters Development` because it does not match `Weakly Design`.
+WAP now selects Store for those publishing modes unless `PackageChannel`
+is already set, and rejects Development plus Store publishing mode. The
+CLI still defaults to Development unless `-Channel Store`.
+
 Store mode requires a local MSBuild property file. Copy
 `WindowSweaters.Store.props.example` to `WindowSweaters.Store.props.user`,
-then replace all three identity fields with the exact values from Partner Center
-**Product identity**. The `.user` file is git-ignored and contains no credentials.
-Development/example identities and incomplete values are rejected.
+then set `PackageName`, `PackagePublisher`, and
+`PackagePublisherDisplayName` to the exact Partner Center **Product
+identity** values. Use `Weakly Design` for the publisher display name.
+Do not invent `PackageName` or `PackagePublisher`; copy those from
+Partner Center. The `.user` file is git-ignored and contains no
+credentials. Development/example identities and incomplete values are
+rejected.
+
+Previously uploaded packages used the development identity and a hidden
+Host Application. Regenerate both architectures and a bundle in Store
+mode after building native Release outputs:
 
 ```powershell
-powershell.exe -NoProfile -File .\scripts\package.ps1 -Channel Store `
-  -StoreIdentityProps .\packaging\WindowSweaters.Store.props.user -Version 0.1.0.0
+.\scripts\build.ps1 -Configuration Release -Platform x64
+.\scripts\build.ps1 -Configuration Release -Platform ARM64
+.\scripts\package.ps1 -Channel Store `
+  -StoreIdentityProps .\packaging\WindowSweaters.Store.props.user `
+  -Version 0.1.0.0 -Architectures x64,ARM64 -Bundle
 ```
 
-Direct MSBuild properties: `PackageChannel`, `StoreIdentityProps`,
-`PackageVersion`. `StoreIdentityProps` is an
-absolute path when supplied to MSBuild directly. Store mode still creates an
-**unsigned artifact**, not a certified upload or publication. This project does
-not create `.msixupload` files or claim they are Store-ready.
+Unsigned Store artifacts are written to
+`packaging\artifacts\Store\<Version>`. Direct MSBuild properties:
+`PackageChannel`, `StoreIdentityProps`, `PackageVersion`.
+`StoreIdentityProps` is an absolute path when supplied to MSBuild
+directly. WAP Store builds emit per-architecture `.msixupload` files
+alongside each MSIX. The MakeAppx bundler produces the combined
+`.msixbundle`, not a combined upload wrapper. Artifact creation is not
+Store certification or publication.
 
 ## Manifest and runtime contract
 
-Settings is the primary Start menu entry. Host has `AppListEntry="none"`.
-Both apps are classic packaged processes with `uap10:RuntimeBehavior=
-"packagedClassicApp"` and `uap10:TrustLevel="mediumIL"`. The desktop startup
-extension belongs to Host, uses **TaskId** `WindowSweatersStartup` (not `Id`),
-and starts with `Enabled="false"`. Enabling/disabling startup is the app's
-separate consent flow; users can also disable it in Windows startup settings.
-Both executable files remain siblings at package root so companion launch can
-use the known package folder. Embedded PMv2/asInvoker manifests are verified.
+Settings is the only Application and stays visible (`AppListEntry`
+default). The package does not declare a second Host Application. Store
+certification requires a HeadlessAppBypass waiver for
+`AppListEntry="none"`, which is why the previously uploaded x64 and ARM64
+MSIX packages were rejected. Do not restore a hidden Host Application, set
+`AppListEntry="none"` on any Application, or add Host as a second Start
+shortcut. `WindowSweaters.Host.exe` remains a sibling payload at package
+root so companion launch can use the known package folder. Settings is a classic packaged process with
+`uap10:RuntimeBehavior="packagedClassicApp"` and
+`uap10:TrustLevel="mediumIL"`. The desktop `windows.startupTask`
+extension is nested under Settings, uses **TaskId** `WindowSweatersStartup`
+(not `Id`), `Executable="WindowSweaters.Host.exe"`, and starts with
+`Enabled="false"`. Package generation writes the same display name on
+Settings and that startup task. Enabling/disabling startup is the app's
+separate consent flow; users can also disable it in Windows startup
+settings. Embedded PMv2/asInvoker manifests are verified.
 Only staged copies of the two unsigned application EXEs have their CodeView
 PDB paths reduced to basenames; original build outputs are not modified.
 Other private paths cause a build failure rather than a code/literal rewrite.
@@ -169,8 +231,11 @@ The development delivery artifact is
 `packaging\artifacts\Development\0.2.0.0\WindowSweaters.Package_0.2.0.0_arm64_x64.msixbundle`.
 It is unsigned and has no installed-package qualification. Both architecture
 payloads validate against their source/build receipts; source archives are
-identical and reproducible without Git. Add the exact Partner Center identity
-and regenerate Store-channel artifacts before submission.
+identical and reproducible without Git. Previously uploaded Store packages
+are obsolete: they used development identity and a hidden Host
+Application. Regenerate Store-channel artifacts at
+`packaging\artifacts\Store\<Version>` with the Partner Center identity
+file. This does not upload, certify, or publish.
 `packaging\obj\inspection` contains the validated unpacked package.
 MakeAppx validation remains enabled. The verifier checks identity, minimum OS,
 architecture, sibling exes, app visibility, disabled startup, capability and
@@ -181,7 +246,9 @@ Original neutral yarn artwork is generated from fixed vector geometry in
 `Generate-Assets.ps1`: 44×44, 50×50 StoreLogo, 71×71, 150×150, 310×150 and
 310×310 PNGs, plus `WindowSweaters.ico` with 16, 20, 24, 32, 40, 48, 64 and
 256 px PNG frames from the same yarn-ball drawing. Regenerating the ICO leaves
-those PNG bytes unchanged. No fonts, third-party marks, catalogue plates or AI
+those PNG bytes unchanged. Packaging consumes the checked-in assets without
+regenerating them; asset authoring must finish before native builds record
+their source hashes. No fonts, third-party marks, catalogue plates or AI
 promotional images are used. Rerun the generator to reproduce them. Both native
 executables embed that shared ICO as resource 101 via `src\AppIcon.rc`. Host
 tray loads the embedded small icon with `LR_SHARED` instead of `IDI_APPLICATION`.
@@ -189,7 +256,8 @@ tray loads the embedded small icon with `LR_SHARED` instead of `IDI_APPLICATION`
 The package includes `LICENSE`, `NOTICE.md` and `SOURCE.txt`. Its accompanying
 source ZIP snapshots the current repository source, including uncommitted
 implementation, tests, build and package files; excluded local/generated files
-are not included. `SOURCE.txt` records that archive's SHA256. Keep the exact
+are not included. Those snapshots include uncommitted additions and edits and
+exclude working-tree deletions. `SOURCE.txt` records that archive's SHA256. Keep the exact
 archive available to recipients when redistributing. Review GPLv3 and Store
 distribution terms before publication; restore upstream dependencies from their
 pinned manifests and retain their own license/notice requirements.
@@ -242,7 +310,7 @@ The installed WAP pipeline attempts to merge runtime PRI indexes and loose
 WinUI resources, causing measured duplicate-resource errors. This project
 disables project PRI generation and preserves the App SDK PRI files as explicit
 payload. WAP's native bundle splitting also requires that generated project PRI;
-the `-Bundle` command instead uses SDK MakeAppx to bundle independently validated
+both Visual Studio `AppxBundle=Always` and the `-Bundle` command instead use SDK MakeAppx to bundle independently validated
 architecture-specific MSIX files without resource splitting. It unbundles the
 result and verifies every inner MSIX hash, architecture, identity, and version.
 WAP remains responsible for building each primary MSIX.

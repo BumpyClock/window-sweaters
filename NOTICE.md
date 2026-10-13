@@ -3,12 +3,7 @@
 This Windows implementation ports Window Sweaters by saragordic:
 https://github.com/saragordic/window-sweaters
 
-The reviewed source baseline is
-`a49dff52483dafdbe27f972bd271cd28d37cef1c`.
-Windows-specific adaptations use Win32, Direct2D, DirectComposition, and
-C++/WinRT WinUI 3 instead of the original macOS APIs.
-
-Window Sweaters is derived from JankyBorders by Felix Kratz:
+Window Sweaters is derived from Window Sweaters which is derived JankyBorders by Felix Kratz:
 https://github.com/FelixKratz/JankyBorders
 
 The existing GNU General Public License, version 3, is preserved in LICENSE.

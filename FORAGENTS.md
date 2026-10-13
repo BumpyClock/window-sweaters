@@ -1,0 +1,107 @@
+
+## Build and run
+
+From PowerShell at the repository root:
+
+```powershell
+.\scripts\build.ps1 -Configuration Debug -IncludeFixture
+.\scripts\build.ps1 -Configuration Release -IncludeFixture
+.\scripts\build.ps1 -Configuration Release -Platform ARM64
+.\scripts\test.ps1 -Configuration Debug -NoBuild
+```
+
+The build script accepts `-MSBuild <path>` for other Visual Studio editions or installation locations. Native artifacts are written to `out\<Platform>\<Configuration>`. ARM64 compilation requires the corresponding v145 toolchain. Cross-compilation does not prove execution on ARM64 hardware.
+
+After both Release builds, `.\scripts\package.ps1 -Architectures x64,ARM64 -Bundle`
+produces an unsigned development bundle. It validates matching architecture
+payloads and source/build receipts. See [packaging](packaging/README.md) for
+Partner Center identity setup and Visual Studio F5/Ctrl+F5 of
+`WindowSweaters.Package`. Signing, certificate trust, installation and
+Store submission remain separate operations.
+
+To iterate on chart designs, `python scripts\preview-designs.py` renders the Windows-authored themes as flat labelled strips to `out\design-preview.png`. Pass theme IDs to select themes, or `--all` for the whole catalogue. It shows chart cells only; the Knitting tests write knitted renders to `tests\Knitting\outputs`.
+
+For Computer Use verification, `.\scripts\test.ps1 -Desktop` builds the separate-process fixture and prints its executable path. It does not launch or interact with desktop applications. Launch `Fixture.exe` through Computer Use, then use the fixture's **Start test host** control. The host receives only that fixture's HWND in test mode. Stop it through **Stop test host** or the host tray's **Quit** command.
+
+The host now tracks ordinary windows through WinEvents and bounded reconciliation.
+Run `WindowSweaters.Host.exe` without arguments for production discovery.
+Fixture mode requires an explicitly selected fixture and seals its initial
+identity; it must not select other desktop applications. Pure movement reuses
+decoration, actual resize suppresses it until settlement, and hidden/minimized
+windows can recover without losing their lifetime.
+
+Open Settings from the tray and select **By app** for authored Windows mappings
+and patterns generated from each other app's icon, or **Shared Zigzag** for one motif with per-app colors.
+Manual original designs remain selectable. Settings saves choices through the
+host; closing Settings leaves decoration running.
+
+To use one base color everywhere, turn on **Use my base color for every sweater**
+and pick a color. Every sweater then knits on that base. Each design's other yarns
+shift to suit it, so the pattern stays readable and keeps the app's character.
+Imported PNG charts keep their exact pixels, and a precise application color from
+personal designs still wins. Turn the switch off to return to each app's own colors.
+
+Exterior borders are intentionally hidden for minimized, maximized, fullscreen,
+off-desktop, locked, and uncertain targets. Restore a window to ordinary size to
+see its sweater. Elevated (higher-integrity) windows are not decorated because Windows blocks z-ordering against them. An isolated `--preview-target` launch decorates only its selected
+lifetimes, not every application; it is separate from normal no-argument launch.
+
+Native knitting, settings, exclusions, and app resolution are connected and have
+desktop evidence in the parity ledger. Physical input/desktop transitions,
+aggregate compositor budgets, and Store-installed execution remain separate
+qualification gates.
+
+## GPU shader renderer
+
+The host renders borders through GPU strip assembly and shading. The former
+`--renderer` option is rejected. Stitch and chart tiles are generated on the CPU.
+The GPU draws the colour and height strips with hardware
+Direct2D when it uploads a border, and embedded HLSL shaders apply the relief
+lighting, fraying, drop shadow and content cut-out directly into the
+DirectComposition surfaces. A GPU border keeps no strip pixels in CPU memory.
+The host retains published surfaces for idle periods and pure movement.
+Shader failures follow the graphics recovery path. Settings previews use the
+same GPU assembly and shading, compose on the GPU, and read back one BGRA image.
+
+`TileSpec` describes reusable raster content; device scale belongs to
+`KnitFrameSpec` and `KnitPerimeter`, so monitor DPI changes share tile pixels.
+
+The shared graphics device reuses native tile bitmaps and separate brushes for
+main, corner and cuff transforms within a 32 MiB cache. Shader coordinate tables
+reuse the exact CPU division results within a 1 MiB cache. Both evict before new
+allocations and count retained GPU bytes against the same admission limit as
+border surfaces. These are allocation estimates, not measured driver residency.
+Cache charges remain after an overlay releases its border. Clearing shared
+device caches releases charges after any staged uploads finish or are canceled.
+Oversized tiles use charged temporary
+uploads. Each publication batch submits drawing once, then commits and waits
+once for all prepared borders; pure movement reuses the published surfaces.
+
+Hardware Direct2D anti-aliases edges differently from software Direct2D, so GPU
+borders can differ slightly from the CPU reference at partly covered edge pixels
+and at nearest-neighbour stitch texel ties.
+
+Run the isolated, hidden comparison without replacing the running application:
+
+```powershell
+.\tests\Rendering\compare-gpu.ps1 -Configuration Release -Platform x64
+```
+
+The comparison builds the GPU runtime and test-only software oracle, checks hardware and WARP pixel
+output, exercises Host lifecycle/recovery contracts, and records completed-GPU
+timings and PNG pairs under `out\gpu-comparison`. See the
+[comparison guide](tests/Rendering/README.md) for coverage, ARM64 builds, timing
+boundaries, and limitations. Only one production host can own user configuration
+at a time; the comparison uses isolated hidden contracts instead.
+
+## Safety and scope
+
+Decorations use windows owned by this application. The port must not inject code, change another application's window styles, move its windows, or require administrator privileges. Desktop probes must be opt-in and restricted to fixtures or explicitly inspected preview lifetimes.
+
+Startup at sign-in is opt-in. Diagnostics remain local. Window titles, captured application content, telemetry uploads, and arbitrary startup commands are outside the design.
+
+## Upstream and license
+
+The reference baseline is [`a49dff52483dafdbe27f972bd271cd28d37cef1c`](https://github.com/saragordic/window-sweaters/tree/a49dff52483dafdbe27f972bd271cd28d37cef1c), reviewed on October 9, 2026. The author has authorized this Windows port.
+
+This repository retains the GNU GPL v3 license in [LICENSE](LICENSE). Imported or adapted upstream material must retain its attribution and applicable original/JankyBorders notices. The local reference checkout is not part of the distribution.

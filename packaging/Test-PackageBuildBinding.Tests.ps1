@@ -48,7 +48,7 @@ function New-Validation([object]$Receipt, [string]$Source) {
         SourceArchive = [IO.Path]::GetFileName($Source); SourceSHA256 = (Get-FileHash -LiteralPath $Source).Hash
         Binaries = @([pscustomobject]@{ Path = 'WindowSweaters.Host.exe'; SHA256 = ('F' * 64) })
         Package = 'fixture.msix'; SHA256 = ('0' * 64)
-        Identity = 'fixture'; Publisher = 'CN=fixture'; Version = '0.1.0.0'
+        Identity = 'fixture'; Publisher = 'CN=fixture'; PublisherDisplayName = 'fixture'; Version = '0.1.0.0'
         Signed = $false; NoGitSourceRoundtripVerified = $true; SettingsThemeResourcesVerified = $true
     }
 }
@@ -64,6 +64,8 @@ try {
             SourceFiles = $sampleSource; Outputs = @(Copy-Record $sampleInputs)
         }
         $validation = New-Validation $receipt $source
+        & (Join-Path $PSScriptRoot 'Test-PackageBuildBinding.ps1') -ValidationReport $validation -BuildReceipt $receipt -SourceArchive $source
+        [Array]::Reverse($validation.NativeInputFiles)
         & (Join-Path $PSScriptRoot 'Test-PackageBuildBinding.ps1') -ValidationReport $validation -BuildReceipt $receipt -SourceArchive $source
         if ($validation.Binaries[0].SHA256 -eq $validation.ApplicationInputSHA256.'WindowSweaters.Host.exe') {
             throw 'Test must distinguish staged CodeView-normalized bytes from original native input.'
@@ -134,4 +136,4 @@ try {
         if (Test-Path -LiteralPath $owned) { Remove-Item -LiteralPath $owned -Recurse -Force }
     }
 }
-Write-Host 'PASS: both architecture provenance bindings; original versus staged EXE hashes; stale source/application/runtime receipt rejection; actual New-Bundle rejects unchanged old MSIX/source with a new receipt; trailing-root equivalence.'
+Write-Host 'PASS: both architecture provenance bindings independent of input ordering; original versus staged EXE hashes; stale source/application/runtime receipt rejection; actual New-Bundle rejects unchanged old MSIX/source with a new receipt; trailing-root equivalence.'

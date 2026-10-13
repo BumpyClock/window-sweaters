@@ -3,6 +3,7 @@
   <PropertyGroup>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <PackageChannel Condition="'$(PackageChannel)' == '' and ('$(UapAppxPackageBuildMode)' == 'StoreUpload' or '$(UapAppxPackageBuildMode)' == 'StoreAndSideload' or '$(UapAppxPackageBuildMode)' == 'StoreOnly')">Store</PackageChannel>
     <PackageChannel Condition="'$(PackageChannel)' == ''">Development</PackageChannel>
     <PackageVersion Condition="'$(PackageVersion)' == ''">0.1.0.0</PackageVersion>
     <NativeOutputRoot Condition="'$(NativeOutputRoot)' == ''">$(MSBuildThisFileDirectory)..\out</NativeOutputRoot>
@@ -31,12 +32,12 @@
     <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
     <AppxIncludeDebugSymbols>false</AppxIncludeDebugSymbols>
     <AppxPackageIncludePrivateSymbols>false</AppxPackageIncludePrivateSymbols>
-    <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+    <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
     <AppxTestLayoutEnabled>false</AppxTestLayoutEnabled>
     <AppxLogTelemetryFromSideloadingScript>false</AppxLogTelemetryFromSideloadingScript>
     <AppxBundle Condition="'$(AppxBundle)' == ''">Never</AppxBundle>
-    <AppxBundlePlatforms>$(Platform)</AppxBundlePlatforms>
+    <AppxBundlePlatforms>x64|arm64</AppxBundlePlatforms>
     <UapAppxPackageBuildMode Condition="'$(PackageChannel)' == 'Development'">SideloadOnly</UapAppxPackageBuildMode>
     <UapAppxPackageBuildMode Condition="'$(PackageChannel)' == 'Store'">StoreUpload</UapAppxPackageBuildMode>
     <PackageChannel Condition="'$(PackageChannel)' == ''">Development</PackageChannel>
@@ -48,12 +49,19 @@
     <PackageDisplayName Condition="'$(PackageChannel)' == 'Store'">Window Sweaters</PackageDisplayName>
     <PackageStage>$(IntermediateOutputPath)stage\</PackageStage>
     <AppxPackageDir>$(MSBuildThisFileDirectory)artifacts\$(PackageChannel)\$(PackageVersion)\$(Platform)\</AppxPackageDir>
+    <WindowsPowerShellModulePath>$(SystemRoot)\System32\WindowsPowerShell\v1.0\Modules</WindowsPowerShellModulePath>
     <DoNotLaunchApp Condition="'$(BuildingInsideVisualStudio)' != 'true'">true</DoNotLaunchApp>
   </PropertyGroup>
   <Import Project="$(StoreIdentityProps)" Condition="'$(PackageChannel)' == 'Store' and Exists('$(StoreIdentityProps)')" />
   <ItemGroup>
-    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
     <AppxManifest Include="$(PackageStage)AppxManifest.xml" />
     <None Include="Package.appxmanifest" />
     <None Include="README.md" />
@@ -63,27 +71,41 @@
   <PropertyGroup>
     <OutDir>$(MSBuildThisFileDirectory)bin\$(PackageChannel)\$(PackageVersion)\$(Platform)\$(Configuration)\</OutDir>
     <OutputPath>$(OutDir)</OutputPath>
+    <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
+    <GenerateTestArtifacts>False</GenerateTestArtifacts>
+    <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <AppxBundle>Always</AppxBundle>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+    <AppxBundle>Always</AppxBundle>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AppxBundle)' == 'Always'">
+    <_CreateAppxBundlePlatformSpecificArtifactsDependsOn>BuildWindowSweatersBundle</_CreateAppxBundlePlatformSpecificArtifactsDependsOn>
   </PropertyGroup>
   <Target Name="ValidateWindowSweatersPackage" BeforeTargets="PrepareForBuild">
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(PackageVersion)', '^\d+\.\d+\.\d+\.\d+$'))" Text="PackageVersion must contain four integers between 0 and 65535." />
     <Error Condition="'$(Configuration)' != 'Release' or ('$(Platform)' != 'x64' and '$(Platform)' != 'ARM64')" Text="Packaging requires independently built Release|x64 or Release|ARM64 native outputs." />
     <Error Condition="'$(PackageChannel)' != 'Development' and '$(PackageChannel)' != 'Store'" Text="PackageChannel must be Development or Store." />
+    <Error Condition="'$(PackageChannel)' == 'Development' and ('$(UapAppxPackageBuildMode)' == 'StoreUpload' or '$(UapAppxPackageBuildMode)' == 'StoreAndSideload' or '$(UapAppxPackageBuildMode)' == 'StoreOnly' or '$(AppxPackageIsForStore)' == 'true')" Text="Store publishing cannot use PackageChannel=Development. Use PackageChannel=Store and exact Partner Center values in StoreIdentityProps." />
     <Error Condition="'$(PackageChannel)' == 'Store' and !Exists('$(StoreIdentityProps)')" Text="Store packaging requires a local StoreIdentityProps MSBuild .props.user file with all Partner Center identity values." />
     <Error Condition="'$(PackageName)' == '' or '$(PackagePublisher)' == '' or '$(PackagePublisherDisplayName)' == ''" Text="PackageName, PackagePublisher and PackagePublisherDisplayName are all required." />
     <Error Condition="'$(PackageChannel)' == 'Store' and ($([System.String]::Copy('$(PackageName)').ToLowerInvariant().Contains('development')) or $([System.String]::Copy('$(PackagePublisher)').ToLowerInvariant().Contains('development')) or $([System.String]::Copy('$(PackagePublisherDisplayName)').ToLowerInvariant().Contains('development')))" Text="Store packaging rejects development identity values. Supply exact Partner Center values." />
     <Error Condition="'$(AppxPackageSigningEnabled)' != 'false'" Text="This project creates unsigned artifacts only. Signing and installation are separate, explicitly authorized steps." />
-    <Error Condition="'$(AppxBundle)' != 'Never'" Text="WAP PRI splitting cannot preserve this self-contained runtime's indexes. Use scripts\package.ps1 -Bundle for a validated MakeAppx bundle of the WAP-generated MSIX." />
+    <Error Condition="'$(AppxBundle)' != 'Never' and '$(AppxBundle)' != 'Always'" Text="AppxBundle must be Never (one MSIX) or Always (validated bundle without PRI splitting)." />
+    <Error Condition="'$(AppxBundle)' == 'Always' and !$([System.Text.RegularExpressions.Regex]::IsMatch('$(AppxBundlePlatforms)', '^(?i)(x64|arm64)(\|(x64|arm64))*$'))" Text="AppxBundlePlatforms must contain x64, ARM64 or both, separated by |." />
   </Target>
   <Target Name="BuildWindowSweatersForVisualStudio" Condition="'$(BuildingInsideVisualStudio)' == 'true'" DependsOnTargets="ValidateWindowSweatersPackage">
     <PropertyGroup>
       <NativeBuildOutputRoot>$([System.IO.Path]::GetFullPath('$(NativeOutputRoot)').TrimEnd('\'))</NativeBuildOutputRoot>
       <DefaultNativeBuildOutputRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\out').TrimEnd('\'))</DefaultNativeBuildOutputRoot>
-      <NativeBuildOutputArgument Condition="'$(NativeBuildOutputRoot)' != '$(DefaultNativeBuildOutputRoot)'">-NativeOutputRoot &quot;$(NativeBuildOutputRoot)&quot;</NativeBuildOutputArgument>
+      <NativeBuildOutputArgument Condition="'$(NativeBuildOutputRoot)' != '$(DefaultNativeBuildOutputRoot)'">-NativeOutputRoot "$(NativeBuildOutputRoot)"</NativeBuildOutputArgument>
     </PropertyGroup>
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\build.ps1&quot; -Configuration Release -Platform &quot;$(Platform)&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; $(NativeBuildOutputArgument)" />
+    <Exec EnvironmentVariables="PSModulePath=$(WindowsPowerShellModulePath)" Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\scripts\build.ps1&quot; -Configuration Release -Platform &quot;$(Platform)&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; $(NativeBuildOutputArgument)" />
   </Target>
   <Target Name="PrepareWindowSweatersPayload" BeforeTargets="AssignTargetPaths" DependsOnTargets="ValidateWindowSweatersPackage;BuildWindowSweatersForVisualStudio">
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Prepare-Package.ps1&quot; -Stage &quot;$(PackageStage).&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -PublisherDisplayName &quot;$(PackagePublisherDisplayName)&quot; -DisplayName &quot;$(PackageDisplayName)&quot; -Version &quot;$(PackageVersion)&quot; -Channel &quot;$(PackageChannel)&quot; -StoreIdentityProps &quot;$(StoreIdentityProps)&quot; -Platform &quot;$(Platform)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot;" />
+    <Exec EnvironmentVariables="PSModulePath=$(WindowsPowerShellModulePath)" Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Prepare-Package.ps1&quot; -Stage &quot;$(PackageStage).&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -PublisherDisplayName &quot;$(PackagePublisherDisplayName)&quot; -DisplayName &quot;$(PackageDisplayName)&quot; -Version &quot;$(PackageVersion)&quot; -Channel &quot;$(PackageChannel)&quot; -StoreIdentityProps &quot;$(StoreIdentityProps)&quot; -Platform &quot;$(Platform)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot;" />
     <ItemGroup>
       <Content Include="$(PackageStage)**\*" Exclude="$(PackageStage)AppxManifest.xml" />
       <Content Update="@(Content)">
@@ -94,7 +116,20 @@
       <AppxPackagePayload Include="@(Content)" />
     </ItemGroup>
   </Target>
-  <Target Name="VerifyWindowSweatersPackage" AfterTargets="Build" Condition="'$(GenerateAppxPackageOnBuild)' == 'true'">
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Test-Package.ps1&quot; -ArtifactDirectory &quot;$(AppxPackageDir).&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -Version &quot;$(PackageVersion)&quot; -Platform &quot;$(Platform)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot;" />
+  <Target Name="BuildWindowSweatersBundle" DependsOnTargets="ValidateWindowSweatersPackage">
+    <Exec EnvironmentVariables="PSModulePath=$(WindowsPowerShellModulePath)" Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Build-Bundle.ps1&quot; -Platforms &quot;$(AppxBundlePlatforms)&quot; -Channel &quot;$(PackageChannel)&quot; -Version &quot;$(PackageVersion)&quot; -StoreIdentityProps &quot;$(StoreIdentityProps)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot; -MSBuild &quot;$(MSBuildToolsPath32)\MSBuild.exe&quot; -PackageInfoPath &quot;$(AppxPackagingInfoFile)&quot;" />
+    <ReadLinesFromFile File="$(AppxPackagingInfoFile)">
+      <Output TaskParameter="Lines" PropertyName="AppxBundleOutput" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <FinalAppxPackageItem Include="$(AppxBundleOutput)" />
+      <AllBuiltSideloadPackages Include="$(AppxBundleOutput)" />
+      <FileWrites Include="$(AppxPackagingInfoFile);$(AppxBundleOutput)" />
+      <InstallerFileWrites Include="$(AppxBundleOutput)" />
+    </ItemGroup>
+    <Message Importance="high" Text="$(MSBuildProjectName) -&gt; $(AppxBundleOutput)" />
+  </Target>
+  <Target Name="VerifyWindowSweatersPackage" AfterTargets="Build" Condition="'$(GenerateAppxPackageOnBuild)' == 'true' and '$(AppxBundle)' == 'Never'">
+    <Exec EnvironmentVariables="PSModulePath=$(WindowsPowerShellModulePath)" Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Test-Package.ps1&quot; -ArtifactDirectory &quot;$(AppxPackageDir).&quot; -Name &quot;$(PackageName)&quot; -Publisher &quot;$(PackagePublisher)&quot; -PublisherDisplayName &quot;$(PackagePublisherDisplayName)&quot; -Version &quot;$(PackageVersion)&quot; -Platform &quot;$(Platform)&quot; -NativeOutputRoot &quot;$(NativeOutputRoot)&quot;" />
   </Target>
 </Project>

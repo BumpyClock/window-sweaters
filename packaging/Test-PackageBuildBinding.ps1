@@ -41,7 +41,7 @@ foreach ($path in $required) {
     if (!$outputs.ContainsKey($path) -or $inputHash -notmatch '^[A-Fa-f0-9]{64}$' -or $inputHash -ne $outputs[$path]) {
         throw "Package original native input differs from current build receipt: $path"
     }
-    if (($ValidationReport.NativeInputFiles | ConvertTo-Json -Depth 4 -Compress) -cne ($BuildReceipt.Outputs | ConvertTo-Json -Depth 4 -Compress)) {
-        throw 'Package original native input inventory differs from current build receipt.'
-    }
 }
+$packageInputs = $ValidationReport.NativeInputFiles | Sort-Object Path | ConvertTo-Json -Depth 4 -Compress
+$buildInputs = $BuildReceipt.Outputs | Sort-Object Path | ConvertTo-Json -Depth 4 -Compress
+if ($packageInputs -cne $buildInputs) { throw 'Package original native input inventory differs from current build receipt.' }

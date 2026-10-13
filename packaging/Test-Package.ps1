@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$ArtifactDirectory,
     [Parameter(Mandatory)][string]$Name,
     [Parameter(Mandatory)][string]$Publisher,
+    [Parameter(Mandatory)][string]$PublisherDisplayName,
     [Parameter(Mandatory)][string]$Version,
     [ValidateSet('x64', 'ARM64')][string]$Platform = 'x64',
     [string]$NativeOutputRoot
@@ -41,24 +42,25 @@ $ns.AddNamespace('desktop', 'http://schemas.microsoft.com/appx/manifest/desktop/
 function Assert-Package([bool]$condition, [string]$message) { if (!$condition) { throw $message } }
 $identity = $manifest.Package.Identity
 Assert-Package ($identity.Name -eq $Name -and $identity.Publisher -eq $Publisher -and $identity.Version -eq $Version -and $identity.ProcessorArchitecture -eq $Platform.ToLowerInvariant()) 'Package identity, version or architecture mismatch.'
+Assert-Package ($manifest.Package.Properties.PublisherDisplayName -ceq $PublisherDisplayName) 'Package publisher display name differs from the selected identity.'
 $families = @($manifest.SelectNodes('/f:Package/f:Dependencies/f:TargetDeviceFamily', $ns))
 Assert-Package ($families.Count -eq 1 -and $families[0].Name -eq 'Windows.Desktop' -and $families[0].MinVersion -eq '10.0.22000.0' -and $families[0].MaxVersionTested -eq '10.0.26100.0') 'Windows 11 desktop minimum/tested OS mismatch.'
 Assert-Package ($manifest.SelectNodes('/f:Package/f:Dependencies/f:PackageDependency', $ns).Count -eq 0) 'Unexpected external runtime framework dependency.'
 $apps = @($manifest.SelectNodes('/f:Package/f:Applications/f:Application', $ns))
-Assert-Package ($apps.Count -eq 2) 'Package must expose exactly Settings and Host.'
+Assert-Package ($apps.Count -eq 1) 'Package must expose only Settings; Host is a companion executable, not a headless application.'
 foreach ($app in $apps) {
-    Assert-Package ($app.GetAttribute('RuntimeBehavior', $ns.LookupNamespace('uap10')) -eq 'packagedClassicApp' -and $app.GetAttribute('TrustLevel', $ns.LookupNamespace('uap10')) -eq 'mediumIL') 'Both applications must be packaged classic mediumIL.'
+    Assert-Package ($app.GetAttribute('RuntimeBehavior', $ns.LookupNamespace('uap10')) -eq 'packagedClassicApp' -and $app.GetAttribute('TrustLevel', $ns.LookupNamespace('uap10')) -eq 'mediumIL') 'Settings must be packaged classic mediumIL.'
     Assert-Package ($app.EntryPoint -eq 'Windows.FullTrustApplication') 'Unexpected application entry point.'
     Assert-Package (Test-Path -LiteralPath (Join-Path $unpacked $app.Executable)) 'Missing application executable.'
 }
 $settings = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application[@Id='Settings']", $ns)
-$hostApp = $manifest.SelectSingleNode("/f:Package/f:Applications/f:Application[@Id='Host']", $ns)
-Assert-Package ($null -ne $settings -and $null -ne $hostApp) 'Settings/Host application IDs changed.'
-Assert-Package ($settings.Executable -eq 'WindowSweaters.Settings.exe' -and $hostApp.Executable -eq 'WindowSweaters.Host.exe') 'Companion executables must remain siblings at package root.'
-Assert-Package ($settings.SelectSingleNode('uap:VisualElements', $ns).AppListEntry -eq 'default' -and $hostApp.SelectSingleNode('uap:VisualElements', $ns).AppListEntry -eq 'none') 'Settings must be visible and Host hidden in Start.'
+Assert-Package ($null -ne $settings) 'Settings application ID changed.'
+Assert-Package ($settings.Executable -eq 'WindowSweaters.Settings.exe' -and (Test-Path -LiteralPath (Join-Path $unpacked 'WindowSweaters.Host.exe'))) 'Companion executables must remain siblings at package root.'
+Assert-Package ($settings.SelectSingleNode('uap:VisualElements', $ns).AppListEntry -eq 'default') 'Settings must be visible in Start; headless applications are not permitted.'
 $tasks = @($manifest.SelectNodes('//desktop:StartupTask', $ns))
 Assert-Package ($tasks.Count -eq 1 -and $tasks[0].TaskId -eq 'WindowSweatersStartup' -and $tasks[0].Enabled -eq 'false') 'Startup must be disabled by default.'
-Assert-Package ($hostApp.SelectNodes('f:Extensions/desktop:Extension/desktop:StartupTask', $ns).Count -eq 1) 'Startup extension must belong to Host.'
+$startup = $settings.SelectSingleNode("f:Extensions/desktop:Extension[@Category='windows.startupTask']", $ns)
+Assert-Package ($null -ne $startup -and $startup.Executable -eq 'WindowSweaters.Host.exe' -and $startup.EntryPoint -eq 'Windows.FullTrustApplication' -and $startup.SelectNodes('desktop:StartupTask', $ns).Count -eq 1) 'Settings must own the startup extension that launches Host.'
 $capabilities = @($manifest.SelectNodes('/f:Package/f:Capabilities/*', $ns))
 Assert-Package ($capabilities.Count -eq 1 -and $capabilities[0].Name -eq 'runFullTrust' -and $capabilities[0].NamespaceURI -eq 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities') 'Unexpected capability; only runFullTrust is permitted.'
 Assert-Package (!(Test-Path (Join-Path $unpacked 'AppxSignature.p7x'))) 'Expected an unsigned artifact.'
@@ -129,12 +131,12 @@ foreach ($exe in @('WindowSweaters.Host.exe', 'WindowSweaters.Settings.exe', 're
 }
 $result = [ordered]@{
     Package = $package.Name; SHA256 = (Get-FileHash -LiteralPath $package.FullName).Hash
-    Identity = $Name; Publisher = $Publisher; Version = $Version; Architecture = $Platform.ToLowerInvariant(); Platform = $Platform; MinOS = '10.0.22000.0'
+    Identity = $Name; Publisher = $Publisher; PublisherDisplayName = $PublisherDisplayName; Version = $Version; Architecture = $Platform.ToLowerInvariant(); Platform = $Platform; MinOS = '10.0.22000.0'
     NativeOutputRoot = $buildReceipt.NativeOutputRoot
     SourceFiles = $inventory.Files
     NativeInputFiles = $buildReceipt.Outputs
     ApplicationInputSHA256 = $report.ApplicationInputSHA256
-    Applications = @('Settings visible', 'Host hidden'); StartupEnabled = $false
+    Applications = @('Settings visible'); StartupExecutable = 'WindowSweaters.Host.exe'; StartupEnabled = $false
     Capabilities = @('runFullTrust'); ExternalPackageDependencies = @()
     Signed = $false; Installed = $false; Published = $false
     ContentFiles = $files.Count; SourceArchive = $report.SourceArchive; SourceSHA256 = $report.SourceSHA256
@@ -147,4 +149,4 @@ $finalReceipt = & (Join-Path $PSScriptRoot 'Test-NativeBuild.ps1') -Platform $Pl
 $validationJson = $result | ConvertTo-Json -Depth 4
 & (Join-Path $PSScriptRoot 'Test-PackageBuildBinding.ps1') -ValidationReport ($validationJson | ConvertFrom-Json) -BuildReceipt $finalReceipt -SourceArchive $sourceZip
 $validationJson | Set-Content (Join-Path $ArtifactDirectory 'validation-report.json') -Encoding UTF8
-Write-Host "Validated unsigned $($package.Name): $Platform, Windows 11 22000+, two mediumIL apps, disabled Host startup, runFullTrust only."
+Write-Host "Validated unsigned $($package.Name): $Platform, Windows 11 22000+, visible Settings, disabled Host startup, runFullTrust only."

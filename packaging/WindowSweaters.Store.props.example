@@ -5,6 +5,6 @@
   <PropertyGroup>
     <PackageName>REPLACE_WITH_PARTNER_CENTER_PACKAGE_IDENTITY_NAME</PackageName>
     <PackagePublisher>REPLACE_WITH_PARTNER_CENTER_PACKAGE_IDENTITY_PUBLISHER</PackagePublisher>
-    <PackagePublisherDisplayName>REPLACE_WITH_PARTNER_CENTER_PUBLISHER_DISPLAY_NAME</PackagePublisherDisplayName>
+    <PackagePublisherDisplayName>Weakly Design</PackagePublisherDisplayName>
   </PropertyGroup>
 </Project>
