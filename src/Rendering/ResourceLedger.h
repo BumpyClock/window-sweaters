@@ -149,7 +149,7 @@ public:
                 if (perimeter->assembly) {
                     if (!Add(transient,surface*2u) || !Add(cacheBudget,(std::size_t(piece.width)+piece.height)*8u))
                         return E_INVALIDARG;
-                } else transient=std::max(transient,surface);
+                } else if (!Add(transient,surface)) return E_INVALIDARG;
             }
             const auto tiles=perimeter->RetainedTiles();
             const auto chart=perimeter->tile->spec.chart;

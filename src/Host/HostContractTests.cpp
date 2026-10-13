@@ -230,15 +230,32 @@ void ResourceReservationBounds() {
         piece.width=piece.height=2;
         piece.image={2,2,8,{0xff123456,0xff123456,0xff123456,0xff123456}};
     }
-    ResourceLedger ledger(1024*1024,176);
+    ResourceLedger insufficient(1024*1024,127);
+    ResourceLedger::Lease denied;
+    Check(insufficient.Reserve(perimeter,denied)==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
+        !insufficient.Status().estimatedGpuBytes && !insufficient.Status().uploadTransientBytes &&
+        !insufficient.Status().reservations,
+        "CPU batch rejects 63 transient bytes that fit its largest 16-byte source but not all four sources");
+    ResourceLedger exact(1024*1024,128);
+    ResourceLedger::Lease complete;
+    Check(SUCCEEDED(exact.Reserve(perimeter,complete)) && exact.Status().estimatedGpuBytes==128 &&
+        exact.Status().uploadTransientBytes==64,
+        "CPU batch admits exactly four 16-byte targets plus four 16-byte in-flight sources");
+    complete.EndUpload();
+    Check(exact.Status().estimatedGpuBytes==64 && !exact.Status().uploadTransientBytes,
+        "CPU batch completion releases every source reservation and retains only target surfaces");
+    complete.Reset();
+    Check(!exact.Status().estimatedGpuBytes && !exact.Status().retainedCpuBytes && !exact.Status().reservations,
+        "Completed CPU batch teardown releases its full reservation");
+    ResourceLedger ledger(1024*1024,224);
     ResourceLedger::Lease first,alias,replacement;
-    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==80 &&
-        ledger.Status().uploadTransientBytes==16 && ledger.Status().surfaces==4,
-        "Four 2x2 BGRA surfaces reserve literal 64 bytes plus one 16-byte upload bitmap");
+    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==128 &&
+        ledger.Status().uploadTransientBytes==64 && ledger.Status().surfaces==4,
+        "Four 2x2 BGRA surfaces reserve literal 64 target bytes plus all 64 in-flight source bytes");
     first.EndUpload();
     const auto cpu=ledger.Status().retainedCpuBytes;
     Check(SUCCEEDED(ledger.Reserve(perimeter,alias)) && ledger.Status().retainedCpuBytes==cpu &&
-        ledger.Status().estimatedGpuBytes==144,"Aliased CPU perimeter and tile count once while each overlay has four surfaces");
+        ledger.Status().estimatedGpuBytes==192,"Aliased CPU perimeter and tile count once while each overlay has four surfaces");
     alias.EndUpload();
     Check(ledger.Reserve(perimeter,replacement)==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
         ledger.Status().estimatedGpuBytes==128 && ledger.Status().retainedCpuBytes==cpu,
@@ -251,7 +268,7 @@ void ResourceReservationBounds() {
         "One retained alias keeps CPU backing after old overlay is retired");
     replacement.Reset();
     Check(!ledger.Status().retainedCpuBytes && !ledger.Status().estimatedGpuBytes &&
-        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=176,
+        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=224,
         "Last alias retires all CPU and known surface backing accurately");
     perimeter->pieces[0].image.width=UINT32_MAX;
     Check(ledger.Reserve(perimeter,first)==E_INVALIDARG && !ledger.Status().reservations,

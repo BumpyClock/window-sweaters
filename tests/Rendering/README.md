@@ -38,7 +38,8 @@ also reserves worst-case native tile and coordinate cache bytes, transfers actua
 allocations to persistent cache leases, and drops unused cache budget and strip
 temporaries after publication. GPU allocations remain estimates, not driver residency
 measurements. Retained CPU accounting includes the main tile and GPU assembly
-corner/cuff tiles, deduplicated by pointer in the resource ledger. Queue ready
+corner/cuff tiles, deduplicated by pointer in the resource ledger. CPU publication
+also reserves all four in-flight source textures until batch completion. Queue ready
 admission includes all three tiles for GPU chart requests.
 
 The mitre masks overlap by 1/8 pixel. Without the overlap, their aliased 45°
