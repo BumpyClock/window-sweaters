@@ -180,8 +180,9 @@ native first-snapshot startup remains a CU check, not a reducer/build claim.
 
 `Preview` is a single coalescing MTA worker with one in-flight job and one latest
 pending immutable configuration. It uses `MakeDesignChart` on actual catalogue
-cells/flags and `KnitRaster::RenderFrame`, which composes the real production
-perimeter pieces. There is no approximate knit drawing or UI-thread raster work.
+cells/flags, `KnitPreparation::PreparePerimeter`, and one persistent hardware
+`GpuSnapshot`. The snapshot assembles and shades the production strips, composes
+them on the GPU, and reads back one BGRA image. Rendering stays on the worker.
 Output is fixed 1x BGRA, with 2x production supersampling, a 400×140 DIP content
 rectangle, and at most 528×268 pixels. The tile cache is bounded to 16 MiB.
 
@@ -189,10 +190,12 @@ Completed obsolete generations are dropped on the worker and again on the
 dispatcher. Weak app/dispatcher references prevent late callbacks from touching
 a closed window. The UI copies completed pixels into a native `WriteableBitmap`.
 Preview errors are reported separately from save errors.
+Failed GPU renders release the snapshot; the next request creates a fresh hardware
+device instead of reusing a removed device.
 
 `WindowSweaters.Settings.Core.vcxproj` compiles the same production native
-knitting/chart/raster sources with the Settings `/MD` runtime. It has no Host or
-WinUI dependency. The host's existing `/MT` renderer remains unchanged.
+knitting/chart/preparation, GPU assembly, shader, and snapshot sources with the
+Settings `/MD` runtime. It has no Host or WinUI dependency. Host builds use `/MT`.
 
 ## Build-only validation
 

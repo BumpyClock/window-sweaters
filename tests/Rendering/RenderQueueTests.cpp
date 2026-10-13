@@ -199,7 +199,7 @@ void ExpectError(const RenderReady& ready, RenderErrorKind kind, HRESULT result)
     Check(error && error->kind == kind && error->result == result, "Typed render failure");
 }
 
-void RealCpuFixtureAndCacheReuse() {
+void RecipeFixtureAndCacheReuse() {
     Receiver receiver;
     std::atomic<DWORD> workerThread{};
     std::atomic<bool> workerMta{};
@@ -219,19 +219,24 @@ void RealCpuFixtureAndCacheReuse() {
     const auto& p = Perimeter(receiver.results[0]);
     Check(p.width == 108 && p.height == 84 && p.contentInsetPixels == 6 && p.shadowMarginPixels == 2,
         "Physical fixture dimensions");
-    Check(p.pieces[0].image.width == 108 && p.pieces[0].image.height == 8
-        && p.pieces[1].x == 100 && p.pieces[1].image.width == 8
-        && p.pieces[1].image.height == 84 && p.pieces[2].y == 76
-        && p.pieces[3].image.width == 8, "Four narrow fixture pieces");
+    Check(p.pieces[0].width == 108 && p.pieces[0].height == 8
+        && p.pieces[1].x == 100 && p.pieces[1].width == 8
+        && p.pieces[1].height == 84 && p.pieces[2].y == 76
+        && p.pieces[3].width == 8, "Four narrow fixture pieces");
     Check(receiver.results[0].request->frame.contentWidthPixels == 96
         && receiver.results[0].request->tile.baseArgb == 0xff4e8098u, "Request owns immutable value snapshot");
     knitting::TileCache fixtureCache;
-    const auto direct = KnitRaster::RenderPerimeter(Request().frame, Request().tile, fixtureCache);
-    for (std::size_t i = 0; i < 4; ++i)
-        Check(p.pieces[i].image.pixels == direct.pieces[i].image.pixels, "Queue wraps real CPU renderer fixture");
-    const auto composed = KnitRaster::Compose(p);
-    Check(composed.pixels[42u * 108u + 54u] == 0, "Fixture content remains transparent");
-    Check((composed.pixels[4u * 108u + 54u] >> 24) == 255, "Fixture has opaque actual yarn");
+    const auto direct = KnitPreparation::PreparePerimeter(Request().frame, Request().tile, fixtureCache);
+    for (std::size_t i = 0; i < 4; ++i) {
+        Check(p.PieceValid(p.pieces[i]) && p.pieces[i].x == direct.pieces[i].x
+            && p.pieces[i].y == direct.pieces[i].y && p.pieces[i].width == direct.pieces[i].width
+            && p.pieces[i].height == direct.pieces[i].height, "Queue preserves native strip geometry");
+        const auto& parameters = p.assembly.parameters[i];
+        Check(parameters.side == i && parameters.scale == 1.f && parameters.band == 4.f,
+            "Queue prepares per-side shader parameters");
+    }
+    Check(p.tile->image.pixels == direct.tile->image.pixels && p.tile->height.pixels == direct.tile->height.pixels,
+        "Queue retains actual colour and height tiles");
     const auto firstWorker = workerThread.load();
     auto second = Request(101);
     second.frame.contentWidthPixels = 160;
@@ -323,7 +328,7 @@ void ReadyBytesBackpressure() {
     auto gate = std::make_shared<Gate>();
     Receiver receiver;
     RenderQueueLimits limits;
-    limits.maxReadyBytes = 28000;
+    limits.maxReadyBytes = 14000;
     receiver.Start(limits, Pinned(gate));
     gate->Entered();
     Check(receiver.queue->Submit(Request(100)) == S_OK && receiver.queue->Submit(Request(101)) == S_OK,
@@ -345,7 +350,7 @@ void EveryAcceptedCurrentJobCompletesAndCapacityRecovers() {
     RenderQueueLimits limits;
     limits.maxPending = 8;
     limits.maxReady = 1;
-    limits.maxReadyBytes = 28000;
+    limits.maxReadyBytes = 14000;
     receiver.Start(limits, Pinned(gate));
     gate->Entered();
     for (tracking::WindowHandle hwnd = 100; hwnd < 108; ++hwnd) {
@@ -562,14 +567,13 @@ void AuxiliaryChartTilesAndPathQuotas() {
     receiver.Collect(3);
     ExpectError(receiver.results[2], RenderErrorKind::ResourceQuota, Quota);
     Check(receiver.queue->Status().renderPreparations == 2 && receiver.queue->Status().tileGenerations == 3,
-          "Chart path quota stops before native scratch/path allocation");
+          "Chart path quota stops before native path allocation");
 }
 
 void GpuAuxiliaryReadyBytes() {
     Receiver receiver;
     receiver.Start();
     auto request = Request();
-    request.frame.renderer = Renderer::Gpu;
     knitting::ChartAppearance look;
     look.flags = designs::ChartSolidCorners | designs::ChartOuterCuff;
     look.cornerArgb = 0xff663322;
@@ -581,16 +585,16 @@ void GpuAuxiliaryReadyBytes() {
     const auto readyBytes = receiver.queue->Status().readyBytes;
     receiver.Collect(1);
     const auto& p = Perimeter(receiver.results[0]);
-    Check(p.assembly && p.assembly->patch && p.assembly->cuff
-        && p.tile != p.assembly->patch && p.tile != p.assembly->cuff
-        && p.assembly->patch != p.assembly->cuff, "GPU chart retains three distinct tiles");
+    Check(p.assembly.patch && p.assembly.cuff
+        && p.tile != p.assembly.patch && p.tile != p.assembly.cuff
+        && p.assembly.patch != p.assembly.cuff, "GPU chart retains three distinct tiles");
     const auto pixels = [](const knitting::Tile& tile) {
         return (std::size_t{tile.image.width} * tile.image.height
             + std::size_t{tile.height.width} * tile.height.height) * sizeof(std::uint32_t);
     };
     const auto mainOnly = sizeof(RenderReady) + sizeof(RenderRequest) + sizeof(KnitPerimeter)
         + 2 * request.tile.chart->ByteSize() + pixels(*p.tile);
-    const auto expected = mainOnly + pixels(*p.assembly->patch) + pixels(*p.assembly->cuff);
+    const auto expected = mainOnly + pixels(*p.assembly.patch) + pixels(*p.assembly.cuff);
     Check(readyBytes == expected, "GPU ready bytes include main, corner and cuff pixel storage exactly once");
     Check(receiver.queue->Status().readyBytes == 0, "Draining GPU auxiliary tiles releases ready bytes");
     RenderQueueLimits limits;
@@ -736,7 +740,7 @@ void StopPendingAndActiveWithoutDetachedWork() {
         gate->Wait(stop);
     };
     receiver.Start({}, std::move(hooks));
-    Check(receiver.queue->Submit(Request()) == S_OK, "Start one finite real CPU job");
+    Check(receiver.queue->Submit(Request()) == S_OK, "Start one finite real preparation job");
     gate->Entered();
     const auto worker = OpenThread(SYNCHRONIZE, FALSE, workerId.load());
     Check(worker != nullptr, "Observe actual in-flight worker lifetime");
@@ -807,90 +811,64 @@ void ChartKeysAndCacheBudget() {
           "Oversize tile not charged as resident cache");
 }
 
-void GpuInputsAndBudget() {
+void RecipeInputsAndBudget() {
     Receiver receiver;
     receiver.Start();
-    auto request = Request();
-    request.frame.renderer = Renderer::Gpu;
-    Check(receiver.queue->Submit(request) == S_OK, "GPU inputs through owned worker");
+    const auto request = Request();
+    Check(receiver.queue->Submit(request) == S_OK, "Recipe inputs through owned worker");
     receiver.Collect(1);
     const auto& p = Perimeter(receiver.results[0]);
-    Check(receiver.results[0].request->frame.renderer == Renderer::Gpu,
-        "Immutable selection reaches ready GPU perimeter");
+    Check(p.assembly.frame.contentWidthPixels == 96 && p.assembly.frame.bandDip == 4.f,
+        "Ready recipe preserves authoritative content dimensions and band");
     std::size_t stripBytes = 0;
-    for (const auto& piece : p.pieces) {
-        Check(p.assembly && piece.width && piece.height && piece.image.pixels.empty(),
-            "GPU perimeter carries an assembly recipe and no CPU strip pixels");
+    for (std::size_t side = 0; side < p.pieces.size(); ++side) {
+        const auto& piece = p.pieces[side];
+        Check(p.PieceValid(piece) && p.assembly.parameters[side].side == side,
+            "Prepared recipe has valid geometry and a matching shader side");
         stripBytes += std::size_t{piece.width} * piece.height * 4;
     }
-    bool rejected = false;
-    try { (void)KnitRaster::Compose(p); } catch (const std::invalid_argument&) { rejected = true; }
-    Check(rejected, "CPU Compose cannot silently publish unshaded GPU inputs");
     Receiver bounded;
     RenderQueueLimits limits;
     limits.maxPerimeterBytes = stripBytes * 3 / 2;
     bounded.Start(limits);
-    auto cpuRequest = request;
-    cpuRequest.frame.renderer = Renderer::Cpu;
-    Check(bounded.queue->Submit(cpuRequest) == S_OK, "CPU request within the same strip budget");
+    Check(bounded.queue->Submit(request) == S_OK, "Over-budget recipe gets explicit completion");
     bounded.Collect(1);
-    Check(std::holds_alternative<std::shared_ptr<const KnitPerimeter>>(bounded.results[0].outcome),
-        "CPU strips fit a budget below twice their size");
-    request.token.target.hwnd = 102;
-    Check(bounded.queue->Submit(request) == S_OK, "Over-budget GPU request completes with explicit error");
-    bounded.Collect(2);
-    const auto* error = std::get_if<RenderError>(&bounded.results[1].outcome);
-    Check(error && error->kind == RenderErrorKind::ResourceQuota && error->result == Quota,
-        "GPU colour and height upload textures are admitted before allocation");
-    request.token.target.hwnd = 101;
-    request.frame.renderer = static_cast<Renderer>(99);
-    Check(receiver.queue->Submit(request) == S_OK, "Invalid renderer typed completion");
-    receiver.Collect(2);
-    error = std::get_if<RenderError>(&receiver.results[1].outcome);
-    Check(error && error->kind == RenderErrorKind::InvalidInput && error->result == E_INVALIDARG,
-        "Unknown renderer rejected without fallback");
+    ExpectError(bounded.results[0], RenderErrorKind::ResourceQuota, Quota);
+    Check(bounded.queue->Status().renderPreparations == 0 && bounded.queue->Status().tileGenerations == 0,
+        "Colour and height upload textures are admitted before preparation");
 }
 
-void PublicationDimensionAdmission() {
+void GpuDimensionAdmission() {
     for (const float scale : {1.f, 1.25f}) {
         const std::uint32_t padding = scale == 1.f ? 12u : 16u;
-        for (const auto renderer : {Renderer::Cpu, Renderer::Gpu}) {
-            for (const bool width : {false, true}) {
-                auto request = Request();
-                request.frame.renderer = renderer;
-                request.frame.deviceScale = scale;
-                auto& dimension = width ? request.frame.contentWidthPixels : request.frame.contentHeightPixels;
-                dimension = 16385u - padding;
-                Receiver rejected;
-                rejected.Start();
-                Check(rejected.queue->Submit(request) == S_OK, "Oversize publication dimension yields typed completion");
-                rejected.Collect(1);
-                ExpectError(rejected.results[0], RenderErrorKind::ResourceQuota, Quota);
-                const auto status = rejected.queue->Status();
-                Check(status.renderPreparations == 0 && status.tileGenerations == 0 && status.quotaRejected == 1,
-                    "Publication dimension rejected before preparation or tile allocation for either renderer");
-                knitting::TileCache cache;
-                if (renderer == Renderer::Gpu) {
-                    bool invalid = false;
-                    try { (void)KnitRaster::RenderPerimeter(request.frame, request.tile, cache); }
-                    catch (const std::invalid_argument&) { invalid = true; }
-                    Check(invalid && cache.GenerationCount() == 0,
-                        "Direct GPU preparation rejects oversize padded dimensions before tile allocation");
-                } else {
-                    const auto cpu = KnitRaster::RenderPerimeter(request.frame, request.tile, cache);
-                    Check(!cpu.assembly && (width ? cpu.width : cpu.height) == 16385u,
-                        "Standalone CPU oracle preparation keeps its separate dimension limit");
-                }
-                --dimension;
-                Receiver accepted;
-                accepted.Start();
-                Check(accepted.queue->Submit(request) == S_OK, "Exact publication dimension limit accepted");
-                accepted.Collect(1);
-                const auto& perimeter = Perimeter(accepted.results[0]);
-                Check(perimeter.assembly.has_value() == (renderer == Renderer::Gpu) &&
-                    (width ? perimeter.width : perimeter.height) == 16384u,
-                    "Shared publication limit includes band and shadow padding");
-            }
+        for (const bool width : {false, true}) {
+            auto request = Request();
+            request.frame.deviceScale = scale;
+            auto& dimension = width ? request.frame.contentWidthPixels : request.frame.contentHeightPixels;
+            dimension = 16385u - padding;
+            Receiver rejected;
+            rejected.Start();
+            Check(rejected.queue->Submit(request) == S_OK, "Oversize GPU dimension yields typed completion");
+            rejected.Collect(1);
+            ExpectError(rejected.results[0], RenderErrorKind::ResourceQuota, Quota);
+            const auto status = rejected.queue->Status();
+            Check(status.renderPreparations == 0 && status.tileGenerations == 0 && status.quotaRejected == 1,
+                "GPU dimension rejected before preparation or tile allocation");
+            knitting::TileCache cache;
+            bool invalid = false;
+            try { (void)KnitPreparation::PreparePerimeter(request.frame, request.tile, cache); }
+            catch (const std::invalid_argument&) { invalid = true; }
+            Check(invalid && cache.GenerationCount() == 0,
+                "Direct GPU preparation rejects oversize padded dimensions before tile allocation");
+            --dimension;
+            Receiver accepted;
+            accepted.Start();
+            Check(accepted.queue->Submit(request) == S_OK, "Exact GPU dimension limit accepted");
+            accepted.Collect(1);
+            const auto& perimeter = Perimeter(accepted.results[0]);
+            Check((width ? perimeter.width : perimeter.height) == 16384u,
+                "GPU limit includes band and shadow padding");
+
         }
     }
 }
@@ -1007,13 +985,13 @@ void IdleWorkerDoesNoCpuOrGenerations() {
         && status.transientBytes == 0 && status.residentCacheBytes == 0, "Idle has no generation, redraw or allocation");
     Check(receiver.queue->Submit(Request()) == S_OK, "Contrasting live work proves worker functional");
     receiver.Collect(1);
-    Check(receiver.queue->Status().tileGenerations == 1, "Worker actually prepares requested live CPU output");
+    Check(receiver.queue->Status().tileGenerations == 1, "Worker actually prepares requested live GPU recipe");
 }
 }
 
-constexpr std::uint32_t SideOneStartPoll = 9;
+constexpr std::uint32_t SecondSidePoll = 4;
 
-void SupersededJobAbortsBetweenSides() {
+void SupersededJobAbortsDuringPreparation() {
     auto gate = std::make_shared<Gate>();
     std::atomic<std::uint32_t> oldPolls{}, newPolls{};
     Receiver receiver;
@@ -1021,20 +999,21 @@ void SupersededJobAbortsBetweenSides() {
     hooks.duringRender = [&](const RenderRequest& r, std::uint32_t poll, std::stop_token stop) {
         if (r.token.appearanceRevision != 1) { newPolls.store(poll); return; }
         oldPolls.store(poll);
-        if (poll == SideOneStartPoll) gate->Wait(stop);
+        if (poll == SecondSidePoll) gate->Wait(stop);
     };
     receiver.Start({}, std::move(hooks));
     Check(receiver.queue->Submit(Request(100, 1)) == S_OK, "Submit job to supersede");
     gate->Entered();
-    Check(receiver.queue->Submit(Request(100, 2)) == S_OK, "Supersede after side zero completed");
+    Check(receiver.queue->Submit(Request(100, 2)) == S_OK, "Supersede after the first side is prepared");
     gate->Open();
     receiver.Collect(1);
     receiver.Wait([&] { return receiver.queue->Status().active == 0; });
     Check(receiver.results.size() == 1 && receiver.results[0].request->token.appearanceRevision == 2,
           "Only the newest perimeter publishes");
-    Perimeter(receiver.results[0]);
-    Check(oldPolls.load() == SideOneStartPoll, "Superseded job runs no stage after the failed poll");
-    Check(newPolls.load() == 2 + 4 * 6, "Complete job polls every stage");
+    const auto& completed = Perimeter(receiver.results[0]);
+    for (const auto& piece : completed.pieces) Check(completed.PieceValid(piece), "Newest recipe prepares all four valid GPU sides");
+    Check(oldPolls.load() == SecondSidePoll, "Superseded job runs no stage after the failed poll");
+    Check(newPolls.load() > oldPolls.load(), "Newest recipe continues beyond the cancelled checkpoint");
     const auto status = receiver.queue->Status();
     Check(status.renderPreparations == 2 && status.staleCancelled == 1 && status.ready == 0
         && status.readyBytes == 0 && status.transientBytes == 0 && status.active == 0 && status.pending == 0,
@@ -1049,7 +1028,7 @@ void CancelledJobAbortsAndNextJobRendersFresh() {
     hooks.duringRender = [&](const RenderRequest& r, std::uint32_t poll, std::stop_token stop) {
         if (r.token.target.hwnd != 100) return;
         cancelledPolls.store(poll);
-        if (poll == SideOneStartPoll) gate->Wait(stop);
+        if (poll == SecondSidePoll) gate->Wait(stop);
     };
     receiver.Start({}, std::move(hooks));
     const auto cancelled = Request(100, 1);
@@ -1058,54 +1037,30 @@ void CancelledJobAbortsAndNextJobRendersFresh() {
     Check(receiver.queue->Cancel(cancelled.token.target) == S_OK, "Cancel mid-render");
     gate->Open();
     receiver.Wait([&] { return receiver.queue->Status().active == 0 && receiver.queue->Status().staleCancelled == 1; });
-    Check(cancelledPolls.load() == SideOneStartPoll && receiver.queue->Status().ready == 0
+    Check(cancelledPolls.load() == SecondSidePoll && receiver.queue->Status().ready == 0
         && receiver.queue->Status().readyBytes == 0 && receiver.queue->Status().transientBytes == 0,
           "Cancelled job stops and publishes nothing");
     Check(receiver.queue->Submit(Request(101, 1)) == S_OK, "Queue continues after abort");
     receiver.Collect(1);
     knitting::TileCache cache;
-    const auto fresh = KnitRaster::RenderPerimeter(Request().frame, Request().tile, cache);
+    const auto fresh = KnitPreparation::PreparePerimeter(Request().frame, Request().tile, cache);
     const auto& p = Perimeter(receiver.results[0]);
     for (std::size_t i = 0; i < 4; ++i)
-        Check(p.pieces[i].image.pixels == fresh.pieces[i].image.pixels, "Reused scratch after abort is pixel-identical");
-}
-
-void ScratchReuseAndBound() {
-    Receiver receiver;
-    receiver.Start();
-    for (std::uint64_t i = 1; i <= 3; ++i) {
-        Check(receiver.queue->Submit(Request(100, i)) == S_OK, "Submit repeated identical frame");
-        receiver.Collect(i);
-        if (i == 1) receiver.Wait([&] { return receiver.queue->Status().active == 0; });
-    }
-    receiver.Wait([&] { return receiver.queue->Status().active == 0; });
-    const auto status = receiver.queue->Status();
-    Check(status.scratchFactories == 2 && status.scratchTargets == 4 && status.scratchUploads == 4,
-          "Repeated identical renders create no new factories, targets or uploads");
-    Check(status.scratchBytes > 0 && status.scratchBytes <= RenderQueueLimits{}.scratchBytes,
-          "Retained scratch is counted and bounded");
-    receiver.queue->Stop();
-    Check(receiver.queue->Status().scratchBytes == 0, "Stopped worker releases scratch");
-
-    Receiver tiny;
-    RenderQueueLimits limits;
-    limits.scratchBytes = 1;
-    tiny.Start(limits);
-    Check(tiny.queue->Submit(Request(100, 1)) == S_OK, "Submit with tiny scratch budget");
-    tiny.Collect(1);
-    tiny.Wait([&] { return tiny.queue->Status().active == 0; });
-    Perimeter(tiny.results[0]);
-    Check(tiny.queue->Status().scratchBytes == 0, "Over-budget scratch is not retained");
+        Check(p.pieces[i].x == fresh.pieces[i].x && p.pieces[i].y == fresh.pieces[i].y
+            && p.pieces[i].width == fresh.pieces[i].width && p.pieces[i].height == fresh.pieces[i].height
+            && p.assembly.parameters[i].side == fresh.assembly.parameters[i].side,
+            "Next recipe geometry and shader sides match fresh preparation");
+    Check(p.tile->image.pixels == fresh.tile->image.pixels && p.tile->height.pixels == fresh.tile->height.pixels,
+        "Cancelled preparation leaves retained colour and height tiles intact");
 }
 
 int main() {
     const auto com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(com)) return 2;
     const std::array tests{
-        std::pair{"superseded job aborts between sides", SupersededJobAbortsBetweenSides},
+        std::pair{"superseded job aborts during preparation", SupersededJobAbortsDuringPreparation},
         std::pair{"cancelled job aborts, next render fresh", CancelledJobAbortsAndNextJobRendersFresh},
-        std::pair{"scratch reuse and byte bound", ScratchReuseAndBound},
-        std::pair{"real CPU fixture/cache reuse", RealCpuFixtureAndCacheReuse},
+        std::pair{"recipe geometry/cache reuse", RecipeFixtureAndCacheReuse},
         std::pair{"coalescing/pending count", CoalescingAndPendingCountBound},
         std::pair{"pending input byte quota", PendingBytesBoundIncludesChart},
         std::pair{"ready count backpressure", ReadyCountBackpressure},
@@ -1125,8 +1080,8 @@ int main() {
         std::pair{"stop pending/active", StopPendingAndActiveWithoutDetachedWork},
         std::pair{"stop notification lifetime", StopRemovesPostedNotifications},
         std::pair{"immutable chart/cache byte budget", ChartKeysAndCacheBudget},
-        std::pair{"GPU immutable inputs/byte admission", GpuInputsAndBudget},
-        std::pair{"shared padded publication dimension admission", PublicationDimensionAdmission},
+        std::pair{"immutable recipe/byte admission", RecipeInputsAndBudget},
+        std::pair{"GPU padded texture dimension admission", GpuDimensionAdmission},
         std::pair{"owned receiver/thread", ReceiverOwnershipAndWrongThreadCalls},
         std::pair{"receiver start/post failure", StartRevalidatesReceiverAndPostFailureIsVisible},
         std::pair{"native PostMessage quota retirement", NativePostMessageQuotaFailureRetiresAcceptedWork},

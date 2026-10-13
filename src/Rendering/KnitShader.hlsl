@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Ring lighting, fray and shadow adapted from src/Knitting/knit_math.c.
+// Ring lighting, fray and shadow adapted from tests/Rendering/BorderMath.c.
 cbuffer Parameters : register(b0) {
     float2 ringSize;
     float outerRadius;
@@ -62,11 +62,6 @@ float4 Mask(float4 pixel, int2 xy) {
     float2 unused;
     float coverage = hasHole ? saturate(Box(xy + .5, hole.xy, hole.zw - hole.xy, holeRadius, unused) + .5) : 1;
     return floor(pixel * coverage + .5) / 255;
-}
-
-float4 Copy(float4 position : SV_Position) : SV_Target {
-    int2 xy = int2(position.xy - offset);
-    return Mask(floor(colour.Load(int3(xy, 0)) * 255 + .5), xy);
 }
 
 float4 Knit(float4 position : SV_Position) : SV_Target {

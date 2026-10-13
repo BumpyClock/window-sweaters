@@ -4,7 +4,8 @@
 #include "..\..\src\Knitting\WicSurface.h"
 #include <stdexcept>
 
-namespace window_sweaters::rendering::testing {
+namespace window_sweaters::testing {
+using namespace rendering;
 inline void GpuCacheContracts(ID3D11Device* device) {
     using knitting::detail::Check;
     using Microsoft::WRL::ComPtr;
@@ -12,9 +13,9 @@ inline void GpuCacheContracts(ID3D11Device* device) {
         if (!value) throw std::runtime_error(message);
     };
     KnitFrameSpec frame;
-    frame.widthDip = 60; frame.heightDip = 30; frame.renderer = Renderer::Gpu;
+    frame.widthDip = 60; frame.heightDip = 30;
     knitting::TileCache cpuCache;
-    auto perimeter = std::make_shared<KnitPerimeter>(KnitRaster::RenderPerimeter(frame, {}, cpuCache));
+    auto perimeter = std::make_shared<KnitPerimeter>(KnitPreparation::PreparePerimeter(frame, {}, cpuCache));
     auto admitted = std::make_shared<ResourceLedger>();
     ResourceLedger::Lease upload;
     Check(admitted->Reserve(perimeter, upload), "Admit complete cache working set");
@@ -33,7 +34,7 @@ inline void GpuCacheContracts(ID3D11Device* device) {
         Check(device->CreateTexture2D(&desc, nullptr, &texture), "Cache admission target");
         Check(device->CreateRenderTargetView(texture.Get(), nullptr, &target), "Cache admission target view");
         const KnitSources sources{desc.Width, desc.Height, colour.Get(), heights.Get(),
-            &perimeter->assembly->parameters[side]};
+            &perimeter->assembly.parameters[side]};
         Check(shader.Render(sources, {}, target.Get(), {}, &upload), "Use admitted coordinate bytes");
         if (side == 0) {
             const auto pinnedBytes = admitted->Status().cachedGpuBytes;
@@ -128,7 +129,7 @@ inline void GpuCacheContracts(ID3D11Device* device) {
     mutableTile->image = {4096, 2049, 4096 * 4, std::vector<std::uint32_t>(4096u * 2049u, 0xff608090)};
     mutableTile->height = {4096, 2049, 4096 * 4, std::vector<std::uint32_t>(4096u * 2049u, 0xff606060)};
     mutableTile->layout.width_dip = 4096; mutableTile->layout.height_dip = 2049;
-    large.assembly->patch = mutableTile; large.assembly->cuff = mutableTile;
+    large.assembly.patch = mutableTile; large.assembly.cuff = mutableTile;
     const auto beforeOversized = bounded.TileUploads();
     Check(bounded.Assemble(large, 0, colour, heights), "Oversized tile temporary upload with aliased roles");
     require(bounded.TileUploads() == beforeOversized + 2 && bounded.CachedBytes() == 0 &&
@@ -156,9 +157,9 @@ inline void GpuCacheContracts(ID3D11Device* device) {
     auto coordinates = std::make_shared<ResourceLedger>();
     Gpu gpu(device, coordinates);
     knitting::RasterImage pixel{1, 1, 4, {0xff808080}};
-    Check(gpu.shader.Upload(pixel, colour), "Coordinate contract colour");
-    Check(gpu.shader.Upload(pixel, heights), "Coordinate contract heights");
-    auto parameters = perimeter->assembly->parameters[0];
+    Check(Upload(gpu.Device(), pixel, colour), "Coordinate contract colour");
+    Check(Upload(gpu.Device(), pixel, heights), "Coordinate contract heights");
+    auto parameters = perimeter->assembly.parameters[0];
     parameters.originY = .25f;
     KnitSources sources{64, 32, colour.Get(), heights.Get(), &parameters};
     ComPtr<ID3D11Texture2D> output;

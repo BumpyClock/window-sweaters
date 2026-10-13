@@ -59,17 +59,15 @@ try {
         & (Join-Path $output $exe)
         if ($LASTEXITCODE) { throw "Test failed: $exe ($LASTEXITCODE)" }
     }
-    foreach ($renderer in @('cpu', 'gpu')) {
-        $process = Start-Process (Join-Path $output 'WindowSweaters.Host.exe') `
-            -ArgumentList "--integration-contract --renderer $renderer" -PassThru -Wait `
-            -RedirectStandardOutput (Join-Path $artifacts "$renderer-host.stdout.log") `
-            -RedirectStandardError (Join-Path $artifacts "$renderer-host.stderr.log")
-        if ($process.ExitCode) { throw "Hidden Host $renderer contract failed ($($process.ExitCode))" }
-    }
-    foreach ($arguments in @('--renderer', '--renderer invalid', '--renderer cpu --renderer gpu',
+    $process = Start-Process (Join-Path $output 'WindowSweaters.Host.exe') -WindowStyle Hidden `
+        -ArgumentList '--integration-contract' -PassThru -Wait `
+        -RedirectStandardOutput (Join-Path $artifacts 'gpu-host.stdout.log') `
+        -RedirectStandardError (Join-Path $artifacts 'gpu-host.stderr.log')
+    if ($process.ExitCode) { throw "Hidden Host GPU contract failed ($($process.ExitCode))" }
+    foreach ($arguments in @('--renderer', '--renderer cpu', '--renderer gpu', '--renderer invalid', '--renderer cpu --renderer gpu',
         '--integration-contract --renderer invalid', '--integration-contract --test-mode',
         '--integration-contract --target 1')) {
-        $process = Start-Process (Join-Path $output 'WindowSweaters.Host.exe') -ArgumentList $arguments -PassThru -Wait
+        $process = Start-Process (Join-Path $output 'WindowSweaters.Host.exe') -WindowStyle Hidden -ArgumentList $arguments -PassThru -Wait
         if ($process.ExitCode -ne 2) { throw "CLI rejection failed: $arguments ($($process.ExitCode))" }
     }
     $comparison = Join-Path $output 'GpuShaderTests.exe'
@@ -100,7 +98,7 @@ try {
         $summary | Format-Table -AutoSize
     }
     $backends = if ($SkipWarp) { 'hardware (WARP skipped)' } else { 'hardware/WARP' }
-    Write-Output "PASS: CPU/GPU hidden contracts, $backends shader parity and completed-GPU benchmarks. Artifacts: $artifacts"
+    Write-Output "PASS: GPU hidden contracts, $backends shader parity and completed-GPU benchmarks. Artifacts: $artifacts"
 } finally {
     Pop-Location
 }

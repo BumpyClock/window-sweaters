@@ -43,4 +43,9 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="..\..\src\Rendering\KnitShader.targets" />
+  <ItemGroup>
+    <ClCompile Include="..\..\src\Rendering\GpuSnapshot.cpp" />
+    <ClCompile Include="BorderOracle.cpp" />
+    <ClCompile Include="BorderMath.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
+  </ItemGroup>
 </Project>

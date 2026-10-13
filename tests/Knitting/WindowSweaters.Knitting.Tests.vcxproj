@@ -32,11 +32,20 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>d2d1.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>dxgi.lib;d3d11.lib;d2d1.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="tests.cpp" /></ItemGroup>
   <ItemGroup><ProjectReference Include="..\..\src\Knitting\WindowSweaters.Knitting.vcxproj"><Project>{8AF6ED34-F768-46D9-AB18-CA04FF28555C}</Project></ProjectReference></ItemGroup>
   <ItemGroup><ProjectReference Include="..\..\src\Designs\WindowSweaters.Designs.vcxproj"><Project>{F4B277B9-B06F-4AE8-BFCF-B5B15E665336}</Project></ProjectReference></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <ClCompile Include="..\..\src\Rendering\GpuShader.cpp" />
+    <ClCompile Include="..\..\src\Rendering\KnitAssembler.cpp" />
+    <ClCompile Include="..\..\src\Rendering\GpuSnapshot.cpp" />
+  </ItemGroup>
+  <Import Project="..\..\src\Rendering\KnitShader.targets" />
+  <ItemGroup>
+    <ClCompile Include="..\Rendering\BorderMath.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
+  </ItemGroup>
 </Project>

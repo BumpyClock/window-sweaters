@@ -17,7 +17,7 @@ struct OverlayPublicationTest {
 }
 
 namespace window_sweaters::host {
-void RunHostConsumerContracts(rendering::Renderer renderer);
+void RunHostConsumerContracts();
 namespace {
 using namespace tracking;
 
@@ -221,6 +221,33 @@ void RenderPublicationTokens() {
         "Config/device/terminal invalidation retires every host gate without waiting for completion");
 }
 
+knitting::RasterImage ComposeCaptured(const rendering::KnitPerimeter& perimeter,
+    const std::array<knitting::RasterImage, 4>& captures) {
+    knitting::RasterImage image{perimeter.width, perimeter.height, perimeter.width * 4u, {}};
+    image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
+    for (std::size_t side = 0; side < captures.size(); ++side) {
+        const auto& piece = perimeter.pieces[side];
+        const auto& source = captures[side];
+        Check(perimeter.PieceValid(piece) && source.width == piece.width && source.height == piece.height
+            && source.stride == source.width * 4u
+            && source.pixels.size() == static_cast<std::size_t>(source.width) * source.height,
+            "Captured GPU pixels match prepared side geometry");
+        for (std::uint32_t y = 0; y < source.height; ++y)
+            for (std::uint32_t x = 0; x < source.width; ++x) {
+                const auto pixel = source.pixels[static_cast<std::size_t>(y) * source.width + x];
+                auto& destination = image.pixels[static_cast<std::size_t>(y + piece.y) * image.width + x + piece.x];
+                const auto inverse = 255u - (pixel >> 24);
+                std::uint32_t blended{};
+                for (int shift = 0; shift < 32; shift += 8) {
+                    const auto channel = ((pixel >> shift) & 255u) + (((destination >> shift) & 255u) * inverse + 127u) / 255u;
+                    blended |= std::min(255u, channel) << shift;
+                }
+                destination = blended;
+            }
+    }
+    return image;
+}
+
 void ResourceReservationBounds() {
     using namespace rendering;
     auto tile=std::make_shared<knitting::Tile>();
@@ -228,51 +255,33 @@ void ResourceReservationBounds() {
     perimeter->width=8; perimeter->height=8;
     for (auto& piece:perimeter->pieces) {
         piece.width=piece.height=2;
-        piece.image={2,2,8,{0xff123456,0xff123456,0xff123456,0xff123456}};
     }
-    ResourceLedger insufficient(1024*1024,127);
-    ResourceLedger::Lease denied;
-    Check(insufficient.Reserve(perimeter,denied)==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
-        !insufficient.Status().estimatedGpuBytes && !insufficient.Status().uploadTransientBytes &&
-        !insufficient.Status().reservations,
-        "CPU batch rejects 63 transient bytes that fit its largest 16-byte source but not all four sources");
-    ResourceLedger exact(1024*1024,128);
-    ResourceLedger::Lease complete;
-    Check(SUCCEEDED(exact.Reserve(perimeter,complete)) && exact.Status().estimatedGpuBytes==128 &&
-        exact.Status().uploadTransientBytes==64,
-        "CPU batch admits exactly four 16-byte targets plus four 16-byte in-flight sources");
-    complete.EndUpload();
-    Check(exact.Status().estimatedGpuBytes==64 && !exact.Status().uploadTransientBytes,
-        "CPU batch completion releases every source reservation and retains only target surfaces");
-    complete.Reset();
-    Check(!exact.Status().estimatedGpuBytes && !exact.Status().retainedCpuBytes && !exact.Status().reservations,
-        "Completed CPU batch teardown releases its full reservation");
-    ResourceLedger ledger(1024*1024,224);
+    ResourceLedger ledger(1024*1024,416);
     ResourceLedger::Lease first,alias,replacement;
-    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==128 &&
-        ledger.Status().uploadTransientBytes==64 && ledger.Status().surfaces==4,
-        "Four 2x2 BGRA surfaces reserve literal 64 target bytes plus all 64 in-flight source bytes");
+    Check(SUCCEEDED(ledger.Reserve(perimeter,first)) && ledger.Status().estimatedGpuBytes==320 &&
+        ledger.Status().uploadTransientBytes==256 && ledger.Status().surfaces==4,
+        "Four 2x2 surfaces reserve 64 retained bytes plus 256 colour/height and coordinate bytes");
     first.EndUpload();
     const auto cpu=ledger.Status().retainedCpuBytes;
     Check(SUCCEEDED(ledger.Reserve(perimeter,alias)) && ledger.Status().retainedCpuBytes==cpu &&
-        ledger.Status().estimatedGpuBytes==192,"Aliased CPU perimeter and tile count once while each overlay has four surfaces");
+        ledger.Status().estimatedGpuBytes==384,"Aliased recipe and tile count once while each overlay has four surfaces");
     alias.EndUpload();
     Check(ledger.Reserve(perimeter,replacement)==HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
         ledger.Status().estimatedGpuBytes==128 && ledger.Status().retainedCpuBytes==cpu,
         "Reserve-before-upload rejects old-plus-new replacement peak even when final surfaces would fit");
     alias.Reset();
     Check(SUCCEEDED(ledger.Reserve(perimeter,replacement)) && ledger.Status().retainedCpuBytes==cpu,
-        "Released overlay capacity permits replacement without recounting shared CPU");
+        "Released overlay capacity permits replacement without recounting shared tile backing");
     replacement.EndUpload(); first.Reset();
     Check(ledger.Status().retainedCpuBytes==cpu && ledger.Status().estimatedGpuBytes==64,
-        "One retained alias keeps CPU backing after old overlay is retired");
+        "One retained alias keeps tile backing after old overlay is retired");
     replacement.Reset();
     Check(!ledger.Status().retainedCpuBytes && !ledger.Status().estimatedGpuBytes &&
-        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=224,
-        "Last alias retires all CPU and known surface backing accurately");
-    perimeter->pieces[0].image.width=UINT32_MAX;
+        !ledger.Status().surfaces && ledger.Status().peakEstimatedGpuBytes<=416,
+        "Last alias retires all retained tile and surface backing accurately");
+    perimeter->pieces[0].width=UINT32_MAX;
     Check(ledger.Reserve(perimeter,first)==E_INVALIDARG && !ledger.Status().reservations,
-        "Overflowed BGRA stride/dimensions cannot enter aggregate ledger");
+        "Overflowed GPU side dimensions cannot enter aggregate ledger");
 }
 void AuxiliaryTileReservationBounds() {
     using namespace rendering;
@@ -283,8 +292,7 @@ void AuxiliaryTileReservationBounds() {
     auto perimeter = std::make_shared<KnitPerimeter>();
     perimeter->width = perimeter->height = 8;
     perimeter->tile = tile;
-    perimeter->assembly.emplace();
-    perimeter->assembly->patch = patch; perimeter->assembly->cuff = cuff;
+    perimeter->assembly.patch = patch; perimeter->assembly.cuff = cuff;
     for (auto& piece : perimeter->pieces) piece.width = piece.height = 2;
     const auto mainBytes = sizeof(knitting::Tile) + tile->image.pixels.capacity() * 4;
     const auto auxiliaryBytes = 2 * sizeof(knitting::Tile) +
@@ -300,7 +308,7 @@ void AuxiliaryTileReservationBounds() {
         "Distinct GPU perimeters share main, patch and cuff allocations");
     Check(SUCCEEDED(ledger.Reserve(perimeter, alias)) &&
         ledger.Status().retainedCpuBytes == total + sizeof(KnitPerimeter),
-        "Aliased GPU perimeter adds no retained CPU backing");
+        "Aliased GPU perimeter adds no retained tile backing");
     first.Reset(); shared.Reset();
     Check(ledger.Status().retainedCpuBytes == total, "Remaining GPU alias retains every tile");
     alias.Reset();
@@ -308,8 +316,8 @@ void AuxiliaryTileReservationBounds() {
     ResourceLedger limited(sizeof(KnitPerimeter) + mainBytes + auxiliaryBytes / 2);
     Check(limited.Reserve(perimeter, first) == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA) &&
         limited.Status().retainedCpuBytes == 0 && limited.Status().reservations == 0,
-        "CPU quota between main-only and complete GPU backing rejects reservation");
-    other->assembly->patch = tile; other->assembly->cuff = tile;
+        "Tile quota between main-only and complete GPU backing rejects reservation");
+    other->assembly.patch = tile; other->assembly.cuff = tile;
     Check(SUCCEEDED(ledger.Reserve(other, first)) &&
         ledger.Status().retainedCpuBytes == sizeof(KnitPerimeter) + mainBytes,
         "Repeated tile pointers within GPU assembly count once");
@@ -495,7 +503,7 @@ void NativePerimeterPublication() {
     Check(SUCCEEDED(overlay.Upload(pixels, bounds, {clip.left, clip.top, clip.right, clip.bottom},
         {content.left, content.top, content.right, content.bottom},
         static_cast<float>(current.radiusDip * current.deviceScale),
-        static_cast<float>(current.deviceScale))), "Upload four real BGRA pieces with authoritative radius and source tuck");
+        static_cast<float>(current.deviceScale))), "Upload four prepared GPU sides with authoritative radius and source tuck");
     Check(EqualRect(&overlay.Bounds(), &bounds) && !IsWindowVisible(overlay.Window()),
         "Prepared upload remains hidden at today's physical position");
     Check(overlay.CommitCount() == 1, "Upload publishes with a single DComp commit");
@@ -517,87 +525,77 @@ void NativePerimeterPublication() {
         overlay.CommitCount() == commits, "Origin-only move with unchanged clip issues no DComp commit");
     Check(SUCCEEDED(overlay.UpdatePlacement(originOnly, {1, 1, 460, 360})) && overlay.CommitCount() == commits + 1,
         "Changed clip commits exactly once");
-    for (const auto renderer : {rendering::Renderer::Gpu, rendering::Renderer::Cpu}) {
-        const auto rendererName = renderer == rendering::Renderer::Gpu ? "gpu" : "cpu";
-        const auto Check = [rendererName](bool condition, const char* message) {
-            if (!condition) throw std::runtime_error(std::string(rendererName) + ": " + message);
-        };
-        for (const auto scale : {1.f, 1.25f, 1.5f, 2.f}) {
-            for (const auto radiusDip : {0.f, 4.f, 8.f}) {
-                rendering::KnitFrameSpec frame;
-                frame.renderer = renderer;
-                frame.tuckDip = 6;
-                frame.widthDip = 240; frame.heightDip = 140;
-                frame.contentWidthPixels = static_cast<std::uint32_t>(240 * scale);
-                frame.contentHeightPixels = static_cast<std::uint32_t>(140 * scale);
-                frame.bandDip = 16; frame.radiusDip = radiusDip; frame.deviceScale = scale;
-                knitting::TileCache cache;
-                auto perimeter = std::make_shared<const rendering::KnitPerimeter>(
-                    rendering::KnitRaster::RenderPerimeter(frame, {}, cache));
-                const auto inset = static_cast<LONG>(perimeter->contentInsetPixels);
-                const RECT contentRect{inset, inset, inset + static_cast<LONG>(frame.contentWidthPixels),
-                    inset + static_cast<LONG>(frame.contentHeightPixels)};
-                const RECT outer{100, 100, 100 + static_cast<LONG>(perimeter->width), 100 + static_cast<LONG>(perimeter->height)};
-                const RECT fullClip{0, 0, static_cast<LONG>(perimeter->width), static_cast<LONG>(perimeter->height)};
-                std::array<knitting::RasterImage, 4> gpuPixels;
-                Check(SUCCEEDED(overlay.Upload(perimeter, outer, fullClip, contentRect, radiusDip * scale, scale, &gpuPixels)),
-                    "Upload real rounded/square/round-small source pieces and read masked DComp GPU pixels");
-                auto captured = *perimeter;
-                captured.assembly.reset();
-                for (std::size_t side = 0; side < gpuPixels.size(); ++side) captured.pieces[side].image = std::move(gpuPixels[side]);
-                const auto image = rendering::KnitRaster::Compose(captured);
-                bool antialiased{};
-                for (const auto pixel : image.pixels) {
-                    const auto a = pixel >> 24;
-                    Check((pixel & 255) <= a && ((pixel >> 8) & 255) <= a && ((pixel >> 16) & 255) <= a,
-                        "Actual DComp rounded-edge channels remain valid premultiplied BGRA");
-                    antialiased = antialiased || (a > 0 && a < 255);
-                }
-                Check(antialiased, "Actual DComp rounded ring retains antialiased edge coverage");
-                auto alpha = [&](int x, int y) {
-                    Check(x >= 0 && y >= 0 && x < static_cast<int>(image.width) && y < static_cast<int>(image.height),
-                        "Rounded corner pixel sample lies within perimeter");
-                    return image.pixels[static_cast<std::size_t>(y) * image.width + x] >> 24;
-                };
-                const float r = radiusDip * scale;
-                Check(alpha(static_cast<int>(image.width / 2), inset) > 0,
-                    "Actual DComp retains original inward one-DIP tuck underneath verified target placement");
-                for (int y = contentRect.top + 2; y < contentRect.bottom - 2; ++y) {
-                    for (int x = contentRect.left + 2; x < contentRect.right - 2; ++x) {
-                        const float px = static_cast<float>(x) + .5f, py = static_cast<float>(y) + .5f;
-                        const float holeRadius = std::max(0.f, r - scale);
-                        const float holeLeft = contentRect.left + scale, holeTop = contentRect.top + scale;
-                        const float holeRight = contentRect.right - scale, holeBottom = contentRect.bottom - scale;
-                        const float cx = std::clamp(px, holeLeft + holeRadius, holeRight - holeRadius);
-                        const float cy = std::clamp(py, holeTop + holeRadius, holeBottom - holeRadius);
-                        const float distance = std::hypot(px - cx, py - cy);
-                        const bool central = holeRadius > 0 ? distance < holeRadius - 1.25f
-                            : px > holeLeft + 1.25f && px < holeRight - 1.25f &&
-                                py > holeTop + 1.25f && py < holeBottom - 1.25f;
-                        if (central) {
-                            if (alpha(x, y) != 0) std::fprintf(stderr, "%s interior radius=%g scale=%g x=%d y=%d alpha=%u\n",
-                                rendererName, radiusDip, scale, x - inset, y - inset, alpha(x, y));
-                            Check(alpha(x, y) == 0, "Actual DComp content-interior alpha is zero");
-                        }
+    for (const auto scale : {1.f, 1.25f, 1.5f, 2.f}) {
+        for (const auto radiusDip : {0.f, 4.f, 8.f}) {
+            rendering::KnitFrameSpec frame;
+            frame.tuckDip = 6;
+            frame.widthDip = 240; frame.heightDip = 140;
+            frame.contentWidthPixels = static_cast<std::uint32_t>(240 * scale);
+            frame.contentHeightPixels = static_cast<std::uint32_t>(140 * scale);
+            frame.bandDip = 16; frame.radiusDip = radiusDip; frame.deviceScale = scale;
+            knitting::TileCache cache;
+            auto perimeter = std::make_shared<const rendering::KnitPerimeter>(
+                rendering::KnitPreparation::PreparePerimeter(frame, {}, cache));
+            const auto inset = static_cast<LONG>(perimeter->contentInsetPixels);
+            const RECT contentRect{inset, inset, inset + static_cast<LONG>(frame.contentWidthPixels),
+                inset + static_cast<LONG>(frame.contentHeightPixels)};
+            const RECT outer{100, 100, 100 + static_cast<LONG>(perimeter->width), 100 + static_cast<LONG>(perimeter->height)};
+            const RECT fullClip{0, 0, static_cast<LONG>(perimeter->width), static_cast<LONG>(perimeter->height)};
+            std::array<knitting::RasterImage, 4> gpuPixels;
+            Check(SUCCEEDED(overlay.Upload(perimeter, outer, fullClip, contentRect, radiusDip * scale, scale, &gpuPixels)),
+                "Upload real rounded/square/round-small source pieces and read masked DComp GPU pixels");
+            const auto image = ComposeCaptured(*perimeter, gpuPixels);
+            bool antialiased{};
+            for (const auto pixel : image.pixels) {
+                const auto a = pixel >> 24;
+                Check((pixel & 255) <= a && ((pixel >> 8) & 255) <= a && ((pixel >> 16) & 255) <= a,
+                    "Actual DComp rounded-edge channels remain valid premultiplied BGRA");
+                antialiased = antialiased || (a > 0 && a < 255);
+            }
+            Check(antialiased, "Actual DComp rounded ring retains antialiased edge coverage");
+            auto alpha = [&](int x, int y) {
+                Check(x >= 0 && y >= 0 && x < static_cast<int>(image.width) && y < static_cast<int>(image.height),
+                    "Rounded corner pixel sample lies within perimeter");
+                return image.pixels[static_cast<std::size_t>(y) * image.width + x] >> 24;
+            };
+            const float r = radiusDip * scale;
+            Check(alpha(static_cast<int>(image.width / 2), inset) > 0,
+                "Actual DComp retains original inward one-DIP tuck underneath verified target placement");
+            for (int y = contentRect.top + 2; y < contentRect.bottom - 2; ++y) {
+                for (int x = contentRect.left + 2; x < contentRect.right - 2; ++x) {
+                    const float px = static_cast<float>(x) + .5f, py = static_cast<float>(y) + .5f;
+                    const float holeRadius = std::max(0.f, r - scale);
+                    const float holeLeft = contentRect.left + scale, holeTop = contentRect.top + scale;
+                    const float holeRight = contentRect.right - scale, holeBottom = contentRect.bottom - scale;
+                    const float cx = std::clamp(px, holeLeft + holeRadius, holeRight - holeRadius);
+                    const float cy = std::clamp(py, holeTop + holeRadius, holeBottom - holeRadius);
+                    const float distance = std::hypot(px - cx, py - cy);
+                    const bool central = holeRadius > 0 ? distance < holeRadius - 1.25f
+                        : px > holeLeft + 1.25f && px < holeRight - 1.25f &&
+                            py > holeTop + 1.25f && py < holeBottom - 1.25f;
+                    if (central) {
+                        if (alpha(x, y) != 0) std::fprintf(stderr, "GPU interior radius=%g scale=%g x=%d y=%d alpha=%u\n",
+                            radiusDip, scale, x - inset, y - inset, alpha(x, y));
+                        Check(alpha(x, y) == 0, "Actual DComp content-interior alpha is zero");
                     }
-                }
-                if (r > 0) {
-                    Check(alpha(inset, inset) > 0, "Actual DComp preserves yarn in rounded target bounding-box corner instead of rectangular erasure");
-                    for (int sample = 1; sample < 12; ++sample) {
-                        const float angle = static_cast<float>(sample) * 1.57079632679f / 12.f;
-                        const int x = static_cast<int>(std::floor(inset + r - (r + 1.5f) * std::cos(angle)));
-                        const int y = static_cast<int>(std::floor(inset + r - (r + 1.5f) * std::sin(angle)));
-                        Check(alpha(x, y) > 0, "Actual DComp yarn arc stays continuous outside the rounded content cutout");
-                    }
-                } else {
-                    Check(alpha(inset + static_cast<int>(std::ceil(scale)) + 1,
-                        inset + static_cast<int>(std::ceil(scale)) + 1) == 0,
-                        "Explicit square target keeps transparent interior beyond source tuck");
                 }
             }
+            if (r > 0) {
+                Check(alpha(inset, inset) > 0, "Actual DComp preserves yarn in rounded target bounding-box corner instead of rectangular erasure");
+                for (int sample = 1; sample < 12; ++sample) {
+                    const float angle = static_cast<float>(sample) * 1.57079632679f / 12.f;
+                    const int x = static_cast<int>(std::floor(inset + r - (r + 1.5f) * std::cos(angle)));
+                    const int y = static_cast<int>(std::floor(inset + r - (r + 1.5f) * std::sin(angle)));
+                    Check(alpha(x, y) > 0, "Actual DComp yarn arc stays continuous outside the rounded content cutout");
+                }
+            } else {
+                Check(alpha(inset + static_cast<int>(std::ceil(scale)) + 1,
+                    inset + static_cast<int>(std::ceil(scale)) + 1) == 0,
+                    "Explicit square target keeps transparent interior beyond source tuck");
+            }
         }
-        std::printf("PASS: %s DComp readback validates rounded/square/round-small masks at 1x/1.25x/1.5x/2x, transparent client interior and continuous corner yarn\n", rendererName);
     }
+    std::puts("PASS: GPU DComp readback validates rounded/square/round-small masks at 1x/1.25x/1.5x/2x, transparent client interior and continuous corner yarn");
     {
         rendering::KnitFrameSpec tiny;
         tiny.widthDip = 12; tiny.heightDip = 8; tiny.bandDip = 16;
@@ -605,7 +603,7 @@ void NativePerimeterPublication() {
         tiny.contentWidthPixels = 15; tiny.contentHeightPixels = 10;
         knitting::TileCache tinyCache;
         const auto tinyPerimeter = std::make_shared<const rendering::KnitPerimeter>(
-            rendering::KnitRaster::RenderPerimeter(tiny, {}, tinyCache));
+            rendering::KnitPreparation::PreparePerimeter(tiny, {}, tinyCache));
         const auto tinyInset = static_cast<LONG>(tinyPerimeter->contentInsetPixels);
         const RECT tinyContent{tinyInset, tinyInset, tinyInset + 15, tinyInset + 10};
         const RECT tinyBounds{0, 0, static_cast<LONG>(tinyPerimeter->width), static_cast<LONG>(tinyPerimeter->height)};
@@ -621,7 +619,7 @@ void NativePerimeterPublication() {
 }
 }
 
-int RunHostContractTests(rendering::Renderer renderer) {
+int RunHostContractTests() {
     GeometryAndRecovery();
     RecursiveValidationCannotOverridePolicy();
     StaleBatchPayloadUsesCurrentSnapshot();
@@ -629,7 +627,7 @@ int RunHostContractTests(rendering::Renderer renderer) {
     ResourceReservationBounds();
     AuxiliaryTileReservationBounds();
     NativePerimeterPublication();
-    RunHostConsumerContracts(renderer);
+    RunHostConsumerContracts();
     std::puts("PASS: host action/geometry contract assertions (scripted; no desktop windows launched)");
     std::puts("PASS: recursive-validation and stale-batch snapshot regressions (scripted)");
     std::puts("PASS: immutable MTA stockinette preparation -> four-surface native DComp upload, clip/content exclusion and move reuse (hidden; desktop presentation not tested)");

@@ -40,11 +40,11 @@
     <ClCompile Include="knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
     <ClCompile Include="KnitTile.cpp" />
     <ClCompile Include="Chart.cpp" />
-    <ClCompile Include="..\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\Rendering\KnitPreparation.cpp" />
     <ClInclude Include="knit_math.h" />
     <ClInclude Include="KnitTile.h" />
     <ClInclude Include="WicSurface.h" />
-    <ClInclude Include="..\Rendering\KnitRaster.h" />
+    <ClInclude Include="..\Rendering\KnitPreparation.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

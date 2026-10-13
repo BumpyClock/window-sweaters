@@ -34,7 +34,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>d2d1.lib;windowscodecs.lib;ole32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>dxgi.lib;d3d11.lib;d2d1.lib;windowscodecs.lib;ole32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <!-- Direct sources avoid rebuilding or overwriting shared Host/library artifacts. -->
@@ -51,8 +51,14 @@
     <ClCompile Include="..\..\src\Knitting\KnitTile.cpp" />
     <ClCompile Include="..\..\src\Knitting\Chart.cpp" />
     <ClCompile Include="..\..\src\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
-    <ClCompile Include="..\..\src\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\..\src\Rendering\KnitPreparation.cpp" />
     <ClCompile Include="..\..\src\Designs\Catalogue.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <ClCompile Include="..\..\src\Rendering\GpuShader.cpp" />
+    <ClCompile Include="..\..\src\Rendering\KnitAssembler.cpp" />
+    <ClCompile Include="..\..\src\Rendering\GpuSnapshot.cpp" />
+  </ItemGroup>
+  <Import Project="..\..\src\Rendering\KnitShader.targets" />
 </Project>

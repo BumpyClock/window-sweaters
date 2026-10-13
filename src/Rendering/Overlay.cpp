@@ -75,14 +75,9 @@ HRESULT ReadRegion(ID3D11Texture2D* texture, UINT subresource, POINT offset, std
 HRESULT GraphicsDevice::Initialize(D3D_DRIVER_TYPE driver) noexcept {
     Destroy();
     HRESULT result = D3D11CreateDevice(nullptr,
-        driver == D3D_DRIVER_TYPE_UNKNOWN ? D3D_DRIVER_TYPE_HARDWARE : driver, nullptr,
+        driver, nullptr,
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
         graphics_.ReleaseAndGetAddressOf(), nullptr, nullptr);
-    if (FAILED(result) && driver == D3D_DRIVER_TYPE_UNKNOWN) {
-        result = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
-            graphics_.ReleaseAndGetAddressOf(), nullptr, nullptr);
-    }
     if (FAILED(result)) return result;
     try {
         shader_ = std::make_shared<GpuShader>(graphics_.Get(), resources_);
@@ -154,8 +149,7 @@ HRESULT Overlay::UploadPiece(const KnitPerimeter& perimeter, std::size_t side, c
     knitting::RasterImage* uploadedPixels, ResourceLedger::Lease* reservation) noexcept {
     const auto& piece = perimeter.pieces[side];
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> colour, heights;
-    HRESULT result = perimeter.assembly ? assembler_->Assemble(perimeter, side, colour, heights, reservation)
-        : shader_->Upload(piece.image, colour);
+    HRESULT result = assembler_->Assemble(perimeter, side, colour, heights, reservation);
     if (FAILED(result)) return result;
     result = composition_->CreateSurface(piece.width, piece.height,
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED,
@@ -183,7 +177,7 @@ HRESULT Overlay::UploadPiece(const KnitPerimeter& perimeter, std::size_t side, c
     mask.radius = std::min(std::max(0.f, radiusPixels - tuck), std::min(mask.right - mask.left, mask.bottom - mask.top) * .5f);
     mask.hole = mask.right > mask.left && mask.bottom > mask.top;
     const KnitSources sources{piece.width, piece.height, colour.Get(), heights.Get(),
-        perimeter.assembly ? &perimeter.assembly->parameters[side] : nullptr};
+        &perimeter.assembly.parameters[side]};
     if (SUCCEEDED(result)) result = shader_->Render(sources, mask, target.Get(), offset, reservation);
     if (SUCCEEDED(result) && uploadedPixels)
         result = ReadRegion(texture.Get(), subresource, offset, piece.width, piece.height, *uploadedPixels);
@@ -223,10 +217,10 @@ HRESULT Overlay::PrepareUpload(std::shared_ptr<const KnitPerimeter> perimeter, c
         clip.bottom <= clip.top || !std::isfinite(radiusPixels) || radiusPixels < 0 ||
         !std::isfinite(tuckPixels) || tuckPixels < 0) return E_INVALIDARG;
     std::uint64_t bytes{};
-    if (perimeter->assembly && !perimeter->tile) return E_INVALIDARG;
+    if (!perimeter->tile) return E_INVALIDARG;
     for (const auto& piece : perimeter->pieces) {
         if (!perimeter->PieceValid(piece)) return E_INVALIDARG;
-        bytes += std::uint64_t{piece.width} * piece.height * 4u * (perimeter->assembly ? 2u : 1u);
+        bytes += std::uint64_t{piece.width} * piece.height * 4u * 2u;
     }
     if (bytes > 64ull * 1024 * 1024) return E_OUTOFMEMORY;
     ResourceLedger::Lease reservation;

@@ -1,6 +1,7 @@
 #include "Appearance.h"
 #include "..\Settings\Preview.h"
-#include "..\Rendering\KnitRaster.h"
+#include "..\Rendering\KnitPreparation.h"
+#include "..\Rendering\GpuSnapshot.h"
 #include <array>
 #include <cstdio>
 #include <string_view>
@@ -491,6 +492,7 @@ int main() {
     try {
         using namespace window_sweaters;
         knitting::TileCache hostCache, previewCache;
+        rendering::GpuSnapshot snapshot;
         std::size_t checks{};
         auto compare = [&](contracts::Configuration configuration) {
             auto hostTile = host::MakeAppearance(configuration);
@@ -499,8 +501,8 @@ int main() {
             previewTile.rasterScale = 2;
             rendering::KnitFrameSpec frame;
             frame.widthDip = 400; frame.heightDip = 140; frame.bandDip = configuration.border_width_dip;
-            const auto actual = rendering::KnitRaster::RenderFrame(frame, hostTile, hostCache);
-            const auto preview = rendering::KnitRaster::RenderFrame(frame, previewTile, previewCache);
+            const auto actual = snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame, hostTile, hostCache));
+            const auto preview = snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame, previewTile, previewCache));
             if (actual.width != preview.width || actual.height != preview.height || actual.pixels != preview.pixels)
                 throw std::runtime_error("Host/Settings production appearance pixel parity");
             ++checks;
@@ -531,7 +533,7 @@ int main() {
                     frame.widthDip = 400; frame.heightDip = 140; frame.bandDip = configuration.border_width_dip;
                     wchar_t name[MAX_PATH]{};
                     swprintf_s(name, L"%s\\%06x-%S.png", outputs, base & 0xffffffu, theme->id);
-                    knitting::SavePng(rendering::KnitRaster::RenderFrame(frame, tile, hostCache), name);
+                    knitting::SavePng(snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame, tile, hostCache)), name);
                 }
             }
             configuration.base_override = false;

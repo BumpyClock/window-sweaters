@@ -4,7 +4,7 @@
 #include <d3d11.h>
 #include <dcomp.h>
 #include <wrl/client.h>
-#include "KnitRaster.h"
+#include "KnitPreparation.h"
 #include "ResourceLedger.h"
 #include "GpuShader.h"
 #include "KnitAssembler.h"
@@ -24,7 +24,7 @@ public:
     GraphicsDevice(const GraphicsDevice&) = delete;
     GraphicsDevice& operator=(const GraphicsDevice&) = delete;
 
-    HRESULT Initialize(D3D_DRIVER_TYPE driver = D3D_DRIVER_TYPE_UNKNOWN) noexcept;
+    HRESULT Initialize(D3D_DRIVER_TYPE driver = D3D_DRIVER_TYPE_HARDWARE) noexcept;
     void Destroy() noexcept;
 
     IDCompositionDevice* Composition() const noexcept { return composition_.Get(); }

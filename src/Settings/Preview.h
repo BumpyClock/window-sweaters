@@ -1,6 +1,6 @@
 #pragma once
 #include "..\Contracts\Configuration.h"
-#include "..\Rendering\KnitRaster.h"
+#include "..\Rendering\KnitPreparation.h"
 #include "..\Integration\ImportedAppearance.h"
 #include <filesystem>
 #include <functional>

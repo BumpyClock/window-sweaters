@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
-#include "KnitRaster.h"
+#include "KnitPreparation.h"
 #include "..\Tracking\TrackingModel.h"
 #include <windows.h>
 #include <memory>
@@ -43,7 +43,6 @@ struct RenderQueueLimits {
     std::size_t maxPerimeterBytes{64u * 1024u * 1024u};
     std::size_t maxTransientBytes{128u * 1024u * 1024u};
     std::size_t cacheBytes{8u * 1024u * 1024u};
-    std::size_t scratchBytes{16u * 1024u * 1024u};
     std::size_t maxTargetKeys{4096};
 };
 
@@ -54,8 +53,7 @@ struct RenderQueueStatus {
     std::size_t pending{}, maxPending{}, pendingBytes{}, maxPendingBytes{};
     std::size_t ready{}, maxReady{}, readyBytes{}, maxReadyBytes{};
     std::size_t active{};
-    std::size_t transientBytes{}, maxTransientBytes{}, residentCacheBytes{}, scratchBytes{};
-    std::uint64_t scratchFactories{}, scratchTargets{}, scratchUploads{};
+    std::size_t transientBytes{}, maxTransientBytes{}, residentCacheBytes{};
     std::uint64_t renderRequests{}, acceptedRequests{}, renderPreparations{};
     std::uint64_t coalesced{}, staleCancelled{}, quotaRejected{};
     std::uint64_t tileGenerations{}, cacheHits{}, notifications{}, notificationFailures{};

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "GpuReadback.h"
+#include "BorderOracle.h"
+#include "BorderMath.h"
+#include "..\..\src\Rendering\GpuSnapshot.h"
 #include "GpuCacheTests.h"
 #include "..\..\src\Rendering\GpuShader.h"
 #include "..\..\src\Rendering\Overlay.h"
@@ -64,29 +67,6 @@ bool WithinParity(int peak, std::size_t outliers, Sampling sampling) {
     if (exactRasterizer) return peak <= 2;
     return sampling == Sampling::Nearest ? outliers <= 64 : peak <= 96;
 }
-RasterImage SoftwareStrip(const KnitPerimeter& perimeter, std::size_t side, bool heights) {
-    const auto& piece = perimeter.pieces[side];
-    detail::WicSurface surface(piece.width, piece.height, perimeter.deviceScale);
-    const KnitTileBrush brush = [&](int, const Tile& tile, bool height, float px, float py, float repeat) {
-        const auto& image = height ? tile.height : tile.image;
-        ComPtr<ID2D1Bitmap> bitmap;
-        Check(surface.target->CreateBitmap(D2D1::SizeU(image.width, image.height), image.pixels.data(),
-            image.stride, D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
-                D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f * tile.layout.raster_scale, 96.f * tile.layout.raster_scale),
-            &bitmap), "Software reference tile bitmap");
-        ComPtr<ID2D1BitmapBrush> result;
-        Check(surface.target->CreateBitmapBrush(bitmap.Get(), D2D1::BitmapBrushProperties(
-            D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, tile.spec.sampling == Sampling::Nearest
-                ? D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_BITMAP_INTERPOLATION_MODE_LINEAR),
-            &result), "Software reference tile brush");
-        result->SetTransform(D2D1::Matrix3x2F::Scale(repeat / tile.layout.width_dip, 1.f)
-            * D2D1::Matrix3x2F::Translation(px, py));
-        return result;
-    };
-    DrawKnitStrip(*surface.target.Get(), *perimeter.assembly, *perimeter.tile, piece,
-        static_cast<int>(side), heights, brush);
-    return surface.Read();
-}
 int PixelError(std::uint32_t a, std::uint32_t b) {
     int peak = 0;
     for (int shift = 0; shift < 32; shift += 8)
@@ -101,10 +81,10 @@ std::uint64_t SignificantPixels(const RasterImage& a, const RasterImage& b) {
 void ShaderOnly(testing::Gpu& shader, const KnitPerimeter& perimeter, const std::filesystem::path& output,
                 const std::string& name) {
     for (std::size_t side = 0; side < perimeter.pieces.size(); ++side) {
-        const auto flat = SoftwareStrip(perimeter, side, false);
-        const auto heights = SoftwareStrip(perimeter, side, true);
+        const auto flat = testing::SoftwareStrip(perimeter, side, false);
+        const auto heights = testing::SoftwareStrip(perimeter, side, true);
         auto reference = flat;
-        const auto& p = perimeter.assembly->parameters[side];
+        const auto& p = perimeter.assembly.parameters[side];
         const ws_knit_ring ring{p.ringWidth, p.ringHeight, p.outerRadius, p.inset, p.innerRadius};
         const auto width = static_cast<int>(flat.width), height = static_cast<int>(flat.height);
         auto tubeOnly = flat;
@@ -123,8 +103,8 @@ void ShaderOnly(testing::Gpu& shader, const KnitPerimeter& perimeter, const std:
             reference.pixels.data(), width, height) != 0, "CPU shadow reference");
         shadowPixels += SignificantPixels(frayed, reference);
         ComPtr<ID3D11ShaderResourceView> colourView, heightView;
-        Check(shader.shader.Upload(flat, colourView), "Identical shader colour upload");
-        Check(shader.shader.Upload(heights, heightView), "Identical shader height upload");
+        Check(testing::Upload(shader.Device(), flat, colourView), "Identical shader colour upload");
+        Check(testing::Upload(shader.Device(), heights, heightView), "Identical shader height upload");
         ComPtr<ID3D11Texture2D> texture;
         Check(testing::Shade(shader, {flat.width, flat.height, colourView.Get(), heightView.Get(), &p}, texture),
             "Identical-input shader draw");
@@ -155,25 +135,20 @@ TileSpec Theme(const designs::ThemeView& theme) {
     return tile;
 }
 void Pair(testing::Gpu& shader, const KnitFrameSpec& input, const TileSpec& tile,
-    TileCache& cache, KnitRasterScratch& scratch, const std::filesystem::path& output,
+    TileCache& cache, const std::filesystem::path& output,
     const std::string& name, bool save) {
-    auto frame = input;
-    KnitRenderControl control{&scratch, {}};
-    frame.renderer = Renderer::Gpu;
-    auto gpu = KnitRaster::RenderPerimeter(frame, tile, cache, control);
-    ShaderOnly(shader, gpu, output, name);
+    const auto perimeter = KnitPreparation::PreparePerimeter(input, tile, cache);
+    ShaderOnly(shader, perimeter, output, name);
     if (shaderOnly) { ++cases; return; }
-    frame.renderer = Renderer::Cpu;
-    const auto cpu = KnitRaster::RenderPerimeter(frame, tile, cache, control);
-    for (std::size_t i = 0; i < gpu.pieces.size(); ++i) {
+    std::array<RasterImage, 4> captured;
+    for (std::size_t i = 0; i < captured.size(); ++i) {
         ComPtr<ID3D11Texture2D> texture;
-        Check(testing::Shade(shader, gpu, i, texture), "Shader draw");
-        Check(testing::Readback(texture.Get(), gpu.pieces[i].image), "Shader readback");
-        Bounds(gpu.pieces[i].image);
+        Check(testing::Shade(shader, perimeter, i, texture), "Shader draw");
+        Check(testing::Readback(texture.Get(), captured[i]), "Shader readback");
+        Bounds(captured[i]);
     }
-    gpu.assembly.reset();
-    const auto reference = KnitRaster::Compose(cpu);
-    const auto rendered = KnitRaster::Compose(gpu);
+    const auto reference = testing::ReferenceFrame(perimeter);
+    const auto rendered = testing::ComposeStrips(perimeter, captured);
     int peak = 0;
     std::size_t outliers = 0;
     const auto diff = Difference(reference, rendered, peak, &outliers);
@@ -193,24 +168,21 @@ void Pair(testing::Gpu& shader, const KnitFrameSpec& input, const TileSpec& tile
 }
 void SharedFinish(testing::Gpu& shader, const std::filesystem::path& output) {
     TileCache cache;
-    KnitRasterScratch scratch;
     TileSpec sharedFinish;
     sharedFinish.chart = std::make_shared<Chart>("shared-corner-cuff", 1, 3, 2,
         std::vector<std::uint32_t>{0xffe07030, 0, 0xff35a0c0, 0xff35a0c0, 0xffe07030, 0},
         ChartAppearance{designs::ChartSolidCorners | designs::ChartOuterCuff,
             sharedFinish.baseArgb, sharedFinish.baseArgb, true});
     KnitFrameSpec finishFrame;
-    finishFrame.renderer = Renderer::Gpu;
     finishFrame.deviceScale = 1.5f;
     finishFrame.bandDip = 24;
-    auto finish = KnitRaster::RenderPerimeter(finishFrame, sharedFinish, cache);
-    Require(finish.assembly->patch == finish.assembly->cuff,
+    auto finish = KnitPreparation::PreparePerimeter(finishFrame, sharedFinish, cache);
+    Require(finish.assembly.patch == finish.assembly.cuff,
         "Equal corner and cuff colours must share the immutable solid tile");
-    Pair(shader, finishFrame, sharedFinish, cache, scratch, output, "shared-corner-cuff", true);
+    Pair(shader, finishFrame, sharedFinish, cache, output, "shared-corner-cuff", true);
 }
 void Catalogue(testing::Gpu& shader, const std::filesystem::path& output) {
     TileCache cache;
-    KnitRasterScratch scratch;
     const float bands[] = {2, 10, 24, 64};
     const float scales[] = {1, 1.25f, 2, 3};
     for (std::size_t t = 0; t < designs::ws_design_theme_count(); ++t) {
@@ -231,7 +203,7 @@ void Catalogue(testing::Gpu& shader, const std::filesystem::path& output) {
                     tile.sampling = variant == 2 ? Sampling::Nearest : Sampling::Linear;
                     const auto name = std::string(theme.id) + "-" + std::to_string(variant) +
                         (material == Material::Raised ? "-raised" : "-plain") + (radius ? "-round" : "-square");
-                    Pair(shader, frame, tile, cache, scratch, output, name,
+                    Pair(shader, frame, tile, cache, output, name,
                         variant == 2 && material == Material::Raised && radius > 0);
                 }
     }
@@ -245,7 +217,7 @@ void Catalogue(testing::Gpu& shader, const std::filesystem::path& output) {
             frame.widthDip = 73;
             frame.heightDip = 61;
             literal.stitch = stitch;
-            Pair(shader, frame, literal, cache, scratch, output,
+            Pair(shader, frame, literal, cache, output,
                 "literal-" + std::to_string(int(stitch)) + "-" + std::to_string(scale), true);
         }
     KnitFrameSpec physical;
@@ -253,12 +225,12 @@ void Catalogue(testing::Gpu& shader, const std::filesystem::path& output) {
     physical.contentWidthPixels = 773;
     physical.contentHeightPixels = 177;
     physical.physicalPaddingPixels = 12;
-    Pair(shader, physical, literal, cache, scratch, output, "physical-padding", true);
+    Pair(shader, physical, literal, cache, output, "physical-padding", true);
     for (const float size : {1.f, 2.f, 9.f, 19.f}) {
         KnitFrameSpec frame;
         frame.widthDip = frame.heightDip = size;
         frame.radiusDip = 20;
-        Pair(shader, frame, literal, cache, scratch, output, "tiny-" + std::to_string(size), true);
+        Pair(shader, frame, literal, cache, output, "tiny-" + std::to_string(size), true);
     }
     for (std::size_t i = 0; i < designs::ws_design_chart_count(); ++i) {
         const auto& chart = *designs::ws_design_chart_at(i);
@@ -267,7 +239,7 @@ void Catalogue(testing::Gpu& shader, const std::filesystem::path& output) {
         KnitFrameSpec frame;
         frame.deviceScale = 1.5f;
         frame.bandDip = 24;
-        Pair(shader, frame, tile, cache, scratch, output, "chart-" + std::string(chart.name), false);
+        Pair(shader, frame, tile, cache, output, "chart-" + std::string(chart.name), false);
     }
     SharedFinish(shader, output);
 }
@@ -280,9 +252,8 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
     {
         TileCache cache;
         KnitFrameSpec frame;
-        frame.renderer = Renderer::Gpu;
         frame.tuckDip = 6;
-        auto p = std::make_shared<KnitPerimeter>(KnitRaster::RenderPerimeter(frame, {}, cache));
+        auto p = std::make_shared<KnitPerimeter>(KnitPreparation::PreparePerimeter(frame, {}, cache));
         Overlay overlay;
         Check(overlay.Create(GetModuleHandleW(nullptr), host, graphics), "Hidden overlay");
         RECT outer{0, 0, LONG(p->width), LONG(p->height)};
@@ -304,13 +275,10 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
             "Repeated uploads reuse native tile bitmaps and coordinate textures");
         const auto draws = graphics.Shader()->DrawCount();
         Require(draws == unmaskedDraws + 4, "GPU backend must draw four strips per upload");
-        auto composed = *p;
-        composed.assembly.reset();
         for (std::size_t i = 0; i < uploaded.size(); ++i) {
             Bounds(uploaded[i]);
-            composed.pieces[i].image = uploaded[i];
         }
-        const auto screenshot = KnitRaster::Compose(composed);
+        const auto screenshot = testing::ComposeStrips(*p, uploaded);
         SavePng(screenshot, (output / L"hidden-upload.png").c_str());
         const auto alpha = [&](const RasterImage& image, int x, int y) {
             const auto& strip = p->pieces[0];
@@ -330,23 +298,6 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
             "Upload mask must retain straight-edge yarn outside tucked hole");
         Require(alpha(uploaded[0], inset + 2, inset + 2) > 0,
             "Upload mask must retain rounded-corner yarn outside tucked hole");
-        {
-            auto cpuFrame = frame;
-            cpuFrame.renderer = Renderer::Cpu;
-            auto cpu = std::make_shared<KnitPerimeter>(KnitRaster::RenderPerimeter(cpuFrame, {}, cache));
-            Overlay reference;
-            Check(reference.Create(GetModuleHandleW(nullptr), host, graphics), "CPU hidden reference");
-            std::array<RasterImage, 4> cpuPixels;
-            Check(reference.Upload(cpu, outer, clip, exclusion, 10, 1, &cpuPixels), "CPU retained reference readback");
-            auto cpuComposed = *cpu;
-            for (std::size_t i = 0; i < cpuPixels.size(); ++i) cpuComposed.pieces[i].image = cpuPixels[i];
-            const auto cpuScreenshot = KnitRaster::Compose(cpuComposed);
-            int peak = 0;
-            const auto diff = Difference(cpuScreenshot, screenshot, peak);
-            Require(WithinParity(peak, 0, Sampling::Linear), "Native retained CPU/GPU uploads differ");
-            SavePng(cpuScreenshot, (output / L"hidden-upload-cpu.png").c_str());
-            SavePng(diff, (output / L"hidden-upload-diff-32x.png").c_str());
-        }
         for (int i = 0; i < 32; ++i) {
             outer.left += 2; outer.right += 2;
             Check(overlay.UpdatePlacement(outer, clip), "Retained placement");
@@ -356,7 +307,7 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
         auto dpiFrame = frame;
         dpiFrame.deviceScale = 1.25f;
         const auto generations = cache.GenerationCount();
-        auto dpi = std::make_shared<KnitPerimeter>(KnitRaster::RenderPerimeter(dpiFrame, {}, cache));
+        auto dpi = std::make_shared<KnitPerimeter>(KnitPreparation::PreparePerimeter(dpiFrame, {}, cache));
         Require(dpi->tile == p->tile && cache.GenerationCount() == generations,
             "Monitor DPI change reuses the CPU raster tile");
         const RECT dpiBounds{0, 0, LONG(dpi->width), LONG(dpi->height)};
@@ -371,8 +322,7 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
         Require(limited.Reserve(p, rejected) == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA),
             "GPU memory must respect quota");
         const auto stats = graphics.Resources().Status();
-        Require(stats.retainedCpuBytes > 0 && std::all_of(p->pieces.begin(), p->pieces.end(),
-            [](const auto& piece) { return piece.image.pixels.empty(); }), "GPU perimeter retains no CPU strip pixels");
+        Require(stats.retainedCpuBytes > 0, "GPU perimeter retains shared CPU tile inputs");
         overlay.Destroy();
         auto ledger = graphics.ResourceOwner();
         const auto cached = ledger->Status();
@@ -390,7 +340,7 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
         Require(graphics.Shader()->DrawCount() == 4, "Replacement device must shade anew");
         overlay.Destroy();
         auto invalid = *p;
-        invalid.pieces[0].image = {1, 1, 4, {0}};
+        invalid.pieces[0].width = 0;
         ComPtr<ID3D11ShaderResourceView> colour, heights;
         Require(graphics.Assembler()->Assemble(invalid, 0, colour, heights) == E_INVALIDARG,
             "Invalid GPU assembly input must fail, not fall back");
@@ -400,8 +350,8 @@ void RetentionAndRecovery(const std::filesystem::path& output, D3D_DRIVER_TYPE d
 void CacheQuotaContracts(testing::Gpu& gpu) {
     TileCache cache;
     KnitFrameSpec frame;
-    frame.widthDip = 73; frame.heightDip = 61; frame.renderer = Renderer::Gpu;
-    const auto perimeter = KnitRaster::RenderPerimeter(frame, {}, cache);
+    frame.widthDip = 73; frame.heightDip = 61;
+    const auto perimeter = KnitPreparation::PreparePerimeter(frame, {}, cache);
     auto ledger = std::make_shared<ResourceLedger>(1024u * 1024u, 1);
     testing::Gpu limited(gpu.Device(), ledger);
     ComPtr<ID3D11ShaderResourceView> colour, heights;
@@ -409,12 +359,12 @@ void CacheQuotaContracts(testing::Gpu& gpu) {
         "Native tile cache rejects allocation before exceeding aggregate quota");
     Require(limited.assembler.TileUploads() == 0 && limited.assembler.CachedBytes() == 0,
         "Denied tile cache admission creates no native bitmap");
-    const auto flat = SoftwareStrip(perimeter, 0, false);
-    const auto height = SoftwareStrip(perimeter, 0, true);
-    Check(limited.shader.Upload(flat, colour), "Quota test colour input");
-    Check(limited.shader.Upload(height, heights), "Quota test height input");
+    const auto flat = testing::SoftwareStrip(perimeter, 0, false);
+    const auto height = testing::SoftwareStrip(perimeter, 0, true);
+    Check(testing::Upload(limited.Device(), flat, colour), "Quota test colour input");
+    Check(testing::Upload(limited.Device(), height, heights), "Quota test height input");
     ComPtr<ID3D11Texture2D> texture;
-    const KnitSources sources{flat.width, flat.height, colour.Get(), heights.Get(), &perimeter.assembly->parameters[0]};
+    const KnitSources sources{flat.width, flat.height, colour.Get(), heights.Get(), &perimeter.assembly.parameters[0]};
     Require(testing::Shade(limited, sources, texture) == HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_QUOTA),
         "Coordinate cache rejects allocation before exceeding aggregate quota");
     Require(limited.shader.CoordinateUploads() == 0 && limited.shader.DrawCount() == 0 &&
@@ -426,12 +376,11 @@ void TextureDimensionContracts(testing::Gpu& gpu) {
     KnitAssembler withoutDevice(nullptr);
     for (const bool width : {false, true}) {
         KnitFrameSpec frame;
-        frame.renderer = Renderer::Gpu;
         frame.radiusDip = 0.f;
         frame.bandDip = 4.f;
         frame.contentWidthPixels = width ? 16372u : 72u;
         frame.contentHeightPixels = width ? 72u : 16372u;
-        auto perimeter = KnitRaster::RenderPerimeter(frame, {}, cache);
+        auto perimeter = KnitPreparation::PreparePerimeter(frame, {}, cache);
         const std::size_t side = width ? 0u : 1u;
         ComPtr<ID3D11ShaderResourceView> colour, heights;
         Check(gpu.assembler.Assemble(perimeter, side, colour, heights), "Assemble exact GPU texture dimension limit");
@@ -468,72 +417,101 @@ void Benchmarks(const std::filesystem::path& output) {
     Require(host != nullptr, "Benchmark hidden host");
     std::ofstream report(output / L"benchmark.csv");
     report << "theme,renderer,cache,iteration,generation_ms,upload_commit_gpu_completion_ms,total_ms,retained_cpu_bytes,estimated_gpu_bytes\n";
-    for (const auto id : {"spotify", "messages", "notes"})
-        for (const auto renderer : {Renderer::Cpu, Renderer::Gpu}) {
-            TileCache cache;
-            KnitRasterScratch scratch;
-            const auto theme = designs::ws_design_theme_by_id(id);
-            Require(theme != nullptr, "Benchmark theme exists");
-            KnitFrameSpec frame;
-            frame.deviceScale = 2;
-            frame.renderer = renderer;
-            Overlay overlay;
-            Check(overlay.Create(GetModuleHandleW(nullptr), host, graphics), "Benchmark hidden overlay");
-            for (int i = 0; i < 25; ++i) {
-                const bool cold = i < 5;
-                if (cold) { cache.Clear(); scratch.Clear(); }
-                const auto start = Clock::now();
-                auto p = std::make_shared<KnitPerimeter>(KnitRaster::RenderPerimeter(frame, Theme(*theme), cache,
-                    {&scratch, {}}));
-                const auto generation = Milliseconds(start);
-                RECT bounds{0, 0, LONG(p->width), LONG(p->height)};
-                const auto inset = LONG(p->contentInsetPixels);
-                RECT exclusion{inset, inset, inset + 1240, inset + 280};
-                const auto uploadStart = Clock::now();
-                Check(overlay.Upload(p, bounds, bounds, exclusion, 20, 2), "Benchmark retained upload");
-                Check(testing::Complete(graphics.Shader()->Device()), "Benchmark GPU completion");
-                const auto upload = Milliseconds(uploadStart);
-                const auto total = Milliseconds(start);
-                const auto resources = graphics.Resources().Status();
-                report << id << ',' << (renderer == Renderer::Cpu ? "cpu" : "gpu") << ','
-                    << (cold ? "cold" : "warm") << ',' << i << ',' << generation << ',' << upload << ',' << total << ','
-                    << resources.retainedCpuBytes << ',' << resources.estimatedGpuBytes << '\n';
-            }
-            overlay.Destroy();
+    for (const auto id : {"spotify", "messages", "notes"}) {
+        TileCache cache;
+        const auto theme = designs::ws_design_theme_by_id(id);
+        Require(theme != nullptr, "Benchmark theme exists");
+        KnitFrameSpec frame;
+        frame.deviceScale = 2;
+        Overlay overlay;
+        Check(overlay.Create(GetModuleHandleW(nullptr), host, graphics), "Benchmark hidden overlay");
+        for (int i = 0; i < 25; ++i) {
+            const bool cold = i < 5;
+            if (cold) cache.Clear();
+            const auto start = Clock::now();
+            auto p = std::make_shared<KnitPerimeter>(KnitPreparation::PreparePerimeter(frame, Theme(*theme), cache));
+            const auto generation = Milliseconds(start);
+            RECT bounds{0, 0, LONG(p->width), LONG(p->height)};
+            const auto inset = LONG(p->contentInsetPixels);
+            RECT exclusion{inset, inset, inset + 1240, inset + 280};
+            const auto uploadStart = Clock::now();
+            Check(overlay.Upload(p, bounds, bounds, exclusion, 20, 2), "Benchmark retained upload");
+            Check(testing::Complete(graphics.Shader()->Device()), "Benchmark GPU completion");
+            const auto upload = Milliseconds(uploadStart);
+            const auto total = Milliseconds(start);
+            const auto resources = graphics.Resources().Status();
+            report << id << ",gpu,"
+                << (cold ? "cold" : "warm") << ',' << i << ',' << generation << ',' << upload << ',' << total << ','
+                << resources.retainedCpuBytes << ',' << resources.estimatedGpuBytes << '\n';
         }
+        overlay.Destroy();
+    }
     DestroyWindow(host);
 }
 void GenerationBenchmarks(testing::Gpu& shader, const std::filesystem::path& output) {
     std::ofstream report(output / L"generation-benchmark.csv");
     report << "theme,renderer,cache,iteration,cpu_preparation_ms,shader_upload_gpu_completion_ms,total_ms\n";
-    for (const auto id : {"spotify", "messages", "notes"})
-        for (const auto renderer : {Renderer::Cpu, Renderer::Gpu}) {
-            TileCache cache;
-            KnitRasterScratch scratch;
-            const auto theme = designs::ws_design_theme_by_id(id);
-            Require(theme != nullptr, "Generation benchmark theme exists");
-            KnitFrameSpec frame;
-            frame.deviceScale = 2;
-            frame.renderer = renderer;
-            for (int i = 0; i < 25; ++i) {
-                const bool cold = i < 5;
-                if (cold) { cache.Clear(); scratch.Clear(); }
-                const auto start = Clock::now();
-                const auto p = KnitRaster::RenderPerimeter(frame, Theme(*theme), cache, {&scratch, {}});
-                const auto preparation = Milliseconds(start);
-                const auto shaderStart = Clock::now();
-                std::array<ComPtr<ID3D11Texture2D>, 4> outputs;
-                if (renderer == Renderer::Gpu) {
-                    for (std::size_t side = 0; side < outputs.size(); ++side)
-                        Check(testing::Shade(shader, p, side, outputs[side]), "Generation benchmark shader");
-                    Check(testing::Complete(shader.Device()), "Generation benchmark completed GPU");
-                }
-                const auto shaderTime = renderer == Renderer::Gpu ? Milliseconds(shaderStart) : 0.;
-                const auto total = Milliseconds(start);
-                report << id << ',' << (renderer == Renderer::Cpu ? "cpu" : "gpu") << ','
-                    << (cold ? "cold" : "warm") << ',' << i << ',' << preparation << ',' << shaderTime << ',' << total << '\n';
-            }
+    for (const auto id : {"spotify", "messages", "notes"}) {
+        TileCache cache;
+        const auto theme = designs::ws_design_theme_by_id(id);
+        Require(theme != nullptr, "Generation benchmark theme exists");
+        KnitFrameSpec frame;
+        frame.deviceScale = 2;
+        for (int i = 0; i < 25; ++i) {
+            const bool cold = i < 5;
+            if (cold) cache.Clear();
+            const auto start = Clock::now();
+            const auto p = KnitPreparation::PreparePerimeter(frame, Theme(*theme), cache);
+            const auto preparation = Milliseconds(start);
+            const auto shaderStart = Clock::now();
+            std::array<ComPtr<ID3D11Texture2D>, 4> outputs;
+            for (std::size_t side = 0; side < outputs.size(); ++side)
+                Check(testing::Shade(shader, p, side, outputs[side]), "Generation benchmark shader");
+            Check(testing::Complete(shader.Device()), "Generation benchmark completed GPU");
+            const auto shaderTime = Milliseconds(shaderStart);
+            const auto total = Milliseconds(start);
+            report << id << ",gpu,"
+                << (cold ? "cold" : "warm") << ',' << i << ',' << preparation << ',' << shaderTime << ',' << total << '\n';
         }
+    }
+}
+void SnapshotContracts(testing::Gpu& shader, D3D_DRIVER_TYPE driver) {
+    GpuSnapshot snapshot(driver);
+    TileCache cache;
+    KnitFrameSpec frame;
+    frame.widthDip = 83; frame.heightDip = 47; frame.deviceScale = 1.25f;
+    const auto perimeter = KnitPreparation::PreparePerimeter(frame, Theme(*designs::ws_design_theme_by_id("notes")), cache);
+    const auto first = snapshot.Render(perimeter);
+    Require(first.width == perimeter.width && first.height == perimeter.height && first.stride == first.width * 4u,
+        "Snapshot returns the complete physical BGRA frame");
+    Bounds(first);
+    Require(first.pixels == snapshot.Render(perimeter).pixels, "Persistent snapshot repeats deterministically");
+    std::array<RasterImage, 4> strips;
+    for (std::size_t side = 0; side < strips.size(); ++side) {
+        ComPtr<ID3D11Texture2D> texture;
+        Check(testing::Shade(shader, perimeter, side, texture), "Snapshot comparison strip");
+        Check(testing::Readback(texture.Get(), strips[side]), "Snapshot comparison readback");
+    }
+    const auto captured = testing::ComposeStrips(perimeter, strips);
+    int peak = 0;
+    for (std::size_t pixel = 0; pixel < first.pixels.size(); ++pixel)
+        peak = std::max(peak, PixelError(first.pixels[pixel], captured.pixels[pixel]));
+    Require(peak <= 2, "GPU snapshot composition matches captured production strips within two channel levels");
+    frame.widthDip = 101; frame.deviceScale = 2;
+    const auto resized = KnitPreparation::PreparePerimeter(frame, {}, cache);
+    Require(snapshot.Render(resized).width == resized.width, "Persistent snapshot supports changed dimensions");
+    Require(first.pixels == snapshot.Render(perimeter).pixels, "Snapshot restores original output after resize");
+    for (int variant = 0; variant < 4; ++variant) {
+        auto invalid = perimeter;
+        if (variant == 0) invalid.width = 0;
+        if (variant == 1) invalid.width = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION + 1;
+        if (variant == 2) { invalid.width = 4097; invalid.height = 4096; }
+        if (variant == 3) invalid.pieces[0].width = 0;
+        bool rejected = false;
+        try { snapshot.Render(invalid); } catch (const std::invalid_argument&) { rejected = true; }
+        Require(rejected, "Snapshot rejects invalid dimensions before graphics allocation");
+    }
+    Require(first.pixels == snapshot.Render(perimeter).pixels, "Snapshot remains usable after rejected dimensions");
 }
 void MultiOverlayBenchmarks(const std::filesystem::path& output) {
     const auto host = CreateWindowExW(0, L"STATIC", L"GPU batch benchmark", WS_POPUP,
@@ -554,11 +532,10 @@ void MultiOverlayBenchmarks(const std::filesystem::path& output) {
             for (std::size_t i = 0; i < overlays.size(); ++i) {
                 group[i] = &overlays[i];
                 Check(overlays[i].Create(GetModuleHandleW(nullptr), host, graphics), "Batch benchmark overlay");
-                KnitFrameSpec frame;
-                frame.renderer = Renderer::Gpu; frame.deviceScale = 2;
+                KnitFrameSpec frame; frame.deviceScale = 2;
                 frame.widthDip += static_cast<float>(i) * 17;
                 frame.heightDip += static_cast<float>(i) * 5;
-                perimeters[i] = std::make_shared<KnitPerimeter>(KnitRaster::RenderPerimeter(frame, Theme(*theme), cache));
+                perimeters[i] = std::make_shared<KnitPerimeter>(KnitPreparation::PreparePerimeter(frame, Theme(*theme), cache));
             }
             for (int iteration = 0; iteration < 10; ++iteration) {
                 const auto publication = graphics.PublicationStatus();
@@ -629,13 +606,12 @@ void StripProbe(testing::Gpu& gpu, const std::filesystem::path& output) {
             frame.radiusDip = radius;
             frame.dim = variant == 1 ? .45f : 0.f;
             frame.anchor = variant % 2 ? KnitAnchor::Centre : KnitAnchor::Corner;
-            frame.renderer = Renderer::Gpu;
             tile.sampling = variant == 2 ? Sampling::Nearest : Sampling::Linear;
-            const auto p = KnitRaster::RenderPerimeter(frame, tile, cache);
+            const auto p = KnitPreparation::PreparePerimeter(frame, tile, cache);
             for (int side = 0; side < 4; ++side) {
                 RasterImage software[2], hardware[2];
                 for (const bool heights : {false, true})
-                    software[heights] = SoftwareStrip(p, side, heights);
+                    software[heights] = testing::SoftwareStrip(p, side, heights);
                 ComPtr<ID3D11ShaderResourceView> views[2];
                 Check(gpu.assembler.Assemble(p, side, views[0], views[1]), "Probe hardware assembly");
                 for (int i = 0; i < 2; ++i) {
@@ -704,6 +680,7 @@ int wmain(int argc, wchar_t** argv) {
         const auto shaderLedger = std::make_shared<ResourceLedger>();
         testing::Gpu shader(device.Get(), shaderLedger);
         exactRasterizer = warp;
+        SnapshotContracts(shader, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE);
         if (stripProbe) { StripProbe(shader, output); return 0; }
         if (benchmarksOnly) {
             Require(!warp, "Benchmarks require hardware");

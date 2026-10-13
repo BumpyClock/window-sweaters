@@ -1,4 +1,5 @@
 #include "..\..\src\Settings\Preview.h"
+#include "..\..\src\Rendering\GpuSnapshot.h"
 #include "..\..\src\Configuration\ConfigurationServer.h"
 #include "..\..\src\Configuration\Storage.h"
 #include "..\..\src\Configuration\Pipe.h"
@@ -231,11 +232,12 @@ void ProductionPreview() {
               "All original designs render into bounded native BGRA preview pixels on the MTA worker");
         frame.bandDip=16;
         auto tile=settings::MakeAppearance(value); tile.rasterScale=2;
-        auto actual=rendering::KnitRaster::RenderFrame(frame,tile,cache);
-        Check(actual.pixels==result->image.pixels,"Preview displays the exact production KnitRaster pieces, not an approximate texture");
+        rendering::GpuSnapshot snapshot;
+        auto actual=snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame,tile,cache));
+        Check(actual.pixels==result->image.pixels,"Preview displays the exact production GPU snapshot");
         auto plain=value; plain.design_selection=DesignSelection::plain; plain.design_id.clear();
         auto plain_tile=settings::MakeAppearance(plain); plain_tile.rasterScale=2;
-        auto baseline=rendering::KnitRaster::RenderFrame(frame,plain_tile,cache);
+        auto baseline=snapshot.Render(rendering::KnitPreparation::PreparePerimeter(frame,plain_tile,cache));
         Check(baseline.pixels!=result->image.pixels,"Original-design preview is not a fake plain tile");
     }
     worker.Stop();

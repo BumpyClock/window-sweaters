@@ -7,106 +7,11 @@
 #include <d3d11.h>
 #include <algorithm>
 #include <cmath>
-#include <list>
 #include <stdexcept>
 
 namespace window_sweaters::rendering {
 using knitting::detail::Check;
 using knitting::detail::ComPtr;
-using knitting::detail::WicSurface;
-
-struct KnitRasterScratch::Impl {
-    static constexpr std::size_t MaxSlots = 8;
-    struct Brush { std::uint64_t serial = 0; ComPtr<ID2D1BitmapBrush> brush; std::size_t bytes = 0; bool used = false; };
-    struct Slot {
-        std::uint32_t w = 0, h = 0;
-        float scale = 1.f;
-        std::uint64_t tick = 0;
-        std::unique_ptr<WicSurface> color, relief;
-        Brush brushes[2][3];
-        std::size_t Bytes() const noexcept {
-            std::size_t bytes = 2 * static_cast<std::size_t>(w) * h * 4;
-            for (const auto& role : brushes) for (const auto& b : role) bytes += b.bytes;
-            return bytes;
-        }
-    };
-    std::size_t budget = 0;
-    std::uint64_t tick = 0;
-    Stats stats;
-    ComPtr<ID2D1Factory> d2d;
-    ComPtr<IWICImagingFactory> wic;
-    std::list<std::unique_ptr<Slot>> slots;
-
-    std::size_t Resident() const noexcept {
-        std::size_t bytes = 0;
-        for (const auto& s : slots) bytes += s->Bytes();
-        return bytes;
-    }
-    Slot& Acquire(std::uint32_t w, std::uint32_t h, float scale) {
-        if (!d2d) {
-            Check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d.GetAddressOf()), "Create D2D factory");
-            ++stats.factories;
-        }
-        if (!wic) {
-            Check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                   IID_PPV_ARGS(&wic)), "Create WIC factory");
-            ++stats.factories;
-        }
-        for (auto& s : slots)
-            if (s->w == w && s->h == h && s->scale == scale) { s->tick = ++tick; ++stats.reused; return *s; }
-        auto s = std::make_unique<Slot>();
-        s->w = w; s->h = h; s->scale = scale;
-        s->color = std::make_unique<WicSurface>(w, h, scale, d2d.Get(), wic.Get());
-        s->relief = std::make_unique<WicSurface>(w, h, scale, d2d.Get(), wic.Get());
-        stats.targets += 2;
-        s->tick = ++tick;
-        slots.push_back(std::move(s));
-        return *slots.back();
-    }
-    ComPtr<ID2D1BitmapBrush> TileBrush(Slot& slot, int role, const knitting::Tile& tile, bool stitchHeight,
-                                       float px, float py, float repeatWidth) {
-        auto& cached = slot.brushes[stitchHeight][role];
-        if (!cached.brush || cached.serial != tile.serial) {
-            auto* target = (stitchHeight ? slot.relief : slot.color)->target.Get();
-            ComPtr<ID2D1Bitmap> bitmap;
-            const auto& image = stitchHeight ? tile.height : tile.image;
-            auto properties = D2D1::BitmapProperties(
-                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
-                96.f * tile.layout.raster_scale, 96.f * tile.layout.raster_scale);
-            Check(target->CreateBitmap(D2D1::SizeU(image.width, image.height),
-                image.pixels.data(), image.stride, properties, &bitmap), "Upload software periodic tile");
-            auto sampling = tile.spec.sampling == knitting::Sampling::Nearest
-                ? D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_BITMAP_INTERPOLATION_MODE_LINEAR;
-            ComPtr<ID2D1BitmapBrush> brush;
-            Check(target->CreateBitmapBrush(bitmap.Get(), D2D1::BitmapBrushProperties(
-                D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP, sampling), &brush), "Create periodic yarn brush");
-            cached.brush = std::move(brush);
-            cached.serial = tile.serial;
-            cached.bytes = image.ByteSize();
-            ++stats.uploads;
-        }
-        cached.used = true;
-        cached.brush->SetTransform(D2D1::Matrix3x2F::Scale(repeatWidth / tile.layout.width_dip, 1.f)
-            * D2D1::Matrix3x2F::Translation(px, py));
-        return cached.brush;
-    }
-    void EndSide(Slot& slot) noexcept {
-        for (auto& role : slot.brushes) for (auto& b : role) {
-            if (!b.used) b = {};
-            b.used = false;
-        }
-    }
-    void Drop(Slot& slot) noexcept {
-        slots.remove_if([&](const std::unique_ptr<Slot>& s) { return s.get() == &slot; });
-    }
-    void Trim() noexcept {
-        while (!slots.empty() && (slots.size() > MaxSlots || Resident() > budget)) {
-            auto oldest = std::min_element(slots.begin(), slots.end(),
-                [](const auto& a, const auto& b) { return a->tick < b->tick; });
-            slots.erase(oldest);
-        }
-    }
-};
 
 namespace {
 
@@ -119,8 +24,7 @@ KnitFrameSpec Normalize(KnitFrameSpec f) {
         || f.deviceScale > knitting::MaximumDeviceScale
         || f.dim < 0.f || f.dim > 1.f
         || ((f.contentWidthPixels == 0) != (f.contentHeightPixels == 0))
-        || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre)
-        || (f.renderer != Renderer::Cpu && f.renderer != Renderer::Gpu))
+        || (f.anchor != KnitAnchor::Corner && f.anchor != KnitAnchor::Centre))
         throw std::invalid_argument("Invalid knit frame specification");
     if (f.contentWidthPixels) {
         f.widthDip = static_cast<float>(f.contentWidthPixels) / f.deviceScale;
@@ -192,7 +96,7 @@ struct SideLayout {
     D2D1::Matrix3x2F orientation, placement;
 };
 
-SideLayout Layout(const KnitAssembly& a, const knitting::Tile& tile, const KnitRasterPiece& piece, int side) {
+SideLayout Layout(const KnitAssembly& a, const knitting::Tile& tile, const KnitPiece& piece, int side) {
     const auto& f = a.frame;
     const float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
     const D2D1::Matrix3x2F orientations[] = {
@@ -225,7 +129,7 @@ SideLayout Layout(const KnitAssembly& a, const knitting::Tile& tile, const KnitR
 }
 
 KnitShaderParameters ShaderParameters(const KnitAssembly& a, const knitting::Tile& tile,
-                                      const KnitRasterPiece& piece, int side) {
+                                      const KnitPiece& piece, int side) {
     const auto& f = a.frame;
     const auto l = Layout(a, tile, piece, side);
     auto material = tile.spec.material == knitting::Material::Raised
@@ -242,7 +146,7 @@ KnitShaderParameters ShaderParameters(const KnitAssembly& a, const knitting::Til
         .side = static_cast<std::uint32_t>(side), .inverseScale = 1.f / f.deviceScale};
 }
 
-KnitRasterPiece SideBounds(const KnitFrameSpec& f, int side, std::uint32_t width, std::uint32_t height,
+KnitPiece SideBounds(const KnitFrameSpec& f, int side, std::uint32_t width, std::uint32_t height,
                            float depth, float gutterDip) {
     float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
     float right = std::floor((gutterDip + ow - depth) * f.deviceScale);
@@ -255,7 +159,7 @@ KnitRasterPiece SideBounds(const KnitFrameSpec& f, int side, std::uint32_t width
     auto dx = static_cast<std::uint32_t>(right);
     auto dy = static_cast<std::uint32_t>(bottom);
     auto dw = static_cast<std::uint32_t>(narrow);
-    KnitRasterPiece piece;
+    KnitPiece piece;
     piece.width = width; piece.height = height;
     if (side == 0) piece.height = std::min(dw, height);
     if (side == 1) { piece.x = dx; piece.width = width - dx; }
@@ -264,43 +168,11 @@ KnitRasterPiece SideBounds(const KnitFrameSpec& f, int side, std::uint32_t width
     return piece;
 }
 
-void RenderSide(const KnitAssembly& a, const knitting::Tile& tile, KnitRasterPiece& piece, int side,
-                KnitRasterScratch::Impl& scratch, const KnitRenderControl& control) {
-    auto& slot = scratch.Acquire(piece.width, piece.height, a.frame.deviceScale);
-    try {
-        const KnitTileBrush brush = [&](int role, const knitting::Tile& t, bool heights, float px, float py,
-                                        float repeatWidth) {
-            return scratch.TileBrush(slot, role, t, heights, px, py, repeatWidth);
-        };
-        Poll(control);
-        DrawKnitStrip(*slot.color->target.Get(), a, tile, piece, side, false, brush);
-        piece.image = slot.color->Read();
-        Poll(control);
-        DrawKnitStrip(*slot.relief->target.Get(), a, tile, piece, side, true, brush);
-        auto stitchHeights = slot.relief->Read();
-        Poll(control);
-        const auto p = ShaderParameters(a, tile, piece, side);
-        const ws_knit_ring tube{p.ringWidth, p.ringHeight, p.outerRadius, p.inset, p.innerRadius};
-        const auto w = static_cast<int>(piece.width), h = static_cast<int>(piece.height);
-        if (!ws_knit_shade_ring_relief(&tube, p.originX, p.originY, p.scale, piece.image.pixels.data(), w, h,
-                stitchHeights.pixels.data(), p.relief))
-            throw std::invalid_argument("Invalid knit ring shading");
-        Poll(control);
-        if (!ws_knit_fray_ring(&tube, side, ws_knit_fray_depth(p.band), p.pitch, p.phase, p.originX, p.originY,
-                p.scale, piece.image.pixels.data(), w, h))
-            throw std::invalid_argument("Invalid knit ring fray");
-        Poll(control);
-        if (!ws_knit_ring_drop_shadow(&tube, side, p.band, p.originX, p.originY, p.scale,
-                piece.image.pixels.data(), w, h))
-            throw std::invalid_argument("Invalid knit drop shadow");
-    } catch (const KnitRenderCancelled&) { throw; }
-    catch (...) { scratch.Drop(slot); throw; }
-    scratch.EndSide(slot);
-}
+
 }
 
 void DrawKnitStrip(ID2D1RenderTarget& target, const KnitAssembly& a, const knitting::Tile& tile,
-                   const KnitRasterPiece& piece, int side, bool heights, const KnitTileBrush& tileBrush) {
+                   const KnitPiece& piece, int side, bool heights, const KnitTileBrush& tileBrush) {
     const auto& f = a.frame;
     const auto l = Layout(a, tile, piece, side);
     const auto* patch = a.patch.get();
@@ -354,21 +226,10 @@ void DrawKnitStrip(ID2D1RenderTarget& target, const KnitAssembly& a, const knitt
     Check(target.EndDraw(), heights ? "Render knit stitch height" : "Render knit perimeter side");
 }
 
-KnitRasterScratch::KnitRasterScratch(std::size_t byteBudget) : impl_(std::make_unique<Impl>()) {
-    impl_->budget = byteBudget;
-}
-KnitRasterScratch::~KnitRasterScratch() = default;
-std::size_t KnitRasterScratch::ResidentBytes() const noexcept { return impl_->Resident(); }
-KnitRasterScratch::Stats KnitRasterScratch::GetStats() const noexcept { return impl_->stats; }
-void KnitRasterScratch::Clear() noexcept { impl_->slots.clear(); }
-
-KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
+KnitPerimeter KnitPreparation::PreparePerimeter(const KnitFrameSpec& requested,
                                          knitting::TileSpec tileSpec, knitting::TileCache& cache,
                                          const KnitRenderControl& control) {
     auto f = Normalize(requested);
-    KnitRasterScratch local(0);
-    auto& scratch = *(control.scratch ? control.scratch : &local)->impl_;
-    struct Trim { KnitRasterScratch::Impl& s; ~Trim() { s.Trim(); } } trim{scratch};
     float ow = f.widthDip + 2.f * f.bandDip, oh = f.heightDip + 2.f * f.bandDip;
     auto naturalInset = static_cast<std::uint32_t>(std::ceil(f.bandDip * f.deviceScale));
     auto inset = f.physicalPaddingPixels ? f.physicalPaddingPixels : naturalInset;
@@ -380,7 +241,7 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     double contentHeight = f.contentHeightPixels ? f.contentHeightPixels
         : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
     double width = contentWidth + 2. * (inset + margin), height = contentHeight + 2. * (inset + margin);
-    const auto dimensionLimit = f.renderer == Renderer::Gpu ? D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION : 32768;
+    const auto dimensionLimit = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
     if (width > dimensionLimit || height > dimensionLimit) throw std::invalid_argument("Frame dimensions exceed limits");
     float irad = std::max(0.f, f.radiusDip - f.tuckDip);
     float depth = f.bandDip + f.tuckDip + irad * (1.f - 0.7071067811865475244f) + 1.f;
@@ -420,44 +281,11 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
         Poll(control);
         auto& piece = perimeter.pieces[side];
         piece = SideBounds(f, side, perimeter.width, perimeter.height, depth, gutterDip);
-        if (f.renderer == Renderer::Gpu) assembly.parameters[side] = ShaderParameters(assembly, *perimeter.tile, piece, side);
-        else RenderSide(assembly, *perimeter.tile, piece, side, scratch, control);
+        assembly.parameters[side] = ShaderParameters(assembly, *perimeter.tile, piece, side);
     }
-    if (f.renderer == Renderer::Gpu) perimeter.assembly = std::move(assembly);
+    perimeter.assembly = std::move(assembly);
+    Poll(control);
     return perimeter;
 }
 
-knitting::RasterImage KnitRaster::Compose(const KnitPerimeter& p) {
-    if (p.assembly)
-        throw std::invalid_argument("GPU perimeter requires shader rendering before composition");
-    if (!p.width || !p.height || p.width > 32768 || p.height > 32768
-        || static_cast<std::uint64_t>(p.width) * p.height > 16u * 1024u * 1024u)
-        throw std::invalid_argument("Fixture image exceeds limits");
-    knitting::RasterImage image{p.width, p.height, p.width * 4, {}};
-    image.pixels.resize(static_cast<std::size_t>(p.width) * p.height);
-    for (const auto& piece : p.pieces) {
-        const auto& src = piece.image;
-        if (piece.x > p.width || piece.y > p.height || src.width > p.width - piece.x
-            || src.height > p.height - piece.y || src.stride != src.width * 4u
-            || src.pixels.size() != static_cast<std::size_t>(src.width) * src.height)
-            throw std::invalid_argument("Invalid perimeter piece");
-        for (std::uint32_t y = 0; y < src.height; ++y)
-            for (std::uint32_t x = 0; x < src.width; ++x) {
-                auto s = src.pixels[static_cast<std::size_t>(y) * src.width + x];
-                auto& d = image.pixels[static_cast<std::size_t>(y + piece.y) * p.width + x + piece.x];
-                std::uint32_t inverse = 255 - (s >> 24), out = 0;
-                for (int shift = 0; shift < 32; shift += 8) {
-                    auto channel = ((s >> shift) & 255) + (((d >> shift) & 255) * inverse + 127) / 255;
-                    out |= std::min(255u, channel) << shift;
-                }
-                d = out;
-            }
-    }
-    return image;
-}
-
-knitting::RasterImage KnitRaster::RenderFrame(const KnitFrameSpec& frame,
-                                             knitting::TileSpec tile, knitting::TileCache& cache) {
-    return Compose(RenderPerimeter(frame, tile, cache));
-}
 }

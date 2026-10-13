@@ -1,4 +1,5 @@
 #include "Preview.h"
+#include "..\Rendering\GpuSnapshot.h"
 #include "..\Geometry\Geometry.h"
 #include "..\Integration\IconAppearance.h"
 #include "..\Integration\BaseOverride.h"
@@ -64,6 +65,7 @@ struct Preview::Impl {
     void Run() noexcept {
         auto apartment=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
         knitting::TileCache cache(16u*1024u*1024u);
+        std::unique_ptr<rendering::GpuSnapshot> snapshot;
         std::optional<contracts::ImportPreferences> imported_preferences;
         integration::ImportedAppearance imported;
         for (;;) {
@@ -103,7 +105,10 @@ struct Preview::Impl {
                         }
                         auto tile=MakeAppearance(result->configuration,&imported);
                         tile.rasterScale=2;
-                        result->image=rendering::KnitRaster::RenderFrame(frame,std::move(tile),cache);
+                        auto perimeter=rendering::KnitPreparation::PreparePerimeter(frame,std::move(tile),cache);
+                        if (!snapshot) snapshot=std::make_unique<rendering::GpuSnapshot>();
+                        try { result->image=snapshot->Render(perimeter); }
+                        catch (...) { snapshot.reset(); throw; }
                     }
                 } catch (std::exception const& error) {
                     std::string text=error.what();
@@ -114,6 +119,7 @@ struct Preview::Impl {
                 if (current) publish(std::move(result));
             } catch (...) { OutputDebugStringW(L"WindowSweaters: preview publication failed.\n"); }
         }
+        snapshot.reset();
         if (SUCCEEDED(apartment)) CoUninitialize();
     }
 };

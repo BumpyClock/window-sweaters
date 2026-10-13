@@ -67,17 +67,17 @@ desktop evidence in the parity ledger. Physical input/desktop transitions,
 aggregate compositor budgets, and Store-installed execution remain separate
 qualification gates.
 
-## Experimental GPU shader renderer
+## GPU shader renderer
 
-The host accepts `--renderer cpu|gpu`; CPU remains the default and the reference
-for comparison. Stitch and chart tiles are generated on the CPU for both
-backends. The GPU backend then draws the colour and height strips with hardware
+The host renders borders through GPU strip assembly and shading. The former
+`--renderer` option is rejected. Stitch and chart tiles are generated on the CPU.
+The GPU draws the colour and height strips with hardware
 Direct2D when it uploads a border, and embedded HLSL shaders apply the relief
 lighting, fraying, drop shadow and content cut-out directly into the
 DirectComposition surfaces. A GPU border keeps no strip pixels in CPU memory.
-The CPU backend uses the same cut-out shader to publish its CPU-shaded strips.
-Neither backend runs a continuous render loop or regenerates pixels for pure
-movement. Shader failures are reported rather than falling back to CPU rendering.
+The host retains published surfaces for idle periods and pure movement.
+Shader failures follow the graphics recovery path. Settings previews use the
+same GPU assembly and shading, compose on the GPU, and read back one BGRA image.
 
 `TileSpec` describes reusable raster content; device scale belongs to
 `KnitFrameSpec` and `KnitPerimeter`, so monitor DPI changes share tile pixels.
@@ -103,7 +103,7 @@ Run the isolated, hidden comparison without replacing the running application:
 .\tests\Rendering\compare-gpu.ps1 -Configuration Release -Platform x64
 ```
 
-The comparison builds both selectable backends, checks hardware and WARP pixel
+The comparison builds the GPU runtime and test-only software oracle, checks hardware and WARP pixel
 output, exercises Host lifecycle/recovery contracts, and records completed-GPU
 timings and PNG pairs under `out\gpu-comparison`. See the
 [comparison guide](tests/Rendering/README.md) for coverage, ARM64 builds, timing

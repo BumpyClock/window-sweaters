@@ -52,7 +52,6 @@ constexpr UINT_PTR RecoveryTimer = 4;
 constexpr UINT_PTR TrayRetryTimer = 5;
 constexpr wchar_t Usage[] =
     L"WindowSweaters.Host.exe [--target <decimal-or-0x-HWND>] [--test-mode] [--probe-output <path>]\n"
-    L"  --renderer cpu|gpu: CPU reference (default) or experimental retained GPU shading.\n"
     L"  No --target: track supported ordinary application windows.\n"
     L"  --target: track only an exact WindowSweaters Fixture lifetime, never an arbitrary app.\n"
     L"  --test-mode requires a fixture target or explicit preview selections, with isolated storage/IPC.\n"
@@ -108,7 +107,6 @@ std::optional<PreviewSelection> ParsePreviewSelection(std::wstring_view text) {
 }
 
 struct Options {
-    window_sweaters::rendering::Renderer renderer{window_sweaters::rendering::Renderer::Cpu};
     HWND target{};
     bool testMode{};
     bool help{};
@@ -149,15 +147,8 @@ bool ParseOptions(Options& options) {
     auto arguments = CommandLineToArgvW(GetCommandLineW(), &count);
     if (!arguments) return false;
     bool valid = true;
-    bool rendererSpecified = false;
     for (int index = 1; index < count && valid; ++index) {
-        if (std::wcscmp(arguments[index], L"--renderer") == 0 && index + 1 < count) {
-            const std::wstring_view value(arguments[++index]);
-            valid = !rendererSpecified && (value == L"cpu" || value == L"gpu");
-            rendererSpecified = true;
-            options.renderer = value == L"gpu" ? window_sweaters::rendering::Renderer::Gpu
-                : window_sweaters::rendering::Renderer::Cpu;
-        } else if (std::wcscmp(arguments[index], L"--test-mode") == 0) {
+        if (std::wcscmp(arguments[index], L"--test-mode") == 0) {
             valid = !options.testMode;
             options.testMode = true;
         } else if (std::wcscmp(arguments[index], L"--help") == 0) {
@@ -206,7 +197,7 @@ bool ParseOptions(Options& options) {
         }
     }
     LocalFree(arguments);
-    if (options.integrationContract) valid = valid && (count == 2 || (count == 4 && rendererSpecified));
+    if (options.integrationContract) valid = valid && count == 2;
     options.configuration.test_mode = options.testMode;
     const auto& storage = options.configuration.storage_directory;
     const auto& suffix = options.configuration.endpoint_suffix;
@@ -518,8 +509,7 @@ public:
             << ", \"process_memory_observed\": " << (memoryObserved?"true":"false")
             << ", \"render_transient_bytes\": " << queueStats.transientBytes
             << ", \"render_ready_bytes\": " << queueStats.readyBytes
-            << ", \"tile_resident_cache_bytes\": " << queueStats.residentCacheBytes
-            << ", \"raster_scratch_bytes\": " << queueStats.scratchBytes << ",\n"
+            << ", \"tile_resident_cache_bytes\": " << queueStats.residentCacheBytes << ",\n"
             << "  \"tray_added\": " << (trayAdded_ ? "true" : "false")
             << ", \"tray_attempts\": " << trayAttempts_ << ", \"tray_error\": " << trayError_ << ",\n"
             << "  \"startup_desired\": " << static_cast<unsigned>(committed_.startup_desired)
@@ -567,8 +557,7 @@ public:
                 std::holds_alternative<window_sweaters::applications::AppMetadata>(*entry->metadata) ? "true" : "false") << ",\n"
             << "  \"render_requests\": " << queueStats.renderRequests << ", \"render_accepted\": " << queueStats.acceptedRequests << ",\n"
             << "  \"render_preparations\": " << queueStats.renderPreparations << ", \"tile_generations\": " << queueStats.tileGenerations << ",\n"
-            << "  \"renderer\": \"" << (options_.renderer == window_sweaters::rendering::Renderer::Gpu ? "gpu" : "cpu")
-            << "\", \"shader_draws\": " << (graphics_.Shader() ? graphics_.Shader()->DrawCount() : 0) << ",\n"
+            << "  \"shader_draws\": " << (graphics_.Shader() ? graphics_.Shader()->DrawCount() : 0) << ",\n"
             << "  \"tile_cache_hits\": " << queueStats.cacheHits << ", \"render_pending\": " << queueStats.pending << ",\n"
             << "  \"render_active\": " << queueStats.active << ", \"render_ready\": " << queueStats.ready << ",\n"
             << "  \"render_quota_rejected\": " << queueStats.quotaRejected << ", \"render_error\": " << queueStats.error << ",\n"
@@ -639,7 +628,7 @@ public:
         return static_cast<int>(message.wParam);
     }
 
-    static void RunConsumerContracts(window_sweaters::rendering::Renderer renderer);
+    static void RunConsumerContracts();
 
 private:
     struct ContractState {
@@ -1792,7 +1781,7 @@ private:
         if (entry.render.resourceRetry) RetireRenderRetry(entry);
         const auto request = window_sweaters::host::MakeRenderRequest(
             {entry.state.target, entry.renderEpoch}, renderRevision_, recovery_.Generation(), *input,
-            std::get<window_sweaters::knitting::TileSpec>(entry.appearance->result), options_.renderer);
+            std::get<window_sweaters::knitting::TileSpec>(entry.appearance->result));
         const HRESULT result = queue_->Submit(request);
         if (result == S_OK) {
             entry.render.pending = request;
@@ -2460,7 +2449,7 @@ private:
     bool observedSettingsExited_{};
 };
 
-void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
+void Host::RunConsumerContracts() {
     class DesktopManager final : public IVirtualDesktopManager {
     public:
         HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override {
@@ -2502,7 +2491,6 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
     contract.policy.SetPower(window_sweaters::visibility::PowerState::Awake);
     contract.policy.SetDisplay(window_sweaters::visibility::DisplayState::On);
     Options options;
-    options.renderer = renderer;
     window_sweaters::integration::ConfigurationHost configuration;
     Host host(GetModuleHandleW(nullptr), options, configuration);
     host.contract_ = &contract;
@@ -2749,9 +2737,8 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
         host.counters_.uploads == beforePause + 1, "Pure movement never regenerates or republishes yarn");
     require(host.graphics_.Shader()->DrawCount() == beforeShaderMove,
         "Pure movement never submits shader draws");
-    require(host.entries_.at(10001)->render.prepared->frame.renderer == renderer &&
-        (renderer == window_sweaters::rendering::Renderer::Cpu ? beforeShaderMove == 0 : beforeShaderMove > 0),
-        "Selected renderer reaches immutable preparation and actual shader draws");
+    require(host.entries_.at(10001)->render.prepared && beforeShaderMove > 0,
+        "Immutable preparation reaches actual shader draws");
 
     for (WindowHandle handle = 10002; handle <= 10065; ++handle) add(handle);
     require(host.queue_->Status().quotaRejected > 0, "Visible 64-target burst exceeds real pending32 quota");
@@ -3611,7 +3598,7 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
                 SUCCEEDED(host.ApplyBatch(contract.model.Observe(window,Dirty::Settlement,1000))),
                 "Owner-refresh quota fixture settles actual large offscreen target geometry");
         };
-        const WindowHandle quotaLast=renderer==window_sweaters::rendering::Renderer::Gpu?20040:20024;
+        const WindowHandle quotaLast=20040;
         add(20009); enlargeOwner(20009); host.PollMetadata(); waitMetadata(20009);
         pump([&]{return host.entries_.at(20009)->render.prepared.has_value();});
         for (WindowHandle handle=20010;handle<=quotaLast;++handle) {
@@ -3918,9 +3905,9 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
     const auto recoveryAttemptsBeforeFault = host.recoveryAttempts_;
     require(!host.TrayCommand(SimulateGraphicsFailureCommand),
         "Production Host does not expose fixture graphics-failure command");
-    require(host.GpuFailure(L"CPU WIC rejection is not a GPU fault", E_INVALIDARG,
+    require(host.GpuFailure(L"Invalid preparation input is not a device fault", E_INVALIDARG,
         host.recovery_.Generation()) == E_INVALIDARG && host.recovery_.State() == RecoveryState::Ready,
-        "Arbitrary CPU/WIC errors cannot start shared GPU recovery");
+        "Tile preparation and WIC errors cannot start shared GPU recovery");
     require(host.queue_->Submit(obsoleteRequest) == S_OK, "Queue actual old-generation worker input before injected fault");
     host.entries_.at(10001)->render.pending = obsoleteRequest;
     options.testMode = true;
@@ -3960,9 +3947,8 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
     auto resumeRecovery = host.committed_;
     resumeRecovery.paused = false;
     appearanceChange(resumeRecovery);
-    require(host.entries_.at(10001)->render.prepared->frame.renderer == renderer &&
-        (renderer == window_sweaters::rendering::Renderer::Cpu ? host.graphics_.Shader()->DrawCount() == 0 :
-            host.graphics_.Shader()->DrawCount() > 0), "Recovery retains selected backend without CPU fallback");
+    require(host.entries_.at(10001)->render.prepared && host.graphics_.Shader()->DrawCount() > 0,
+        "Recovery resumes GPU shader publication");
     require(host.entries_.at(10001)->state.target == recoveredTarget &&
         host.entries_.at(10001)->render.prepared->deviceGeneration == faultGeneration &&
         host.queue_->Status().tileGenerations == cacheBeforeRecovery.tileGenerations &&
@@ -4228,7 +4214,7 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
             SUCCEEDED(rendering::RenderQueue::Create(pressure.window_,pressure.queueLimits_,pressure.queue_)) &&
             SUCCEEDED(pressure.queue_->Start(0,DeviceGeneration)),
             "Actual offscreen Host pressure fixture uses bounded retained-resource upload owner");
-        const WindowHandle pressureTargets=renderer==window_sweaters::rendering::Renderer::Gpu?32:16;
+        const WindowHandle pressureTargets=32;
         for (WindowHandle i=0;i<pressureTargets;++i) {
             AliveWindow large;
             large.hwnd=40000+i; large.identity={GetCurrentProcessId(),1234,large.hwnd};
@@ -4238,7 +4224,7 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
                 {-20000,-20000,-11808,-15904},{-30000,-30000,30000,30000},{-30000,-30000,30000,30000},
                 96,1,false,geometry::CornerPreference::Round,geometry::CornerEligibility::StandardFrame});
             require(SUCCEEDED(pressure.ApplyBatch(pressureContract.model.Observe(large,Dirty::Lifecycle,0))),
-                "Actual 8192x4096 offscreen consumer targets exceed the selected backend's quota");
+                "Actual 8192x4096 offscreen consumer targets exceed the GPU resource quota");
         }
         auto settle=[&] {
             const auto deadline=GetTickCount64()+30000;
@@ -4318,7 +4304,7 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
             !pressure.graphics_.Resources().Status().surfaces && pressure.entries_.empty() && !pressure.queue_ &&
             !pressure.TrayCommand(SettingsCommand),
             "Quit releases aggregate backing and rejects IPC launches, resource retries and late cached jobs");
-        std::printf("PASS: sixteen 8192x4096@96DPI width64 offscreen Host targets; CPU peak=%zu GPU-estimate peak=%zu suppressed=%llu\n",
+        std::printf("PASS: thirty-two 8192x4096@96DPI width64 offscreen Host targets; CPU peak=%zu GPU-estimate peak=%zu suppressed=%llu\n",
             bounded.peakCpuBytes,bounded.peakEstimatedGpuBytes,static_cast<unsigned long long>(bounded.quotaRejected));
     }
     std::puts("PASS: actual Host stationary width/Pause/Resume rebuilding-Move flow and pending32 burst capacity recovery (hidden native receiver)");
@@ -4393,7 +4379,7 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
 }
 
 namespace window_sweaters::host {
-void RunHostConsumerContracts(rendering::Renderer renderer) { Host::RunConsumerContracts(renderer); }
+void RunHostConsumerContracts() { Host::RunConsumerContracts(); }
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
@@ -4407,7 +4393,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             std::fwprintf(stdout, L"%s", Usage);
             return 0;
         }
-        if (options.integrationContract) return window_sweaters::host::RunHostContractTests(options.renderer);
+        if (options.integrationContract) return window_sweaters::host::RunHostContractTests();
         if (options.inspectFixture) return InspectFixture(options.inspectFixture);
         OSVERSIONINFOEXW minimum{sizeof(minimum)};
         minimum.dwMajorVersion = 10;

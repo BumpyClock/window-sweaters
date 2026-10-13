@@ -20,24 +20,26 @@ if ($Platform -eq 'ARM64' -and [Runtime.InteropServices.RuntimeInformation]::OSA
     return
 }
 foreach ($arguments in @('--help', '--target 0', '--target -1', '--target 18446744073709551616',
-    '--unknown', '--test-mode', '--probe-output unused.json', '--target', '--target 1 --target 2',
+    '--unknown', '--renderer', '--renderer cpu', '--renderer gpu', '--renderer invalid',
+    '--integration-contract --renderer cpu', '--integration-contract --renderer gpu',
+    '--test-mode', '--probe-output unused.json', '--target', '--target 1 --target 2',
     '--test-mode --test-mode --target 1', '--integration-contract --test-mode',
     '--storage-dir C:\isolated', '--endpoint-suffix probe',
     '--test-mode --target 1 --storage-dir relative --endpoint-suffix safe',
     '--test-mode --target 1 --storage-dir C:\isolated --endpoint-suffix bad.name',
     '--test-mode --target 1 --storage-dir C:\isolated',
     '--test-mode --target 1 --endpoint-suffix safe')) {
-    $process = Start-Process -FilePath $hostExe -ArgumentList $arguments -PassThru -Wait
+    $process = Start-Process -FilePath $hostExe -WindowStyle Hidden -ArgumentList $arguments -PassThru -Wait
     $expected = if ($arguments -eq '--help') { 0 } else { 2 }
     if ($process.ExitCode -ne $expected) { throw "Argument check '$arguments': expected $expected, got $($process.ExitCode)" }
 }
 foreach ($arguments in @('--target 1', '--target 1 --test-mode')) {
-    $process = Start-Process -FilePath $hostExe -ArgumentList $arguments -PassThru -Wait
+    $process = Start-Process -FilePath $hostExe -WindowStyle Hidden -ArgumentList $arguments -PassThru -Wait
     if ($process.ExitCode -ne 3) { throw "Fixture target check '$arguments': expected 3, got $($process.ExitCode)" }
 }
 $contractOutput = Join-Path $output 'HostContract.stdout.log'
 $contractError = Join-Path $output 'HostContract.stderr.log'
-$contract = Start-Process -FilePath $hostExe -ArgumentList '--integration-contract' -PassThru -Wait `
+$contract = Start-Process -FilePath $hostExe -WindowStyle Hidden -ArgumentList '--integration-contract' -PassThru -Wait `
     -RedirectStandardOutput $contractOutput -RedirectStandardError $contractError
 if ($contract.ExitCode -ne 0) { throw "Host integration contract failed: $($contract.ExitCode)" }
 Get-Content -LiteralPath $contractOutput

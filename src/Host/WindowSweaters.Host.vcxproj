@@ -52,7 +52,7 @@
     <ClCompile Include="..\Rendering\Stacking.cpp" />
     <ClCompile Include="..\Rendering\RenderQueue.cpp" />
     <ClCompile Include="..\Rendering\GraphicsRecovery.cpp" />
-    <ClCompile Include="..\Rendering\KnitRaster.cpp" />
+    <ClCompile Include="..\Rendering\KnitPreparation.cpp" />
     <ClCompile Include="..\Knitting\KnitTile.cpp" />
     <ClCompile Include="..\Knitting\Chart.cpp" />
     <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
@@ -85,4 +85,7 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Import Project="..\Rendering\KnitShader.targets" />
+  <ItemGroup>
+    <ClCompile Include="..\Rendering\GpuSnapshot.cpp" />
+  </ItemGroup>
 </Project>

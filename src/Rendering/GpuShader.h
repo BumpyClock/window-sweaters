@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
-#include "KnitRaster.h"
+#include "KnitPreparation.h"
 #include "ResourceLedger.h"
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -21,9 +21,8 @@ class GpuShader final {
 public:
     explicit GpuShader(ID3D11Device* device, std::shared_ptr<ResourceLedger> resources = {})
         : device_(device), resources_(resources ? std::move(resources) : std::make_shared<ResourceLedger>()) {}
-    HRESULT Upload(const knitting::RasterImage& image, Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& view) noexcept;
     HRESULT Render(const KnitSources& sources, const KnitMask& mask, ID3D11RenderTargetView* target,
-        POINT offset, ResourceLedger::Lease* upload = nullptr) noexcept;
+        POINT offset, ResourceLedger::Lease* upload = nullptr, ID3D11BlendState* blend = nullptr) noexcept;
     HRESULT Submit() noexcept;
     ID3D11Device* Device() const noexcept { return device_.Get(); }
     std::uint64_t DrawCount() const noexcept { return draws_; }
@@ -47,7 +46,7 @@ private:
     std::shared_ptr<ResourceLedger> resources_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vertex_;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> knit_, copy_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> knit_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> parameters_, placement_;
     std::list<std::shared_ptr<Coordinates>> coordinates_;
     std::size_t cachedBytes_{};

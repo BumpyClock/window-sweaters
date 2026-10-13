@@ -1,6 +1,6 @@
 #pragma once
 
-#include "KnitRaster.h"
+#include "KnitPreparation.h"
 #include <windows.h>
 #include <algorithm>
 #include <limits>
@@ -136,28 +136,24 @@ public:
         stats_.error=S_OK;
         return S_OK;
     }
-    HRESULT Reserve(std::shared_ptr<const KnitPerimeter> const& perimeter,Lease& lease) noexcept {
+    HRESULT Reserve(std::shared_ptr<const KnitPerimeter> const& perimeter,Lease& lease,std::size_t additionalTransientBytes=0) noexcept {
         if (GetCurrentThreadId()!=ownerThread_ || lease.owner_ || !perimeter || !perimeter->tile)
             return E_INVALIDARG;
         try {
-            std::size_t cpu=sizeof(KnitPerimeter),gpu=0,transient=0,cacheBudget=0;
+            std::size_t cpu=sizeof(KnitPerimeter),gpu=0,transient=additionalTransientBytes,cacheBudget=0;
             for (auto const& piece:perimeter->pieces) {
                 if (!perimeter->PieceValid(piece) || piece.width>32768 || piece.height>32768) return E_INVALIDARG;
                 const auto surface=std::size_t(piece.width)*piece.height*4;
-                if (!Add(gpu,surface) || !Add(cpu,piece.image.pixels.capacity()*sizeof(std::uint32_t)))
-                    return E_INVALIDARG;
-                if (perimeter->assembly) {
-                    if (!Add(transient,surface*2u) || !Add(cacheBudget,(std::size_t(piece.width)+piece.height)*8u))
-                        return E_INVALIDARG;
-                } else if (!Add(transient,surface)) return E_INVALIDARG;
+                if (!Add(gpu,surface) || !Add(transient,surface*2u) ||
+                    !Add(cacheBudget,(std::size_t(piece.width)+piece.height)*8u)) return E_INVALIDARG;
             }
             const auto tiles=perimeter->RetainedTiles();
             const auto chart=perimeter->tile->spec.chart;
             std::array<std::size_t,3> tileBytes{};
             for (std::size_t i=0;i<tiles.size();++i) {
                 if (!tiles[i]) continue;
-                if (perimeter->assembly && (!Add(cacheBudget,std::size_t(tiles[i]->image.width)*tiles[i]->image.height*4u) ||
-                    !Add(cacheBudget,std::size_t(tiles[i]->height.width)*tiles[i]->height.height*4u))) return E_INVALIDARG;
+                if (!Add(cacheBudget,std::size_t(tiles[i]->image.width)*tiles[i]->image.height*4u) ||
+                    !Add(cacheBudget,std::size_t(tiles[i]->height.width)*tiles[i]->height.height*4u)) return E_INVALIDARG;
                 tileBytes[i]=sizeof(knitting::Tile);
                 if (!Add(tileBytes[i],tiles[i]->image.pixels.capacity()*sizeof(std::uint32_t)) ||
                     !Add(tileBytes[i],tiles[i]->height.pixels.capacity()*sizeof(std::uint32_t))) return E_INVALIDARG;

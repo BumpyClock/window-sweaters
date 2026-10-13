@@ -2,7 +2,6 @@
 #include "GpuShader.h"
 #include "KnitVertex.h"
 #include "KnitPixel.h"
-#include "CopyPixel.h"
 #include <cmath>
 #include <bit>
 
@@ -40,35 +39,13 @@ bool Valid(const KnitMask& m) noexcept {
 
 HRESULT GpuShader::Initialize() noexcept {
     if (!device_) return E_UNEXPECTED;
-    if (copy_) return S_OK;
+    if (knit_) return S_OK;
     device_->GetImmediateContext(context_.ReleaseAndGetAddressOf());
     HRESULT result = device_->CreateVertexShader(KnitVertex, sizeof(KnitVertex), nullptr, vertex_.ReleaseAndGetAddressOf());
     if (SUCCEEDED(result)) result = ConstantBuffer(device_.Get(), sizeof(KnitShaderParameters), parameters_);
     if (SUCCEEDED(result)) result = ConstantBuffer(device_.Get(), sizeof(Placement), placement_);
     if (SUCCEEDED(result)) result = device_->CreatePixelShader(KnitPixel, sizeof(KnitPixel), nullptr,
         knit_.ReleaseAndGetAddressOf());
-    if (SUCCEEDED(result)) result = device_->CreatePixelShader(CopyPixel, sizeof(CopyPixel), nullptr,
-        copy_.ReleaseAndGetAddressOf());
-    return result;
-}
-
-HRESULT GpuShader::Upload(const knitting::RasterImage& image, ComPtr<ID3D11ShaderResourceView>& view) noexcept {
-    view.Reset();
-    if (!device_) return E_UNEXPECTED;
-    if (!image.width || !image.height || image.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
-        image.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || image.stride != image.width * 4 ||
-        image.pixels.size() != std::size_t(image.width) * image.height) return E_INVALIDARG;
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = image.width; desc.Height = image.height;
-    desc.MipLevels = desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_IMMUTABLE;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    const D3D11_SUBRESOURCE_DATA data{image.pixels.data(), image.stride, 0};
-    ComPtr<ID3D11Texture2D> texture;
-    HRESULT result = device_->CreateTexture2D(&desc, &data, &texture);
-    if (SUCCEEDED(result)) result = device_->CreateShaderResourceView(texture.Get(), nullptr, &view);
     return result;
 }
 
@@ -132,16 +109,14 @@ HRESULT GpuShader::CoordinateTable(std::uint32_t length, float origin, float sca
 }
 
 HRESULT GpuShader::Render(const KnitSources& sources, const KnitMask& mask, ID3D11RenderTargetView* target,
-    POINT offset, ResourceLedger::Lease* upload) noexcept {
-    const bool knit = sources.heights != nullptr;
-    if (!target || !sources.colour || !sources.width || !sources.height ||
+    POINT offset, ResourceLedger::Lease* upload, ID3D11BlendState* blend) noexcept {
+    if (!target || !sources.colour || !sources.heights || !sources.parameters || !sources.width || !sources.height ||
         sources.width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || sources.height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
-        offset.x < 0 || offset.y < 0 || knit != (sources.parameters != nullptr) ||
-        (knit && !Valid(*sources.parameters)) || !Valid(mask)) return E_INVALIDARG;
+        offset.x < 0 || offset.y < 0 || !Valid(*sources.parameters) || !Valid(mask)) return E_INVALIDARG;
     HRESULT result = Initialize();
     if (FAILED(result)) return result;
     std::shared_ptr<Coordinates> coordinates[2];
-    for (int axis = 0; knit && axis < 2; ++axis) {
+    for (int axis = 0; axis < 2; ++axis) {
         const auto& p = *sources.parameters;
         result = CoordinateTable(axis ? sources.height : sources.width, axis ? p.originY : p.originX,
             p.scale, coordinates[axis], upload);
@@ -150,21 +125,22 @@ HRESULT GpuShader::Render(const KnitSources& sources, const KnitMask& mask, ID3D
     const Placement placement{{mask.left, mask.top, mask.right, mask.bottom},
         float(offset.x), float(offset.y), mask.radius, mask.hole ? 1u : 0u};
     context_->ClearState();
-    if (knit) context_->UpdateSubresource(parameters_.Get(), 0, nullptr, sources.parameters, 0, 0);
+    context_->UpdateSubresource(parameters_.Get(), 0, nullptr, sources.parameters, 0, 0);
     context_->UpdateSubresource(placement_.Get(), 0, nullptr, &placement, 0, 0);
     context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context_->VSSetShader(vertex_.Get(), nullptr, 0);
-    context_->PSSetShader(knit ? knit_.Get() : copy_.Get(), nullptr, 0);
+    context_->PSSetShader(knit_.Get(), nullptr, 0);
     ID3D11Buffer* buffers[] = {parameters_.Get(), placement_.Get()};
     context_->PSSetConstantBuffers(0, 2, buffers);
     ID3D11ShaderResourceView* views[] = {sources.colour, sources.heights,
-        knit ? coordinates[0]->view.Get() : nullptr, knit ? coordinates[1]->view.Get() : nullptr};
-    context_->PSSetShaderResources(0, knit ? 4 : 1, views);
+        coordinates[0]->view.Get(), coordinates[1]->view.Get()};
+    context_->PSSetShaderResources(0, 4, views);
     context_->OMSetRenderTargets(1, &target, nullptr);
+    context_->OMSetBlendState(blend, nullptr, 0xffffffffu);
     const D3D11_VIEWPORT viewport{float(offset.x), float(offset.y), float(sources.width), float(sources.height), 0, 1};
     context_->RSSetViewports(1, &viewport);
     context_->Draw(3, 0);
-    if (knit) ++draws_;
+    ++draws_;
     ID3D11ShaderResourceView* emptyViews[4]{};
     context_->PSSetShaderResources(0, 4, emptyViews);
     context_->OMSetRenderTargets(0, nullptr, nullptr);

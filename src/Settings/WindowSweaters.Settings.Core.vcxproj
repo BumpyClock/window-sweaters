@@ -21,11 +21,17 @@
   <!-- The production native sources are shared without bringing a Host or WinUI dependency into the renderer. -->
   <ItemGroup>
     <ClCompile Include="..\Knitting\knit_math.c"><CompileAs>CompileAsC</CompileAs></ClCompile>
-    <ClCompile Include="..\Knitting\KnitTile.cpp"/><ClCompile Include="..\Knitting\Chart.cpp"/><ClCompile Include="..\Rendering\KnitRaster.cpp"/><ClCompile Include="Preview.cpp"/>
+    <ClCompile Include="..\Knitting\KnitTile.cpp"/><ClCompile Include="..\Knitting\Chart.cpp"/><ClCompile Include="..\Rendering\KnitPreparation.cpp"/><ClCompile Include="Preview.cpp"/>
     <ClCompile Include="..\IconYarn\IconMotif.cpp"/><ClCompile Include="..\IconYarn\IconPalette.cpp"/><ClCompile Include="..\Colorways\Recolor.cpp"/>
     <ClInclude Include="Preview.h"/>
     <ClInclude Include="..\Rendering\ResourceLedger.h"/>
   </ItemGroup>
   <ItemGroup><ProjectReference Include="..\Configuration\WindowSweaters.Configuration.vcxproj"><Project>{2D727CBB-89D4-47D2-A630-0212AF370E26}</Project></ProjectReference></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+  <ItemGroup>
+    <ClCompile Include="..\Rendering\GpuShader.cpp" />
+    <ClCompile Include="..\Rendering\KnitAssembler.cpp" />
+    <ClCompile Include="..\Rendering\GpuSnapshot.cpp" />
+  </ItemGroup>
+  <Import Project="..\Rendering\KnitShader.targets" />
 </Project>

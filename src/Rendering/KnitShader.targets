@@ -7,11 +7,10 @@
   <ItemDefinitionGroup>
     <ClCompile><AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
   </ItemDefinitionGroup>
-  <Target Name="CompileKnitShader" BeforeTargets="ClCompile" Inputs="$(KnitShaderSource);$(MSBuildThisFileFullPath)" Outputs="$(IntDir)KnitVertex.h;$(IntDir)KnitPixel.h;$(IntDir)CopyPixel.h">
+  <Target Name="CompileKnitShader" BeforeTargets="ClCompile" Inputs="$(KnitShaderSource);$(MSBuildThisFileFullPath)" Outputs="$(IntDir)KnitVertex.h;$(IntDir)KnitPixel.h">
     <MakeDir Directories="$(IntDir)" />
     <Exec Command="&quot;$(KnitShaderCompiler)&quot; /nologo /WX /Ges /Gis /O3 /T vs_4_0 /E Vertex /Vn KnitVertex /Fh &quot;$(IntDir)KnitVertex.h&quot; &quot;$(KnitShaderSource)&quot;" />
     <Exec Command="&quot;$(KnitShaderCompiler)&quot; /nologo /WX /Ges /Gis /O3 /T ps_4_0 /E Knit /Vn KnitPixel /Fh &quot;$(IntDir)KnitPixel.h&quot; &quot;$(KnitShaderSource)&quot;" />
-    <Exec Command="&quot;$(KnitShaderCompiler)&quot; /nologo /WX /Ges /Gis /O3 /T ps_4_0 /E Copy /Vn CopyPixel /Fh &quot;$(IntDir)CopyPixel.h&quot; &quot;$(KnitShaderSource)&quot;" />
-    <ItemGroup><FileWrites Include="$(IntDir)KnitVertex.h;$(IntDir)KnitPixel.h;$(IntDir)CopyPixel.h" /></ItemGroup>
+    <ItemGroup><FileWrites Include="$(IntDir)KnitVertex.h;$(IntDir)KnitPixel.h" /></ItemGroup>
   </Target>
 </Project>

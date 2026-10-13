@@ -6,7 +6,8 @@
 #include <wrl/client.h>
 #include <cstring>
 
-namespace window_sweaters::rendering::testing {
+namespace window_sweaters::testing {
+using namespace rendering;
 inline HRESULT Complete(ID3D11Device* device) noexcept {
     using Microsoft::WRL::ComPtr;
     if (!device) return E_UNEXPECTED;
@@ -37,6 +38,25 @@ struct Gpu {
     KnitAssembler assembler;
 };
 
+inline HRESULT Upload(ID3D11Device* device, const knitting::RasterImage& image,
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>& view) noexcept {
+    view.Reset();
+    if (!device || !image.width || !image.height || image.stride != image.width * 4u ||
+        image.pixels.size() != std::size_t(image.width) * image.height) return E_INVALIDARG;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = image.width; desc.Height = image.height;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const D3D11_SUBRESOURCE_DATA data{image.pixels.data(), image.stride, 0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    HRESULT result = device->CreateTexture2D(&desc, &data, &texture);
+    if (SUCCEEDED(result)) result = device->CreateShaderResourceView(texture.Get(), nullptr, &view);
+    return result;
+}
+
 inline HRESULT Shade(Gpu& gpu, const KnitSources& sources,
     Microsoft::WRL::ComPtr<ID3D11Texture2D>& texture) noexcept {
     using Microsoft::WRL::ComPtr;
@@ -62,11 +82,10 @@ inline HRESULT Shade(Gpu& gpu, const KnitPerimeter& perimeter, std::size_t side,
     if (!gpu.Device() || side >= perimeter.pieces.size()) return E_INVALIDARG;
     const auto& piece = perimeter.pieces[side];
     ComPtr<ID3D11ShaderResourceView> colour, heights;
-    HRESULT result = perimeter.assembly ? gpu.assembler.Assemble(perimeter, side, colour, heights)
-        : gpu.shader.Upload(piece.image, colour);
+    HRESULT result = gpu.assembler.Assemble(perimeter, side, colour, heights);
     if (FAILED(result)) return result;
     const KnitSources sources{piece.width, piece.height, colour.Get(), heights.Get(),
-        perimeter.assembly ? &perimeter.assembly->parameters[side] : nullptr};
+        &perimeter.assembly.parameters[side]};
     return Shade(gpu, sources, texture);
 }
 
