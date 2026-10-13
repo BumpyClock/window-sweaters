@@ -104,7 +104,9 @@ HRESULT KnitAssembler::Assemble(const KnitPerimeter& perimeter, std::size_t side
     colour.Reset();
     heights.Reset();
     if (!perimeter.assembly || !perimeter.tile || side >= perimeter.pieces.size() ||
-        !perimeter.PieceValid(perimeter.pieces[side])) return E_INVALIDARG;
+        !perimeter.PieceValid(perimeter.pieces[side]) ||
+        perimeter.pieces[side].width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+        perimeter.pieces[side].height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) return E_INVALIDARG;
     HRESULT result = Initialize();
     if (FAILED(result)) return result;
     const auto& assembly = *perimeter.assembly;

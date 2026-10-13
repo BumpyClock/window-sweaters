@@ -421,6 +421,41 @@ void CacheQuotaContracts(testing::Gpu& gpu) {
         ledger->Status().estimatedGpuBytes == 0 && ledger->Status().cacheEntries == 0 &&
         ledger->Status().quotaRejected == 2, "Rejected caches and draw leave resource accounting balanced");
 }
+void TextureDimensionContracts(testing::Gpu& gpu) {
+    TileCache cache;
+    KnitAssembler withoutDevice(nullptr);
+    for (const bool width : {false, true}) {
+        KnitFrameSpec frame;
+        frame.renderer = Renderer::Gpu;
+        frame.radiusDip = 0.f;
+        frame.bandDip = 4.f;
+        frame.contentWidthPixels = width ? 16372u : 72u;
+        frame.contentHeightPixels = width ? 72u : 16372u;
+        auto perimeter = KnitRaster::RenderPerimeter(frame, {}, cache);
+        const std::size_t side = width ? 0u : 1u;
+        ComPtr<ID3D11ShaderResourceView> colour, heights;
+        Check(gpu.assembler.Assemble(perimeter, side, colour, heights), "Assemble exact GPU texture dimension limit");
+        for (const auto& view : {colour, heights}) {
+            ComPtr<ID3D11Resource> resource;
+            ComPtr<ID3D11Texture2D> texture;
+            view->GetResource(resource.GetAddressOf());
+            Check(resource.As(&texture), "Boundary strip texture");
+            D3D11_TEXTURE2D_DESC desc{};
+            texture->GetDesc(&desc);
+            Require((width ? desc.Width : desc.Height) == 16384u,
+                "Assembler preserves the exact padded texture dimension limit");
+        }
+        if (width) {
+            ++perimeter.width;
+            ++perimeter.pieces[side].width;
+        } else {
+            ++perimeter.height;
+            ++perimeter.pieces[side].height;
+        }
+        Require(withoutDevice.Assemble(perimeter, side, colour, heights) == E_INVALIDARG && !colour && !heights,
+            "Oversize GPU assembly input rejected before device initialization");
+    }
+}
 using Clock = std::chrono::steady_clock;
 double Milliseconds(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -682,6 +717,7 @@ int wmain(int argc, wchar_t** argv) {
         if (contractsOnly) {
             SharedFinish(shader, output);
             CacheQuotaContracts(shader);
+            TextureDimensionContracts(shader);
             testing::GpuCacheContracts(device.Get());
             RetentionAndRecovery(output, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE);
             std::cout << "PASS hidden/cache contracts checks=" << checks << " shader_max_byte_error=" << shaderMaximum << '\n';
@@ -692,6 +728,7 @@ int wmain(int argc, wchar_t** argv) {
         Require(lightingPixels > 0 && reliefPixels > 0 && frayPixels > 0 && shadowPixels > 0,
             "Strict shader matrix must exercise tube lighting, height relief, fray and shadow above tolerance");
         CacheQuotaContracts(shader);
+        TextureDimensionContracts(shader);
         testing::GpuCacheContracts(device.Get());
         Require(shader.shader.CachedBytes() <= GpuShader::CacheByteLimit &&
             shader.assembler.CachedBytes() <= KnitAssembler::CacheByteLimit &&

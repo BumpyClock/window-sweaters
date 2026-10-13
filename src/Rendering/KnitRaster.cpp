@@ -4,6 +4,7 @@
 #include "KnitStrip.h"
 #include "..\Geometry\Geometry.h"
 #include "..\Knitting\WicSurface.h"
+#include <d3d11.h>
 #include <algorithm>
 #include <cmath>
 #include <list>
@@ -379,7 +380,8 @@ KnitPerimeter KnitRaster::RenderPerimeter(const KnitFrameSpec& requested,
     double contentHeight = f.contentHeightPixels ? f.contentHeightPixels
         : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
     double width = contentWidth + 2. * (inset + margin), height = contentHeight + 2. * (inset + margin);
-    if (width > 32768 || height > 32768) throw std::invalid_argument("Frame dimensions exceed limits");
+    const auto dimensionLimit = f.renderer == Renderer::Gpu ? D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION : 32768;
+    if (width > dimensionLimit || height > dimensionLimit) throw std::invalid_argument("Frame dimensions exceed limits");
     float irad = std::max(0.f, f.radiusDip - f.tuckDip);
     float depth = f.bandDip + f.tuckDip + irad * (1.f - 0.7071067811865475244f) + 1.f;
     depth = std::min(depth, std::min(ow, oh) * 0.5f);

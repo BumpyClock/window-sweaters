@@ -654,6 +654,7 @@ private:
         std::optional<window_sweaters::contracts::Configuration> pendingConfiguration;
         std::map<window_sweaters::applications::AppIdentity,std::uint64_t> eligibilityRevisions;
         std::function<void()> duringVisibilityProbe;
+        std::function<void()> duringPublicationValidation;
         unsigned failDeviceInitializations{};
         std::optional<HRESULT> nextOverlayCreateFailure;
         std::optional<window_sweaters::colorways::ResolutionError> nextAppearanceFailure;
@@ -673,7 +674,7 @@ private:
         OverlayState state;
         window_sweaters::visibility::TargetVisibility visibility;
         std::optional<window_sweaters::visibility::ProbeToken> visibilityToken;
-        bool visibilityRegistered{};
+        HWND registeredOverlay{};
         bool presentationVisible{};
         window_sweaters::host::RenderState render;
         Overlay overlay;
@@ -954,7 +955,7 @@ private:
                 ForgetIcon(*entry, true);
                 AdvanceRenderEpoch(*entry);
                 if (!committed_.eligibility.Allows(*entry->metadata)) {
-                    Hide(*entry); entry->overlay.ReleaseContent(); entry->render.Invalidate();
+                    Hide(*entry); ReleaseOverlayContent(*entry); entry->render.Invalidate();
                 }
                 else entry->placementPending=entry->state.requestedVisible;
             }
@@ -1032,7 +1033,18 @@ private:
         return FAILED(result) ? GpuFailure(L"initial composition commit", result, generation) : result;
     }
 
+    void RetireOverlayRegistration(Entry& entry) {
+        if (visibility_ && entry.registeredOverlay) visibility_->UnregisterOverlay(entry.registeredOverlay);
+        entry.registeredOverlay = nullptr;
+    }
+
+    void ReleaseOverlayContent(Entry& entry) {
+        entry.overlay.ReleaseContent();
+        if (entry.registeredOverlay != entry.overlay.Window()) RetireOverlayRegistration(entry);
+    }
+
     HRESULT CreateOverlay(Entry& entry) {
+        RetireOverlayRegistration(entry);
         HRESULT result = entry.overlay.Create(instance_, window_, graphics_);
         if (SUCCEEDED(result) && contract_ && contract_->nextOverlayCreateFailure) {
             result = *contract_->nextOverlayCreateFailure;
@@ -1048,8 +1060,7 @@ private:
             (void)hwnd;
             ForgetIcon(*entry);
             Hide(*entry);
-            if (visibility_ && entry->visibilityRegistered) visibility_->UnregisterOverlay(entry->overlay.Window());
-            entry->visibilityRegistered = false;
+            RetireOverlayRegistration(*entry);
             entry->visibilityToken.reset();
             entry->render.Invalidate();
             entry->state.appliedRect.reset();
@@ -1186,8 +1197,7 @@ private:
         if (transition.hide || transition.reason != Suppression::None) Hide(*entry);
         if (transition.recreate) {
             Hide(*entry);
-            if (entry->visibilityRegistered && visibility_) visibility_->UnregisterOverlay(overlay);
-            entry->visibilityRegistered = false;
+            RetireOverlayRegistration(*entry);
             entry->visibilityToken.reset();
             entry->render.Invalidate();
             RetireRenderRetry(*entry);
@@ -1209,7 +1219,7 @@ private:
                     LogError(L"recreated own overlay registration", registration);
                     return false;
                 }
-                entry->visibilityRegistered = true;
+                entry->registeredOverlay = entry->overlay.Window();
             }
             ++counters_.creates;
             if (contract_) contract_->recreateOverlay = false;
@@ -1217,7 +1227,7 @@ private:
             probeDirty_ = true;
             return false;
         }
-        if (transition.associate && transition.desktop && entry->visibilityRegistered) {
+        if (transition.associate && transition.desktop && entry->registeredOverlay) {
             Hide(*entry);
             if (!Model().Accepts({target, entry->state.appearanceRevision}) ||
                 !entry->visibility.CanAssociate(policy, token, *transition.desktop)) return false;
@@ -1471,7 +1481,7 @@ private:
                 AdvanceRenderEpoch(*entry);
                 entry->appearance.reset();
                 Hide(*entry);
-                entry->overlay.ReleaseContent();
+                ReleaseOverlayContent(*entry);
             } else if (eligible) entry->placementPending=true;
             else Hide(*entry);
             changed=true;
@@ -1632,7 +1642,7 @@ private:
             probeDirty_ = true;
         }
         if (entry.state.excluded || !entry.state.requestedVisible) {
-            entry.overlay.ReleaseContent();
+            ReleaseOverlayContent(entry);
             entry.render.prepared.reset();
         }
     }
@@ -1649,9 +1659,8 @@ private:
         return {rect.left, rect.top, rect.right, rect.bottom};
     }
 
-    std::optional<window_sweaters::geometry::RenderInput> CurrentGeometry(Entry& entry) {
+    std::optional<window_sweaters::geometry::RenderInput> QueryCurrentGeometry(const Entry& entry) const {
         using namespace window_sweaters::geometry;
-        ++counters_.geometryQueries;
         const WindowQuery query = contract_ ? WindowQuery{contract_->geometry.at(entry.state.target.hwnd)}
             : QueryWindowGeometry(reinterpret_cast<HWND>(entry.state.target.hwnd));
         const auto geometry = BuildRenderInput(query,
@@ -1661,11 +1670,19 @@ private:
         const auto current = Model().CurrentSnapshot(token);
         if (!input || !current || !current->visible || current->dpi != input->dpi ||
             current->rect != window_sweaters::host::TrackedRect(input->physicalTargetBounds)) {
-            Hide(entry);
-            entry.placementPending = entry.state.requestedVisible;
             return std::nullopt;
         }
         return *input;
+    }
+
+    std::optional<window_sweaters::geometry::RenderInput> CurrentGeometry(Entry& entry) {
+        ++counters_.geometryQueries;
+        auto input = QueryCurrentGeometry(entry);
+        if (!input) {
+            Hide(entry);
+            entry.placementPending = entry.state.requestedVisible;
+        }
+        return input;
     }
 
     bool Matches(const window_sweaters::rendering::RenderRequest& request, Entry& entry,
@@ -1737,7 +1754,7 @@ private:
                     LogError(L"own overlay visibility registration", registration);
                     return registration;
                 }
-                entry.visibilityRegistered = true;
+                entry.registeredOverlay = entry.overlay.Window();
             }
             ++counters_.creates;
         }
@@ -1826,7 +1843,7 @@ private:
                 entry->render.resourceRetry = request;
                 if (std::find(resourceRetries_.begin(), resourceRetries_.end(), entry->state.target) == resourceRetries_.end())
                     resourceRetries_.push_back(entry->state.target);
-                entry->overlay.ReleaseContent();
+                ReleaseOverlayContent(*entry);
                 entry->render.prepared.reset();
                 ++counters_.renderErrors;
                 probeDirty_ = true;
@@ -1848,12 +1865,29 @@ private:
                     ++counters_.staleResults;
                     return true;
                 }
+                if (contract_ && contract_->duringPublicationValidation) contract_->duringPublicationValidation();
+                entry = Find(request.token.target);
+                if (!entry || &entry->overlay != item.overlay || entry->overlay.PreparedUploadId() != item.uploadId) {
+                    ++counters_.staleResults;
+                    return true;
+                }
+                const bool eligible = EligibleNow(*entry);
+                entry = Find(request.token.target);
+                if (!entry || &entry->overlay != item.overlay || entry->overlay.PreparedUploadId() != item.uploadId) {
+                    ++counters_.staleResults;
+                    return true;
+                }
                 const auto geometry = CurrentGeometry(*entry);
-                const bool eligible = EligibleNow(*entry) && geometry && entry->visibilityToken &&
+                entry = Find(request.token.target);
+                if (!entry || &entry->overlay != item.overlay || entry->overlay.PreparedUploadId() != item.uploadId) {
+                    ++counters_.staleResults;
+                    return true;
+                }
+                const bool current = eligible && geometry && entry->visibilityToken &&
                     entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken);
-                if (eligible && Matches(request, *entry, *geometry)) return false;
+                if (current && Matches(request, *entry, *geometry)) return false;
                 entry->overlay.DiscardUpload();
-                if (!eligible) Hide(*entry);
+                if (!current) Hide(*entry);
                 ++counters_.staleResults;
                 return true;
             };
@@ -1862,13 +1896,40 @@ private:
             for (auto& item : prepared)
                 if (!stale(item)) current.push_back(std::move(item));
             prepared = std::move(current);
+            current.clear();
+            current.reserve(prepared.size());
+            for (const auto& item : prepared) {
+                const auto& request = *item.candidate.request;
+                auto entry = Find(request.token.target);
+                const auto geometry = entry ? QueryCurrentGeometry(*entry) : std::nullopt;
+                if (entry && &entry->overlay == item.overlay && entry->overlay.PreparedUploadId() == item.uploadId &&
+                    !stopped_ && !committed_.paused && !entry->state.excluded && entry->state.requestedVisible &&
+                    geometry && Matches(request, *entry, *geometry) && entry->visibilityToken &&
+                    entry->visibility.CanPublish(VisibilityPolicy(), *entry->visibilityToken)) {
+                    current.push_back({item.candidate, *geometry, item.overlay, item.uploadId});
+                    continue;
+                }
+                if (entry && &entry->overlay == item.overlay && entry->overlay.PreparedUploadId() == item.uploadId)
+                    entry->overlay.DiscardUpload();
+                ++counters_.staleResults;
+            }
+            prepared = std::move(current);
             if (prepared.empty()) return;
             std::array<Overlay*, 8> overlays{};
             for (std::size_t i = 0; i < prepared.size(); ++i) overlays[i] = prepared[i].overlay;
             const auto generation = prepared.front().candidate.request->deviceGeneration;
             const HRESULT result = Overlay::PublishUploads({overlays.data(), prepared.size()});
             if (FAILED(result)) {
-                for (const auto& item : prepared) uploadFailure(*item.candidate.request, result);
+                for (const auto& item : prepared) {
+                    auto entry = Find(item.candidate.request->token.target);
+                    if (!entry || &entry->overlay != item.overlay) continue;
+                    const bool destroyed = !entry->overlay.Window();
+                    if (destroyed) RetireOverlayRegistration(*entry);
+                    if (entry->overlay.PreparedUploadId() == item.uploadId) {
+                        entry->overlay.DiscardUpload();
+                        uploadFailure(*item.candidate.request, result);
+                    } else if (destroyed) uploadFailure(*item.candidate.request, result);
+                }
                 prepared.clear();
                 GpuFailure(L"GPU perimeter batch publication recovery", result, generation);
                 return;
@@ -2204,7 +2265,7 @@ private:
                 std::erase(renderRetries_, action.target);
                 std::erase(resourceRetries_,action.target);
                 std::erase(visibilityOrder_, action.target);
-                if (visibility_ && entry->visibilityRegistered) visibility_->UnregisterOverlay(entry->overlay.Window());
+                RetireOverlayRegistration(*entry);
                 ForgetIcon(*entry, true);
                 entries_.erase(action.target.hwnd);
                 metadataGate_.Forget(action.target.hwnd);
@@ -4118,6 +4179,37 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
             batch.entries_.at(41001)->presentationVisible && batch.counters_.uploads == 5 &&
             batch.graphics_.PublicationStatus().commits == replacementCommits.commits + 1 && batch.counters_.staleResults > 0,
             "Actual Host batch discards a gathered target retired by later validation before native publication");
+        require(SUCCEEDED(batch.ApplyBatch(batchContract.model.Observe(targets[0], Dirty::Lifecycle, GetTickCount64()))),
+            "Recreate first batch target for final publication currentness regression");
+        auto firstOwner = appMetadata(L"C:\\PrivateFixtures\\BatchOne\\app.exe");
+        batch.entries_.at(41000)->metadata = firstOwner;
+        batch.entries_.at(41001)->metadata = appMetadata(L"C:\\PrivateFixtures\\BatchTwo\\app.exe");
+        next = batch.committed_; ++next.revision; next.border_width_dip += 1;
+        batch.ApplyConfiguration(next);
+        for (const auto& target : targets)
+            require(SUCCEEDED(batch.ApplyBatch(batchContract.model.Observe(target, Dirty::Appearance, GetTickCount64()))),
+                "Queue two replacement uploads before later-candidate configuration refresh");
+        applications::EligibilityMutation disableFirst;
+        disableFirst.edits.emplace_back(applications::SetApplicationPreference{
+            std::get<applications::AppMetadata>(*firstOwner).Identity(), false});
+        auto disableSnapshot = batch.committed_;
+        disableSnapshot.eligibility = std::get<applications::EligibilityPreferences>(disableSnapshot.eligibility.Apply(disableFirst));
+        ++disableSnapshot.revision;
+        unsigned publicationValidations = 0;
+        batchContract.duringPublicationValidation = [&] {
+            if (++publicationValidations == 2) batchContract.pendingConfiguration = disableSnapshot;
+        };
+        const auto uploadsBeforeRefresh = batch.counters_.uploads;
+        const auto commitsBeforeRefresh = batch.graphics_.PublicationStatus().commits;
+        drainTwo();
+        batchContract.duringPublicationValidation = {};
+        require(publicationValidations == 2 && !batch.entries_.at(41000)->overlay.PreparedUploadId() &&
+            !batch.entries_.at(41000)->render.prepared && !batch.entries_.at(41000)->presentationVisible &&
+            batch.entries_.at(41001)->render.prepared && batch.entries_.at(41001)->presentationVisible &&
+            !batch.entries_.at(41001)->render.failed && !batch.entries_.at(41001)->overlay.PreparedUploadId() &&
+            batch.counters_.uploads == uploadsBeforeRefresh + 1 &&
+            batch.graphics_.PublicationStatus().commits == commitsBeforeRefresh + 1,
+            "Later-candidate owned configuration refresh retires an earlier staged upload without failing or retaining unrelated uploads");
         batch.Shutdown();
     }
     {
@@ -4257,7 +4349,27 @@ void Host::RunConsumerContracts(window_sweaters::rendering::Renderer renderer) {
     require(SUCCEEDED(nativeEntry->overlay.Create(host.instance_, host.window_, host.graphics_)) &&
         SUCCEEDED(host.visibility_->RegisterOverlay(nativeEntry->overlay.Window())),
         "Register only actual own hidden overlay with native owner epoch");
-    nativeEntry->visibilityRegistered = true;
+    nativeEntry->registeredOverlay = nativeEntry->overlay.Window();
+    const auto failedRegistration = nativeEntry->registeredOverlay;
+    nativeEntry->overlay.Destroy();
+    require(!nativeEntry->overlay.Window() && nativeEntry->registeredOverlay == failedRegistration &&
+        SUCCEEDED(host.CreateOverlay(*nativeEntry)) && !nativeEntry->registeredOverlay,
+        "Overlay failure preserves registered HWND identity until Host retires it before replacement");
+    require(SUCCEEDED(host.visibility_->RegisterOverlay(nativeEntry->overlay.Window())),
+        "Replacement owned overlay registers after original HWND destruction");
+    nativeEntry->registeredOverlay = nativeEntry->overlay.Window();
+    std::vector<HWND> capacityWindows;
+    for (std::size_t i = 1; i < window_sweaters::visibility::MaxOverlays; ++i) {
+        const auto window = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+            L"WindowSweaters.Overlay", L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, host.instance_, nullptr);
+        require(window && SUCCEEDED(host.visibility_->RegisterOverlay(window)),
+            "Destroyed publication HWND does not consume any native overlay registration capacity");
+        capacityWindows.push_back(window);
+    }
+    for (const auto window : capacityWindows) {
+        host.visibility_->UnregisterOverlay(window);
+        DestroyWindow(window);
+    }
     host.entries_.emplace(nativeTarget.hwnd, std::move(nativeEntry));
     struct DisplayMessage { GUID id; DWORD length; DWORD value; } display{GUID_SESSION_DISPLAY_STATUS, sizeof(DWORD), 1};
     host.visibility_->HandleMessage(WM_POWERBROADCAST, PBT_POWERSETTINGCHANGE, reinterpret_cast<LPARAM>(&display));

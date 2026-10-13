@@ -3,6 +3,7 @@
 #include "..\Geometry\Geometry.h"
 #include "..\Knitting\WicSurface.h"
 #include <objbase.h>
+#include <d3d11.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -133,7 +134,9 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             : std::ceil(static_cast<double>(f.heightDip) * f.deviceScale);
         const auto margin = geometry::ShadowMarginPixels(inset);
         const double w = cw + 2. * (inset + margin), h = ch + 2. * (inset + margin);
-        if (!std::isfinite(w) || !std::isfinite(h) || w > 32768. || h > 32768.)
+        const bool gpu = f.renderer == Renderer::Gpu;
+        const auto dimensionLimit = gpu ? D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION : 32768;
+        if (!std::isfinite(w) || !std::isfinite(h) || w > dimensionLimit || h > dimensionLimit)
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};
         const float ow = f.widthDip + 2.f * f.bandDip;
         const float oh = f.heightDip + 2.f * f.bandDip;
@@ -141,7 +144,6 @@ Budget BoundRequest(const RenderRequest& r, const RenderQueueLimits& limits) noe
             + std::max(0.f, f.radiusDip - f.tuckDip) * (1.f - .7071067811865475244f) + 1.f;
         depth = std::min(depth, std::min(ow, oh) * .5f);
         const double narrow = std::ceil(depth * f.deviceScale) + 2. + margin;
-        const bool gpu = f.renderer == Renderer::Gpu;
         const double strips = 2. * narrow * (w + h) * 4.;
         if (!std::isfinite(strips) || strips * (gpu ? 2. : 1.) > static_cast<double>(limits.maxPerimeterBytes))
             throw RenderError{RenderErrorKind::ResourceQuota, Quota};

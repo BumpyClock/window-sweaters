@@ -28,10 +28,16 @@ try {
         return
     }
     New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
+    $head = & git rev-parse HEAD
+    if ($LASTEXITCODE) { throw "git rev-parse failed ($LASTEXITCODE)" }
+    $branch = & git branch --show-current
+    if ($LASTEXITCODE) { throw "git branch failed ($LASTEXITCODE)" }
+    $status = @(& git --no-pager status --short)
+    if ($LASTEXITCODE) { throw "git status failed ($LASTEXITCODE)" }
     $source = [ordered]@{
-        head = (& git rev-parse HEAD)
-        branch = (& git branch --show-current)
-        status = @(& git --no-pager status --short)
+        head = $head
+        branch = $branch
+        status = $status
         configuration = $Configuration
         platform = $Platform
         sdk = '10.0.26100.0'
