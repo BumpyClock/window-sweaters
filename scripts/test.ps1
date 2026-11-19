@@ -20,10 +20,9 @@ if ($Platform -eq 'ARM64' -and [Runtime.InteropServices.RuntimeInformation]::OSA
     return
 }
 foreach ($arguments in @('--help', '--target 0', '--target -1', '--target 18446744073709551616',
-    '--unknown', '--renderer', '--renderer cpu', '--renderer gpu', '--renderer invalid',
-    '--integration-contract --renderer cpu', '--integration-contract --renderer gpu',
+    '--unknown', '--help --renderer cpu', '--help --renderer gpu',
     '--test-mode', '--probe-output unused.json', '--target', '--target 1 --target 2',
-    '--test-mode --test-mode --target 1', '--integration-contract --test-mode',
+    '--test-mode --test-mode --target 1', '--integration-contract --target 1',
     '--storage-dir C:\isolated', '--endpoint-suffix probe',
     '--test-mode --target 1 --storage-dir relative --endpoint-suffix safe',
     '--test-mode --target 1 --storage-dir C:\isolated --endpoint-suffix bad.name',

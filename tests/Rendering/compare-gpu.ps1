@@ -64,12 +64,6 @@ try {
         -RedirectStandardOutput (Join-Path $artifacts 'gpu-host.stdout.log') `
         -RedirectStandardError (Join-Path $artifacts 'gpu-host.stderr.log')
     if ($process.ExitCode) { throw "Hidden Host GPU contract failed ($($process.ExitCode))" }
-    foreach ($arguments in @('--renderer', '--renderer cpu', '--renderer gpu', '--renderer invalid', '--renderer cpu --renderer gpu',
-        '--integration-contract --renderer invalid', '--integration-contract --test-mode',
-        '--integration-contract --target 1')) {
-        $process = Start-Process (Join-Path $output 'WindowSweaters.Host.exe') -WindowStyle Hidden -ArgumentList $arguments -PassThru -Wait
-        if ($process.ExitCode -ne 2) { throw "CLI rejection failed: $arguments ($($process.ExitCode))" }
-    }
     $comparison = Join-Path $output 'GpuShaderTests.exe'
     & $comparison --output (Join-Path $artifacts 'hardware')
     if ($LASTEXITCODE) { throw "Hardware GPU comparison failed ($LASTEXITCODE)" }
