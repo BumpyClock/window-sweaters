@@ -160,27 +160,28 @@ ActionBatch TrackingModel::Observe(const Observation& observation, Dirty dirty, 
         targets_.erase(found);
         found = targets_.end();
     }
+    const RetainedSnapshot current{snapshot.identity, snapshot.rect, snapshot.dpi, snapshot.topmost};
     if (found == targets_.end()) {
         if (eligibility == Eligibility::Unsupported || targets_.size() >= policy_.maxTargets) {
             return actions;
         }
         Entry entry;
         entry.id = {hwnd, snapshot.identity.pid, snapshot.identity.processStart, nextGeneration_++};
-        entry.snapshot = snapshot;
+        entry.snapshot = current;
         entry.eligibility = eligibility;
         entry.bornAt = now;
         found = targets_.emplace(hwnd, std::move(entry)).first;
     }
 
     auto& entry = found->second;
-    const auto previous = entry.snapshot;
+    const auto& previous = entry.snapshot;
     const bool sizeChanged = previous.rect.Width() != snapshot.rect.Width()
         || previous.rect.Height() != snapshot.rect.Height();
     const bool geometryChanged = previous.rect != snapshot.rect;
     const bool appearanceChanged = sizeChanged || previous.dpi != snapshot.dpi
         || Has(dirty, Dirty::Appearance);
     const bool orderChanged = previous.topmost != snapshot.topmost || Has(dirty, Dirty::Ordering);
-    entry.snapshot = snapshot;
+    entry.snapshot = current;
     entry.eligibility = eligibility;
     entry.orderPending = entry.orderPending || orderChanged;
     if (appearanceChanged) {

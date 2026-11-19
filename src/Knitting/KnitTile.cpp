@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 namespace window_sweaters::knitting {
 namespace detail {
@@ -117,7 +118,7 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
         colors[colorCount++] = cell.argb;
     }
     detail::WicSurface colour(width, height, static_cast<float>(l.raster_scale));
-    detail::WicSurface ridge(width, height, static_cast<float>(l.raster_scale), colour.factory.Get());
+    detail::WicSurface ridge(width, height, static_cast<float>(l.raster_scale), colour.factory.Get(), colour.wic.Get());
     struct YarnPath { std::uint32_t argb; ComPtr<ID2D1PathGeometry> path; };
     std::vector<YarnPath> paths;
     for (std::size_t index = 0; index < colorCount; ++index) {
@@ -177,21 +178,27 @@ RasterImage RasterizeTile(const TileSpec& spec, const ws_knit_layout& l,
                     image.pixels[static_cast<std::size_t>(image.height-1-y)*image.width+x]);
     };
     flipRows(flat);
-    flipRows(heights);
     std::vector<float> hf(flat.pixels.size()), scratch(hf.size());
-    for (std::size_t i = 0; i < hf.size(); ++i) hf[i] = (heights.pixels[i] & 255) / 255.f;
+    for (std::uint32_t y = 0; y < height; ++y) {
+        const auto* src = heights.pixels.data() + (height - 1 - y) * width;
+        auto* dst = hf.data() + y * width;
+        for (std::uint32_t x = 0; x < width; ++x) dst[x] = (src[x] & 255) / 255.f;
+    }
     ws_knit_blur(hf.data(), static_cast<int>(width), static_cast<int>(height), scratch.data());
     ws_knit_blur(hf.data(), static_cast<int>(width), static_cast<int>(height), scratch.data());
     (stitchHeight ? ws_knit_albedo : ws_knit_shade)(&material, raised, l.raster_scale, hf.data(),
         flat.pixels.data(), static_cast<int>(width), static_cast<int>(height), flat.pixels.data());
     flipRows(flat);
     if (stitchHeight) {
-        *stitchHeight = {width, height, width * 4, std::vector<std::uint32_t>(hf.size())};
-        for (std::size_t i = 0; i < hf.size(); ++i) {
-            auto v = static_cast<std::uint32_t>(std::lround(std::clamp(hf[i], 0.f, 1.f) * 255.f));
-            stitchHeight->pixels[i] = 0xff000000u | v << 16 | v << 8 | v;
+        for (std::uint32_t y = 0; y < height; ++y) {
+            const auto* src = hf.data() + (height - 1 - y) * width;
+            auto* dst = heights.pixels.data() + y * width;
+            for (std::uint32_t x = 0; x < width; ++x) {
+                auto v = static_cast<std::uint32_t>(std::lround(std::clamp(src[x], 0.f, 1.f) * 255.f));
+                dst[x] = 0xff000000u | v << 16 | v << 8 | v;
+            }
         }
-        flipRows(*stitchHeight);
+        *stitchHeight = std::move(heights);
     }
     return flat;
 }
