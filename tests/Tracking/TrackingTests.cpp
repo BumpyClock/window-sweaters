@@ -213,8 +213,7 @@ void ReuseAndReorderedNotifications() {
     TrackingModel model{DefaultPolicy()};
     auto window = Window();
     const auto oldId = model.Observe(window, Dirty::Lifecycle, 100)[0].target;
-    // Notification order is not evidence of death: a late DESTROY queries a live target.
-    Expect(model.Observe(window, Dirty::Lifecycle, 110), {});
+    Check(model.Observe(window, Dirty::Lifecycle, 110).empty(), "Late DESTROY cannot remove a live target");
     Expect(model.Observe(window, Dirty::Lifecycle, 120, 90), {});
     Check(model.Current(100) == oldId, "Late CREATE cannot replace existing generation");
     window.identity.pid = 201;

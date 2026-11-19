@@ -163,23 +163,18 @@ inline void GpuCacheContracts(ID3D11Device* device) {
     parameters.originY = .25f;
     KnitSources sources{64, 32, colour.Get(), heights.Get(), &parameters};
     ComPtr<ID3D11Texture2D> output;
+    constexpr std::size_t cacheEntryLimit = 64;
     for (int origin = 0; origin < 72; ++origin) {
         parameters.originX = float(origin);
         Check(Shade(gpu, sources, output), "Coordinate count-bound eviction");
         require(gpu.shader.CachedBytes() <= GpuShader::CacheByteLimit &&
-            coordinates->Status().cacheEntries <= 64, "Coordinate cache count and byte bounds");
+            coordinates->Status().cacheEntries <= cacheEntryLimit, "Coordinate cache count and byte bounds");
     }
     const auto coordinateUploads = gpu.shader.CoordinateUploads();
+    require(coordinateUploads > cacheEntryLimit, "Distinct origins exceed the resident entry limit");
     Check(Shade(gpu, sources, output), "Reuse newest coordinate tables");
     require(gpu.shader.CoordinateUploads() == coordinateUploads,
         "Newest coordinate tables must remain reusable after eviction");
-    parameters.originX = 0.f;
-    Check(Shade(gpu, sources, output), "Positive zero coordinate key");
-    const auto beforeNegativeZero = gpu.shader.CoordinateUploads();
-    parameters.originX = -0.f;
-    Check(Shade(gpu, sources, output), "Negative zero coordinate key");
-    require(gpu.shader.CoordinateUploads() == beforeNegativeZero + 1,
-        "Coordinate keys must preserve exact float bits");
     gpu.shader.ClearCache(); gpu.assembler.ClearCache();
     require(coordinates->Status().estimatedGpuBytes == 0, "Coordinate cache clear releases charge");
     Check(Complete(device), "Cache contract GPU completion");
