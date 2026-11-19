@@ -400,10 +400,32 @@ void AboveWireLimit(std::filesystem::path const& root) {
     auto saved=Edit(server,Observe(server),AddPng{"large-local",png.native()});
     Check(saved.status==Status::saved && Bytes(Storage(directory).File()).size()>maximum_payload_bytes &&
         Encode(saved).size()<1024,"Validated PNG above 1 MiB is durably owned without increasing 1 MiB IPC frame bound");
-    auto loaded=Storage(directory).Load();
+    Storage storage(directory);
+    auto loaded=storage.Load();
     Check(loaded.state==StorageState::ready && loaded.catalogue->Charts()[0].Data().EncodedPng().size()==bytes.size(),
         "Bounded full disk envelope restores encoded blob above IPC limit");
     server.Stop();
+
+    auto original=Bytes(storage.File());
+    Check(storage.Save(loaded.configuration,loaded.catalogue)==ERROR_SUCCESS && Bytes(storage.File())==original,
+        "Saving an unchanged restored catalogue preserves the complete record byte for byte");
+    auto reject=[&](std::vector<char> damaged,char const* label) {
+        WriteRecord(storage.File(),std::move(damaged));
+        auto before=Bytes(storage.File());
+        Check(storage.Save(loaded.configuration,loaded.catalogue)==ERROR_INVALID_DATA &&
+            Bytes(storage.File())==before,label);
+    };
+    constexpr std::size_t frame_offset=12;
+    Message record; record.configuration=loaded.configuration;
+    auto damaged=original;
+    auto chart_section=std::span(damaged).first(damaged.size()-sizeof(std::uint32_t)).subspan(frame_offset+Encode(record).size());
+    auto& last_png_checksum_byte=chart_section.back();
+    last_png_checksum_byte^=1;
+    reject(std::move(damaged),"Matching chart descriptors do not authorize replacing a damaged saved PNG");
+    ++record.configuration.imports.charts.front().width;
+    auto frame=Encode(record);
+    std::transform(frame.begin(),frame.end(),original.begin()+frame_offset,[](std::byte b){return std::to_integer<char>(b);});
+    reject(std::move(original),"Matching PNG bytes do not authorize replacing inconsistent saved chart metadata");
 }
 }
 int RunImportsTests(std::filesystem::path const& root) {

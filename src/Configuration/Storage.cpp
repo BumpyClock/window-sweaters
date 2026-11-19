@@ -3,6 +3,7 @@
 #include <array>
 #include <algorithm>
 #include <bit>
+#include <optional>
 #include <shlobj.h>
 
 namespace window_sweaters::configuration {
@@ -33,21 +34,44 @@ std::wstring UniqueSuffix() {
     for (auto byte:identity) { text+=hex[byte>>4]; text+=hex[byte&15]; }
     return text;
 }
+struct ValidatedChartSection {
+    CatalogueSnapshot snapshot;
+    std::span<const std::byte> bytes;
+};
+CatalogueSnapshot RestoreChartSection(std::span<const std::byte> section, contracts::ImportPreferences const& preferences,
+    std::optional<ValidatedChartSection> const& validated) {
+    if (validated && std::ranges::equal(section,validated->bytes) && ValidImportState(preferences,*validated->snapshot))
+        return validated->snapshot;
+
+    contracts::payload::Reader reader(section);
+    imports::StoredCatalogue stored;
+    auto rules=imports::ParseRules(preferences.document);
+    auto parsed=std::get_if<imports::ParsedRules>(&rules);
+    std::uint64_t high{},count{};
+    if (!parsed || !reader.Number(high,8) || !reader.Number(count) || count>imports::maximum_effective_charts) return {};
+    stored.rules=*parsed; stored.revision_high_water=high;
+    for (std::size_t i=0;i<count;++i) {
+        imports::StoredChart c; std::uint64_t flags{},corner{},cuff{},length{};
+        if (!contracts::payload::Utf8(reader,c.id,80) || !contracts::payload::Utf8(reader,c.name,63) ||
+            !contracts::payload::Utf8(reader,c.revision,71) || !reader.Number(c.content_revision,8) ||
+            !reader.Number(flags) || !reader.Number(corner) || !reader.Number(cuff) ||
+            !reader.Number(length) || !length || length>imports::maximum_png_bytes ||
+            length>reader.bytes.size()-reader.offset) return {};
+        c.material={static_cast<std::uint32_t>(flags),static_cast<std::uint32_t>(corner),static_cast<std::uint32_t>(cuff)};
+        c.encoded_png.reserve(static_cast<std::size_t>(length));
+        for (std::size_t j=0;j<length;++j)
+            c.encoded_png.push_back(std::to_integer<std::uint8_t>(reader.bytes[reader.offset++]));
+        stored.charts.push_back(std::move(c));
+    }
+    auto restored=imports::RestoreCatalogue(stored);
+    auto catalogue=std::get_if<imports::ImportCatalogue>(&restored);
+    if (!reader.Done() || !catalogue || !ValidImportState(preferences,*catalogue)) return {};
+    return std::make_shared<const imports::ImportCatalogue>(std::move(*catalogue));
 }
-std::filesystem::path DefaultStorageDirectory() {
-    PWSTR path=nullptr;
-    auto hr=SHGetKnownFolderPath(FOLDERID_LocalAppData,KF_FLAG_DEFAULT,nullptr,&path);
-    if (FAILED(hr)) throw std::runtime_error("Cannot locate local application data");
-    std::filesystem::path result(path);
-    CoTaskMemFree(path);
-    return result/L"WindowSweaters";
-}
-Storage::Storage(std::filesystem::path directory)
-    : directory_(directory.empty()?DefaultStorageDirectory():std::filesystem::absolute(directory).lexically_normal()) {}
-LoadedConfiguration Storage::Load() const noexcept {
+LoadedConfiguration LoadRecord(Storage const& storage, std::optional<ValidatedChartSection> const& validated = std::nullopt) noexcept {
     LoadedConfiguration result;
     try {
-        Handle file(CreateFileW(File().c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,
+        Handle file(CreateFileW(storage.File().c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,
                                 nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));
         if (!file) {
             result.error=GetLastError();
@@ -121,37 +145,11 @@ LoadedConfiguration Storage::Load() const noexcept {
                 result.state=StorageState::corrupt; return result;
             }
             if (schema>=5) {
-                contracts::payload::Reader reader(std::span<const std::byte>(bytes).subspan(
-                    12+static_cast<std::size_t>(frame_length),bytes.size()-16-static_cast<std::size_t>(frame_length)));
-                imports::StoredCatalogue stored;
-                auto rules=imports::ParseRules(decoded.configuration.imports.document);
-                auto parsed=std::get_if<imports::ParsedRules>(&rules);
-                std::uint64_t high{},count{};
-                if (!parsed || !reader.Number(high,8) || !reader.Number(count) || count>imports::maximum_effective_charts) {
-                    result.state=StorageState::corrupt; return result;
-                }
-                stored.rules=*parsed; stored.revision_high_water=high;
-                for (std::size_t i=0;i<count;++i) {
-                    imports::StoredChart c; std::uint64_t flags{},corner{},cuff{},length{};
-                    if (!contracts::payload::Utf8(reader,c.id,80) || !contracts::payload::Utf8(reader,c.name,63) ||
-                        !contracts::payload::Utf8(reader,c.revision,71) || !reader.Number(c.content_revision,8) ||
-                        !reader.Number(flags) || !reader.Number(corner) || !reader.Number(cuff) ||
-                        !reader.Number(length) || !length || length>imports::maximum_png_bytes ||
-                        length>reader.bytes.size()-reader.offset) {
-                        result.state=StorageState::corrupt; return result;
-                    }
-                    c.material={static_cast<std::uint32_t>(flags),static_cast<std::uint32_t>(corner),static_cast<std::uint32_t>(cuff)};
-                    c.encoded_png.reserve(static_cast<std::size_t>(length));
-                    for (std::size_t j=0;j<length;++j)
-                        c.encoded_png.push_back(std::to_integer<std::uint8_t>(reader.bytes[reader.offset++]));
-                    stored.charts.push_back(std::move(c));
-                }
-                auto restored=imports::RestoreCatalogue(stored);
-                auto catalogue=std::get_if<imports::ImportCatalogue>(&restored);
-                if (!reader.Done() || !catalogue || !ValidImportState(decoded.configuration.imports,*catalogue)) {
-                    result.state=StorageState::corrupt; return result;
-                }
-                result.catalogue=std::make_shared<const imports::ImportCatalogue>(std::move(*catalogue));
+                auto chart_section=std::span<const std::byte>(bytes).subspan(
+                    12+static_cast<std::size_t>(frame_length),bytes.size()-16-static_cast<std::size_t>(frame_length));
+                auto catalogue=RestoreChartSection(chart_section,decoded.configuration.imports,validated);
+                if (!catalogue) { result.state=StorageState::corrupt; return result; }
+                result.catalogue=std::move(catalogue);
             }
             result.configuration=std::move(decoded.configuration); return result;
         }
@@ -202,6 +200,20 @@ LoadedConfiguration Storage::Load() const noexcept {
     } catch (...) { result.state=StorageState::io_error; result.error=ERROR_NOT_ENOUGH_MEMORY; }
     return result;
 }
+}
+std::filesystem::path DefaultStorageDirectory() {
+    PWSTR path=nullptr;
+    auto hr=SHGetKnownFolderPath(FOLDERID_LocalAppData,KF_FLAG_DEFAULT,nullptr,&path);
+    if (FAILED(hr)) throw std::runtime_error("Cannot locate local application data");
+    std::filesystem::path result(path);
+    CoTaskMemFree(path);
+    return result/L"WindowSweaters";
+}
+Storage::Storage(std::filesystem::path directory)
+    : directory_(directory.empty()?DefaultStorageDirectory():std::filesystem::absolute(directory).lexically_normal()) {}
+LoadedConfiguration Storage::Load() const noexcept {
+    return LoadRecord(*this);
+}
 DWORD Storage::Save(contracts::Configuration const& value, bool explicit_reset) const noexcept {
     try {
         auto loaded=Load();
@@ -223,25 +235,28 @@ DWORD Storage::Save(contracts::Configuration const& value, CatalogueSnapshot con
         if (std::holds_alternative<imports::Error>(stored)) return ERROR_INVALID_DATA;
         contracts::Message record; record.configuration=value;
         auto payload=contracts::Encode(record);
-        std::vector<std::byte> bytes(12);
+        contracts::payload::Writer writer(maximum_disk_bytes);
+        auto& bytes=writer.bytes;
+        bytes.resize(12);
         bytes.insert(bytes.end(),payload.begin(),payload.end());
-        contracts::payload::Writer charts(maximum_disk_bytes);
+        const auto chart_offset=bytes.size();
         auto const& data=std::get<imports::StoredCatalogue>(stored);
-        charts.Number(*data.revision_high_water,8); charts.Number(data.charts.size());
+        writer.Number(*data.revision_high_water,8); writer.Number(data.charts.size());
         for (auto const& c:data.charts) {
-            contracts::payload::Utf8(charts,c.id,80); contracts::payload::Utf8(charts,c.name,63);
-            contracts::payload::Utf8(charts,c.revision,71); charts.Number(c.content_revision,8);
-            charts.Number(c.material.flags); charts.Number(c.material.corner_argb); charts.Number(c.material.cuff_argb);
-            charts.Number(c.encoded_png.size());
-            if (c.encoded_png.size()>charts.limit-charts.bytes.size()) return ERROR_INVALID_DATA;
+            contracts::payload::Utf8(writer,c.id,80); contracts::payload::Utf8(writer,c.name,63);
+            contracts::payload::Utf8(writer,c.revision,71); writer.Number(c.content_revision,8);
+            writer.Number(c.material.flags); writer.Number(c.material.corner_argb); writer.Number(c.material.cuff_argb);
+            writer.Number(c.encoded_png.size());
+            if (c.encoded_png.size()>writer.limit-bytes.size()) return ERROR_INVALID_DATA;
             auto encoded=std::as_bytes(std::span(c.encoded_png));
-            charts.bytes.insert(charts.bytes.end(),encoded.begin(),encoded.end());
+            bytes.insert(bytes.end(),encoded.begin(),encoded.end());
         }
-        bytes.insert(bytes.end(),charts.bytes.begin(),charts.bytes.end()); bytes.resize(bytes.size()+4);
-        if (bytes.size()>maximum_disk_bytes) return ERROR_INVALID_DATA;
+        if (writer.limit-bytes.size()<4) return ERROR_INVALID_DATA;
+        const auto chart_size=bytes.size()-chart_offset;
+        bytes.resize(bytes.size()+4);
         Put(bytes,0,0x31435357,4); Put(bytes,4,value.schema,4); Put(bytes,8,bytes.size(),4);
         Put(bytes,bytes.size()-4,Crc(std::span(bytes).first(bytes.size()-4)),4);
-        auto existing=Load();
+        auto existing=LoadRecord(*this,ValidatedChartSection{catalogue,std::span(bytes).subspan(chart_offset,chart_size)});
         if (existing.state==StorageState::io_error) return existing.error;
         if (existing.state!=StorageState::ready && !explicit_reset) return ERROR_INVALID_DATA;
         std::error_code error;
