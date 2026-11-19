@@ -132,14 +132,6 @@ AppMetadata::AppMetadata(AppIdentity identity, MetadataProvenance provenance, st
       displayProvenance_(displayProvenance), executableAlias_(std::move(executableAlias)),
       executableSource_(std::move(executableSource)) {}
 
-AppMetadata AppMetadata::WithVerifiedProcessSource(const AppMetadata& process) const {
-    auto result = *this;
-    if (process.Provenance() == MetadataProvenance::ProcessApplicationId &&
-        identity_ == process.Identity() && !process.ExecutableSource().empty())
-        result.executableSource_ = std::wstring(process.ExecutableSource());
-    return result;
-}
-
 std::size_t AppMetadata::RetainedBytes() const noexcept {
     return sizeof(AppMetadata) + sizeof(wchar_t) * (identity_.Key().capacity() + 1 +
         displayName_.capacity() + 1 + (executableAlias_ ? executableAlias_->capacity() + 1 : 0) +

@@ -114,17 +114,18 @@ MetadataResult ResolveWindowOwnerMetadata(
     const auto& root = std::get<AppMetadata>(rootProcess);
     if (root.Provenance() == MetadataProvenance::WindowApplicationId)
         return WindowFailure(UnavailableReason::InvalidMetadata, QueryStage::Resolver);
-    // Unpackaged apps may set an explicit window AUMID (Chromium: "MSEdge.udd.Default") that names no package.
-    const auto* packaged = std::get_if<PackagedAumid>(&windowApplicationId);
-    if (auto identity = packaged ? AppIdentity::FromPackagedAumid(packaged->value) : std::nullopt) {
-        const bool packagedRoot = root.Identity().Kind() == IdentityKind::PackagedAumid;
-        if (packagedRoot && root.Identity() != *identity)
-            return WindowFailure(UnavailableReason::ConflictingOwner, QueryStage::WindowApplicationId);
-        auto alias = packagedRoot ? root.ExecutableAlias() : std::nullopt;
-        auto display = alias ? *alias : identity->Key().substr(identity->Key().find(L'!') + 1);
+    const auto* windowAumid = std::get_if<PackagedAumid>(&windowApplicationId);
+    if (auto identity = windowAumid ? AppIdentity::FromPackagedAumid(windowAumid->value) : std::nullopt) {
+        if (root.Identity().Kind() == IdentityKind::PackagedAumid) {
+            if (root.Identity() != *identity)
+                return WindowFailure(UnavailableReason::ConflictingOwner, QueryStage::WindowApplicationId);
+            auto owner = root;
+            owner.provenance_ = MetadataProvenance::WindowApplicationId;
+            return owner;
+        }
+        auto display = identity->Key().substr(identity->Key().find(L'!') + 1);
         return AppMetadata(std::move(*identity), MetadataProvenance::WindowApplicationId,
-            std::move(display), alias ? DisplayNameProvenance::ExecutableBasename :
-            DisplayNameProvenance::PackageRelativeApplicationId, std::move(alias));
+            std::move(display), DisplayNameProvenance::PackageRelativeApplicationId, std::nullopt);
     }
     const auto hosted = IsSystemFrameHost(root.Identity());
     if (const auto* failure = std::get_if<MetadataUnavailable>(&hosted)) return *failure;
@@ -139,12 +140,14 @@ MetadataResult QueryWindowOwnerMetadata(const TargetToken& expected, WindowOwner
     if (!Matches(std::get<WindowOwnerLifetime>(before), expected))
         return WindowFailure(UnavailableReason::LifetimeMismatch, QueryStage::WindowLifetime);
     const auto applicationId = source.ReadApplicationId(expected);
-    const auto process = source.ReadProcessMetadata(expected.Process());
+    const auto* propertyFailure = std::get_if<MetadataUnavailable>(&applicationId);
+    auto owner = propertyFailure ? MetadataResult{*propertyFailure} :
+        ResolveWindowOwnerMetadata(applicationId, source.ReadProcessMetadata(expected.Process()));
     const auto after = source.ReadLifetime(expected);
     if (const auto* failure = std::get_if<MetadataUnavailable>(&after)) return *failure;
     if (before != after)
         return WindowFailure(UnavailableReason::LifetimeMismatch, QueryStage::WindowLifetime);
-    return ResolveWindowOwnerMetadata(applicationId, process);
+    return owner;
 }
 
 MetadataResult QueryWindowOwnerMetadata(const TargetToken& expected, HANDLE process) {
