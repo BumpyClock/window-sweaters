@@ -134,6 +134,12 @@ void PortableMath() {
     Require(height == expected, "Wrapping separable [1,2,1]/4 blur golden impulse");
     Require(ws_knit_blur(height.data(), 3, 3, scratch.data()) == 1, "Second wrapping blur valid");
     Require(Near(std::accumulate(height.begin(), height.end(), 0.f), 1.f), "Blur preserves energy");
+    for (int width : {1, 2}) {
+        std::array<float, 2> line{1.f, 0.f}, temp{};
+        Require(ws_knit_blur(line.data(), width, 2 / width, temp.data()) == 1
+            && line == std::array<float, 2>{.5f, .5f},
+            "Single-row and single-column blur wrap both taps onto the other pixel");
+    }
     std::array<std::uint32_t, 9> black{}, lit{};
     Require(ws_knit_shade(&raised, 1, 4, height.data(), black.data(), 3, 3, lit.data()) == 1, "Dark raised yarn valid");
     Require((lit[0] & 255) > 0 && Alpha(lit[0]) == 255, "Very dark yarn has upstream lift and opaque output");

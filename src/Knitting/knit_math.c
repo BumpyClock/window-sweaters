@@ -151,18 +151,27 @@ int ws_knit_emit_plain(const ws_knit_gauge* g, const ws_knit_layout* l,
     return 1;
 }
 
+static float blur_sample(float left, float centre, float right) {
+    return (left + 2.f * centre + right) * 0.25f;
+}
+
 int ws_knit_blur(float* a, int w, int h, float* tmp) {
     if (!a || !tmp || a == tmp || w <= 0 || h <= 0 || w > 4096 || h > 4096) return 0;
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            int l = (x - 1 + w) % w, r = (x + 1) % w;
-            tmp[y*w + x] = (a[y*w + l] + 2.f*a[y*w + x] + a[y*w + r]) * 0.25f;
-        }
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            int u = (y - 1 + h) % h, d = (y + 1) % h;
-            a[y*w + x] = (tmp[u*w + x] + 2.f*tmp[y*w + x] + tmp[d*w + x]) * 0.25f;
-        }
+    for (int y = 0; y < h; ++y) {
+        const float* row = a + y*w;
+        float* dst = tmp + y*w;
+        dst[0] = blur_sample(row[w-1], row[0], row[w > 1 ? 1 : 0]);
+        for (int x = 1; x < w-1; ++x)
+            dst[x] = blur_sample(row[x-1], row[x], row[x+1]);
+        if (w > 1) dst[w-1] = blur_sample(row[w-2], row[w-1], row[0]);
+    }
+    for (int y = 0; y < h; ++y) {
+        const float* up = tmp + (y == 0 ? h-1 : y-1)*w;
+        const float* row = tmp + y*w;
+        const float* down = tmp + (y == h-1 ? 0 : y+1)*w;
+        for (int x = 0; x < w; ++x)
+            a[y*w + x] = blur_sample(up[x], row[x], down[x]);
+    }
     return 1;
 }
 

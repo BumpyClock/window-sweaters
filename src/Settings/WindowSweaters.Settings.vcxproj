@@ -50,9 +50,12 @@
   <Import Project="$(DWriteDir)build\Microsoft.WindowsAppSDK.DWrite.targets"/>
   <Import Project="$(RuntimeDir)build\native\Microsoft.WindowsAppSDK.Runtime.targets"/>
   <Import Project="$(CppWinRTPackageDir)build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('$(CppWinRTPackageDir)build\native\Microsoft.Windows.CppWinRT.targets')"/>
+  <PropertyGroup>
+    <SettingsNativeRestoreCommand>nuget restore src\Settings\packages.config -PackagesDirectory src\Settings\.packages -PackageSaveMode 'nuspec;nupkg'</SettingsNativeRestoreCommand>
+  </PropertyGroup>
   <Target Name="RequirePinnedNativeDependencies" BeforeTargets="PrepareForBuild">
-    <Error Condition="!Exists('$(CppWinRTPackageDir)bin\cppwinrt.exe')" Text="Restore pinned native packages: nuget restore src\Settings\packages.config -PackagesDirectory src\Settings\.packages"/>
-    <Error Condition="!Exists('%(NativePackage.Root)%(NativePackage.Identity).nuspec')" Text="Missing exact native package %(NativePackage.Identity) %(NativePackage.Version). Restore src\Settings\packages.config."/>
+    <Error Condition="!Exists('$(CppWinRTPackageDir)bin\cppwinrt.exe')" Text="Missing cppwinrt.exe. From the repository root in PowerShell, run: $(SettingsNativeRestoreCommand)"/>
+    <Error Condition="!Exists('%(NativePackage.Root)%(NativePackage.Identity).nuspec')" Text="Missing manifest for %(NativePackage.Identity) %(NativePackage.Version). From the repository root in PowerShell, run: $(SettingsNativeRestoreCommand)"/>
   </Target>
   <PropertyGroup>
     <SettingsMakePriExe Condition="'$(SettingsMakePriExe)'==''">$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\makepri.exe</SettingsMakePriExe>

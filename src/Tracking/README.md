@@ -117,7 +117,9 @@ predicate used by selection and Start.
 notification processing, settlement, work revalidation, and reconciliation.
 The pure reducer accepts either a complete `AliveWindow`, a
 `DestroyedWindow`, or an `UncertainWindow`. Observations are synchronous
-owner-thread samples, not delayed worker query results.
+owner-thread samples, not delayed worker query results. The reducer evaluates
+the full sample each time but retains only its identity, bounds, DPI, topmost
+band and eligibility result. It does not keep a copy of the window class string.
 
 Supported targets are ordinary, captioned, unowned top-level windows. A `WS_POPUP`
 root qualifies only as an `ApplicationFrameWindow` or with a full system frame

@@ -27,7 +27,7 @@ if (Test-Path -LiteralPath $archiveInventory -PathType Leaf) {
             $_.SHA256 -notmatch '^[A-Fa-f0-9]{64}$') { throw "Invalid/duplicate source inventory entry: $($_.Path)" }
         $expected[$_.Path] = $_.SHA256
         $_.Path
-    })
+    } | Sort-Object)
     $directories = New-Object 'Collections.Generic.Queue[string]'
     $directories.Enqueue($rootPath)
     while ($directories.Count) {
@@ -53,19 +53,16 @@ if (Test-Path -LiteralPath $archiveInventory -PathType Leaf) {
 } else {
     throw 'Corresponding source requires repository .git metadata or packaging\SourceInventory.json from the distributed source archive.'
 }
-$files = @()
-foreach ($relative in @($paths | Sort-Object)) {
-    if (!(Test-SourcePath $relative)) { throw "Unsafe source inventory path: $relative" }
-    $path = Join-Path $rootPath $relative.Replace('/', '\')
-    if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing corresponding source file: $relative" }
-    $item = Get-Item -LiteralPath $path -Force
+$files = @(foreach ($relative in $paths) {
+    $item = [IO.FileInfo]::new([IO.Path]::Combine($rootPath, $relative))
+    if (!$item.Exists) { throw "Missing corresponding source file: $relative" }
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Source file is a reparse point: $relative" }
-    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    $hash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
     if ($ValidateHashes -and $expected.ContainsKey($relative) -and $expected[$relative] -ne $hash) {
         throw "Source archive hash mismatch: $relative"
     }
-    $files += [ordered]@{ Path = $relative; SHA256 = $hash }
-}
+    [ordered]@{ Path = $relative; SHA256 = $hash }
+})
 foreach ($required in @('LICENSE', 'NOTICE.md', 'WindowSweaters.sln', 'src/Host/WindowSweaters.Host.vcxproj',
     'src/Settings/WindowSweaters.Settings.vcxproj', 'scripts/build.ps1', 'scripts/package.ps1',
     'packaging/Package.appxmanifest', 'packaging/WindowSweaters.Package.wapproj', 'packaging/Get-SourceInventory.ps1')) {

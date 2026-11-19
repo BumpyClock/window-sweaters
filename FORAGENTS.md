@@ -4,6 +4,7 @@
 From PowerShell at the repository root:
 
 ```powershell
+nuget restore src\Settings\packages.config -PackagesDirectory src\Settings\.packages -PackageSaveMode 'nuspec;nupkg'
 .\scripts\build.ps1 -Configuration Debug -IncludeFixture
 .\scripts\build.ps1 -Configuration Release -IncludeFixture
 .\scripts\build.ps1 -Configuration Release -Platform ARM64

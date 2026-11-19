@@ -54,42 +54,51 @@ def load_catalogue():
 
 
 def rgb(argb):
-    return (argb >> 16) & 255, (argb >> 8) & 255, argb & 255
+    return bytes(((argb >> 16) & 255, (argb >> 8) & 255, argb & 255))
 
 
 def render(entries, path, cells=96, px=7):
     width = cells * px
-    canvas = []
-    paper, ink = (250, 248, 243), (60, 60, 60)
+    paper, ink = bytes((250, 248, 243)), bytes((60, 60, 60))
+    blank = paper * width
+    compressor = zlib.compressobj(9)
+    compressed = bytearray()
+    height = 0
+
+    def add_rows(pixels, count):
+        nonlocal height
+        scanline = b'\0' + pixels
+        for _ in range(count):
+            compressed.extend(compressor.compress(scanline))
+        height += count
+
     for label, rows, yarn, base in entries:
         unused = sorted({ch for row in rows for ch in row if ch != '.' and ord(ch) - 97 >= len(yarn)})
         if unused:
             sys.exit(f'{label}: cells {", ".join(unused)} have no yarn')
+        palette = {chr(97 + i): rgb(colour) * px for i, colour in enumerate(yarn)}
+        palette['.'] = rgb(base) * px
         for y in range(5):
             line = [paper] * width
             for i, ch in enumerate(label.lower()[:width // 8]):
                 glyph = FONT.get(ch, '0' * 15)
                 for x in range(3):
                     if glyph[y * 3 + x] == '1':
-                        for dx in range(2):
-                            line[4 + i * 8 + x * 2 + dx] = ink
-            canvas += [line, line]
-        canvas += [[paper] * width] * 3
+                        left = 4 + i * 8 + x * 2
+                        for column in range(left, min(left + 2, width)):
+                            line[column] = ink
+            add_rows(b''.join(line), 2)
+        add_rows(blank, 3)
         for row in rows:
-            line = []
-            for x in range(cells):
-                ch = row[x % len(row)]
-                colour = rgb(base if ch == '.' else yarn[ord(ch) - 97])
-                line += [colour] * px
-            canvas += [line] * px
-        canvas += [[paper] * width] * 10
-    raw = b''.join(b'\0' + bytes(c for p in line for c in p) for line in canvas)
+            add_rows(b''.join(palette[row[x % len(row)]] for x in range(cells)), px)
+        add_rows(blank, 10)
+    compressed.extend(compressor.flush())
 
     def chunk(tag, data):
         return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
     pathlib.Path(path).write_bytes(
-        b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, len(canvas), 8, 2, 0, 0, 0))
-        + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
+        b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+        + chunk(b'IDAT', compressed) + chunk(b'IEND', b''))
 
 
 def main():
@@ -100,6 +109,8 @@ def main():
     parser.add_argument('--cells', type=int, default=96, help='stitches per strip')
     parser.add_argument('--px', type=int, default=7, help='pixels per stitch')
     args = parser.parse_args()
+    if args.cells < 1 or args.px < 1:
+        parser.error('--cells and --px must be positive')
     charts, themes = load_catalogue()
     if args.themes:
         known = {t[0] for t in themes}

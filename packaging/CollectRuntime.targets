@@ -4,14 +4,14 @@
     <Error Condition="'$(Platform)' != 'x64' and '$(Platform)' != 'ARM64'" Text="Package runtime collection supports only x64 and ARM64." />
     <PropertyGroup><PackageRuntimeArchitecture>$([System.String]::Copy('$(Platform)').ToLowerInvariant())</PackageRuntimeArchitecture></PropertyGroup>
     <Error Condition="'$(WindowsAppSDKSelfContained)' != 'true'" Text="Settings must use WindowsAppSDKSelfContained=true." />
-    <Error Condition="!Exists('$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec') or !Exists('$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec')" Text="Restore the Settings project's pinned native packages first." />
-    <XmlPeek XmlInputPath="$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='version']/text()">
+    <Error Condition="!Exists('$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec') or !Exists('$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec')" Text="Missing pinned native package manifest. From the repository root in PowerShell, run: $(SettingsNativeRestoreCommand)" />
+    <XmlPeek XmlInputPath="$(AppSDKDir)Microsoft.WindowsAppSDK.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata'][*[local-name()='id']='Microsoft.WindowsAppSDK']/*[local-name()='version']/text()">
       <Output TaskParameter="Result" PropertyName="CollectedAppSDKVersion" />
     </XmlPeek>
-    <XmlPeek XmlInputPath="$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata']/*[local-name()='version']/text()">
+    <XmlPeek XmlInputPath="$(CppWinRTPackageDir)Microsoft.Windows.CppWinRT.nuspec" Query="/*[local-name()='package']/*[local-name()='metadata'][*[local-name()='id']='Microsoft.Windows.CppWinRT']/*[local-name()='version']/text()">
       <Output TaskParameter="Result" PropertyName="CollectedCppWinRTVersion" />
     </XmlPeek>
-    <Error Condition="'$(CollectedAppSDKVersion)' != '2.5.1' or '$(CollectedCppWinRTVersion)' != '2.0.240405.15'" Text="Package runtime collection requires Windows App SDK 2.5.1 and C++/WinRT 2.0.240405.15." />
+    <Error Condition="'$(CollectedAppSDKVersion)' != '2.5.1' or '$(CollectedCppWinRTVersion)' != '2.0.240405.15'" Text="Package manifests must identify Microsoft.WindowsAppSDK 2.5.1 and Microsoft.Windows.CppWinRT 2.0.240405.15. From the repository root in PowerShell, run: $(SettingsNativeRestoreCommand)" />
     <Error Condition="!Exists('$(OutDir)resources.pri')" Text="Settings Release must generate its application resources.pri before packaging. Build the native Settings resource-merge target; do not package only the named runtime PRI files." />
     <ItemGroup>
       <WindowSweatersRuntime Include="@(MicrosoftWindowsAppSDKFiles);@(MicrosoftWindowsAppSDKFilesRes)">

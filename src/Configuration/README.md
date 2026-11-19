@@ -44,6 +44,11 @@ Validated PNG bytes, material, stable IDs, content hashes, numeric revisions and
 the catalogue high-water mark are stored atomically with appearance and exact
 application bindings. Source paths and file identities are not asset references.
 The high-water mark survives removal of every chart and ready-state reset.
+Before replacing a file, the writer still reads and validates the on-disk
+record. If its entire chart section matches the validated outgoing bytes and
+its saved import preferences agree with that catalogue, it reuses the decoded
+charts. A cold read, different chart bytes, or different parsed rules take the
+full restore path using the saved record's rules.
 
 The read-only legacy schema-2 disk record is exactly 120 bytes:
 

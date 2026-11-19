@@ -49,7 +49,7 @@ if ($LASTEXITCODE -ne 0) { throw "Tracking contracts failed: $LASTEXITCODE" }
 foreach ($path in @("out\$Platform\$Configuration\WindowSweaters.Configuration.Tests.exe",
     "tests\Applications\build\$Platform\$Configuration\ApplicationsTests.exe",
     "out\$Platform\$Configuration\HostAppearanceTests.exe",
-    "tests\IconYarn\build\$Platform\$Configuration\IconYarnTests.exe",
+    "out\$Platform\$Configuration\IconYarnTests.exe",
     "out\$Platform\$Configuration\WindowSweaters.ConfigurationHost.Tests.exe",
     "out\$Platform\$Configuration\WindowSweaters.Knitting.Tests.exe",
     "out\RenderQueueTests\$Platform\$Configuration\RenderQueueTests.exe",

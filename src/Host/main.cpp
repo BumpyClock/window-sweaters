@@ -3062,14 +3062,7 @@ void Host::RunConsumerContracts() {
         appearanceChange(iconConfiguration);
         wchar_t self[32768]{};
         require(GetModuleFileNameW(nullptr,self,32768)!=0,"Native icon consumer locates its sibling fixture");
-        auto iconFixture=std::filesystem::path(self).parent_path()/L"IconYarnTests.exe";
-        if (!std::filesystem::is_regular_file(iconFixture)) {
-#ifdef NDEBUG
-            iconFixture=std::filesystem::current_path()/L"tests"/L"IconYarn"/L"build"/L"x64"/L"Release"/L"IconYarnTests.exe";
-#else
-            iconFixture=std::filesystem::current_path()/L"tests"/L"IconYarn"/L"build"/L"x64"/L"Debug"/L"IconYarnTests.exe";
-#endif
-        }
+        const auto iconFixture=std::filesystem::path(self).parent_path()/L"IconYarnTests.exe";
         require(std::filesystem::is_regular_file(iconFixture),
             "Build IconYarnTests before Host contracts: native PE fixture is required, not an optional model pass");
         add(19501); add(19502);

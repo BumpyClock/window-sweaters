@@ -146,9 +146,15 @@ public:
     bool SelectionActive(WindowHandle hwnd) const noexcept;
 
 private:
+    struct RetainedSnapshot {
+        WindowIdentity identity;
+        PhysicalRect rect;
+        std::uint32_t dpi{};
+        bool topmost{};
+    };
     struct Entry {
         TargetId id;
-        AliveWindow snapshot;
+        RetainedSnapshot snapshot;
         Eligibility eligibility{Eligibility::Eligible};
         Milliseconds bornAt{};
         std::optional<Milliseconds> lastSizeChange;

@@ -6,10 +6,13 @@ This Windows Application Packaging Project consumes
 or `ARM64`.
 
 Command-line MSBuild and `scripts\package.ps1` use those prebuilt Release
-artifacts. They do not rebuild, run, or install the apps. Build each native
-architecture with the repository script first.
+artifacts. They do not rebuild, run, or install the apps. From the repository
+root, restore the pinned packages with their manifests, then build each native
+architecture. If a previous restore saved only `.nupkg` files, move the affected
+package directories out of `src\Settings\.packages` before restoring again.
 
 ```powershell
+nuget restore src\Settings\packages.config -PackagesDirectory src\Settings\.packages -PackageSaveMode 'nuspec;nupkg'
 .\scripts\build.ps1 -Configuration Release -Platform x64
 .\scripts\build.ps1 -Configuration Release -Platform ARM64
 .\scripts\package.ps1 -Version 0.2.0.0 -Architectures x64,ARM64 -Bundle
