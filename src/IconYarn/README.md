@@ -179,9 +179,9 @@ Use VS 2026 v145, Windows SDK 10.0.26100.0, C++20/C17, Windows 11 x64:
 
 ```powershell
 & 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe' tests\IconYarn\IconYarnTests.vcxproj /m /p:Platform=x64 /p:Configuration=Debug /v:minimal
-& .\tests\IconYarn\build\x64\Debug\IconYarnTests.exe
+& .\out\x64\Debug\IconYarnTests.exe
 & 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe' tests\IconYarn\IconYarnTests.vcxproj /m /p:Platform=x64 /p:Configuration=Release /v:minimal
-& .\tests\IconYarn\build\x64\Release\IconYarnTests.exe
+& .\out\x64\Release\IconYarnTests.exe
 ```
 
 The project generates a tiny embedded icon from `FixtureIcon.base64` into its own
