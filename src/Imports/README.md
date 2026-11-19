@@ -81,7 +81,9 @@ location must remain a local drive. Local hard links are ordinary files;
 their observed file identity is distinct from imported content identity.
 
 Catalogue candidates are limited to 128 effective charts including built-ins,
-and 16 MiB total encoded PNG plus normalized cells. Rules are bounded by
+and 16 MiB total encoded PNG plus normalized cells. An edit shares unchanged
+chart bytes with the previous snapshot. Each snapshot still counts those bytes
+in full against its limit and remains valid after the other is released. Rules are bounded by
 64 KiB, 64 entries, and the original 511-byte physical line buffer. Verified
 metadata snapshots are bounded by 4,096 entries/4 MiB retained data, and the
 entire resolution output by 4 MiB, including repeated ambiguous identities.
