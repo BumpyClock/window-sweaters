@@ -142,14 +142,17 @@ void Fit(std::vector<Yarn>& yarns, double base, const std::vector<std::vector<do
     const auto try_move = [&](std::size_t j) {
         const auto& y = yarns[j];
         std::optional<Move> best;
+        constexpr double max_separation_score = 10.0;
         for (double dl : lightness_steps) for (double dh : hue_steps) for (double dc : chroma_steps) {
             const double L = y.L + dl, h = y.h + dh;
             if (L < darkest || L > lightest || std::abs(L - base) < minimum_contrast) continue;
+            const double penalty = std::abs(dl) * 2 + std::abs(dh) / 120 + dc;
+            if (best && max_separation_score - penalty <= best->score) continue;
             const double C = ClampChroma(L, y.C + dc, h);
             double nearest = 1e9;
             for (std::size_t k = 0; k < yarns.size(); ++k)
                 if (k != j) nearest = std::min(nearest, DeltaE(L, C, h, yarns[k].L, yarns[k].C, yarns[k].h) / need(k, j));
-            const double score = std::min(nearest, 1.0) * 10 - (std::abs(dl) * 2 + std::abs(dh) / 120 + dc);
+            const double score = std::min(nearest, 1.0) * max_separation_score - penalty;
             if (!best || score > best->score) best = Move{score, L, C, h};
         }
         return best;
