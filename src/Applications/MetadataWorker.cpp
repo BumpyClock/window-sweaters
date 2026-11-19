@@ -1,5 +1,4 @@
 #include "MetadataWorker.h"
-#include "ProcessMetadata.h"
 
 #include <algorithm>
 #include <objbase.h>
@@ -64,15 +63,7 @@ MetadataWorker::MetadataWorker(WorkerLimits limits, Query query, LifetimeQuery l
         lifetime_ = std::move(lifetime);
     } else {
         query_ = [](const TargetToken& token) {
-            auto owner = QueryWindowOwnerMetadata(token);
-            auto* known = std::get_if<AppMetadata>(&owner);
-            if (known && known->Identity().Kind() == IdentityKind::PackagedAumid &&
-                known->ExecutableSource().empty()) {
-                const auto process = QueryProcessMetadata(token.Process());
-                if (const auto* root = std::get_if<AppMetadata>(&process))
-                    *known = known->WithVerifiedProcessSource(*root);
-            }
-            return owner;
+            return QueryWindowOwnerMetadata(token);
         };
         lifetime_ = QueryWindowOwnerLifetime;
     }

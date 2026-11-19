@@ -10,7 +10,8 @@ namespace window_sweaters::imports {
 ImportedChart::ImportedChart(std::string id, std::string name, std::string revision,
     DecodedChart data, Material material, std::uint64_t content_revision)
     : id_(std::move(id)), name_(std::move(name)), revision_(std::move(revision)),
-      data_(std::move(data)), material_(material), content_revision_(content_revision) {}
+      data_(std::make_shared<const DecodedChart>(std::move(data))),
+      material_(material), content_revision_(content_revision) {}
 
 const ImportedChart* ImportCatalogue::FindById(std::string_view id) const noexcept {
     for (const auto& chart : charts_) if (chart.Id() == id) return &chart;

@@ -9,8 +9,8 @@ PID-only identity query. This prevents legacy packaged windows sharing the syste
 - Read `PKEY_AppUserModel_ID` through the public `SHGetPropertyStoreForWindow` and `IPropertyStore::GetValue`
   APIs. Only bounded, validated packaged `PFN!PRAID` values become packaged identities, with
   `MetadataProvenance::WindowApplicationId`. This is source provenance, not publisher or package-registration proof.
-- A matching packaged root process can supply its existing executable alias. The frame host's image
-  never supplies a hosted application's alias or display name.
+- A matching packaged root supplies its executable alias and any verified icon source from the same
+  process lookup. An unpackaged frame host supplies neither its alias nor its image to a hosted app.
 - An absent property permits the existing process metadata for standalone owners. The system frame
   host is recognized by its full normalized `GetSystemDirectoryW` path, never by basename. Without a
   verified window identity it returns `OwnerUnverified`, not the host executable's identity.
@@ -19,7 +19,8 @@ PID-only identity query. This prevents legacy packaged windows sharing the syste
   internal IDs or inspect child windows/processes. Unsupported hosted owners remain unavailable.
 
 Queries validate the root HWND, owning PID, complete process birth time and non-exited state before
-and after metadata lookup. Thread ID and class atom must also remain stable. The process handle is
+and after metadata lookup. A failed window property read skips process metadata, not the final
+lifetime check. Thread ID and class atom must also remain stable. The process handle is
 held for the native lookup. There is no public atomic HWND incarnation lease: `CompletionGate` must
 still compare the current tracker generation and configuration revision before accepting a result.
 No titles, window mutation, private shell APIs, icon/resource reads, injection or user-app enumeration

@@ -73,15 +73,12 @@ void SaltAndPreview() {
     auto process=applications::ResolveMetadata(applications::PackagedAumid{packageA.Key()},
         applications::ExecutablePath{L"C:\\Private\\App.exe"});
     const auto& metadata=std::get<applications::AppMetadata>(process);
-    Check(metadata.ExecutableSource()==L"C:\\Private\\App.exe" &&
-        metadata.WithVerifiedProcessSource(metadata).ExecutableSource()==metadata.ExecutableSource(),
+    Check(metadata.ExecutableSource()==L"C:\\Private\\App.exe",
         "Verified standalone package process retains bounded transient full image source");
     auto other=applications::ResolveMetadata(applications::PackagedAumid{packageB.Key()},
         applications::ExecutablePath{L"C:\\Windows\\System32\\ApplicationFrameHost.exe"});
     Check(std::get<applications::AppMetadata>(other).ExecutableSource().empty(),
         "ApplicationFrameHost is never a packaged application's icon source");
-    Check(metadata.WithVerifiedProcessSource(std::get<applications::AppMetadata>(other)).ExecutableSource()==
-        metadata.ExecutableSource(),"A different hosted identity cannot substitute its executable source");
     auto zigzag=Configuration{};
     zigzag.design_selection=DesignSelection::shared_zigzag;
     Check(Valid(zigzag) && PerApplication(zigzag.design_selection) &&

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -133,7 +134,7 @@ public:
     const std::string& Name() const noexcept { return name_; }
     const std::string& Revision() const noexcept { return revision_; }
     std::uint64_t ContentRevision() const noexcept { return content_revision_; }
-    const DecodedChart& Data() const noexcept { return data_; }
+    const DecodedChart& Data() const noexcept { return *data_; }
     const Material& SourceMaterial() const noexcept { return material_; }
     bool Custom() const noexcept { return true; }
     bool Generated() const noexcept { return false; }
@@ -142,7 +143,7 @@ private:
     ImportedChart(std::string id, std::string name, std::string revision,
                   DecodedChart data, Material material, std::uint64_t content_revision);
     std::string id_, name_, revision_;
-    DecodedChart data_;
+    std::shared_ptr<const DecodedChart> data_;
     Material material_;
     std::uint64_t content_revision_;
 };

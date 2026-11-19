@@ -503,6 +503,11 @@ void CandidateTest() {
         "Explicit remove returns an empty candidate");
     const auto with_rules = Value(BuildCandidate(committed,
         SetRules{Value(ParseRules("Claude = #123456 personal\n"))}));
+    const auto& retained = with_rules.Charts()[0].Data();
+    const auto& previous = committed.Charts()[0].Data();
+    Check(retained.Cells().data() == previous.Cells().data() &&
+        retained.EncodedPng().data() == previous.EncodedPng().data(),
+        "A rules-only candidate retains the chart without duplicating its pixel and PNG buffers");
     Reject(BuildCandidate(with_rules, RemoveChart{original.Id()}), ErrorCode::UnknownChart,
         "Removing a referenced chart fails without changing committed rules or chart");
     Reject(BuildCandidate(committed, SetRules{Value(ParseRules("Claude = #123456 unknown\n"))}),

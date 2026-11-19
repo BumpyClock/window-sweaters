@@ -198,7 +198,7 @@ void WindowOwnerTests() {
     const auto& one = std::get<AppMetadata>(calculator);
     Check(one.Identity() == Package() && one.Provenance() == MetadataProvenance::WindowApplicationId,
         "root window property has explicit supported per-window identity provenance");
-    Check(one.DisplayName() == L"App" && !one.ExecutableAlias() &&
+    Check(one.DisplayName() == L"App" && !one.ExecutableAlias() && one.ExecutableSource().empty() &&
         one.DisplayProvenance() == DisplayNameProvenance::PackageRelativeApplicationId,
         "frame host executable is not fabricated hosted-app display or alias");
     Check(first.lifetimeReads == 2 && first.applicationReads == 1 && first.processReads == 1,
@@ -228,6 +228,11 @@ void WindowOwnerTests() {
         static_cast<std::uint32_t>(E_ACCESSDENIED)};
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(denied, Metadata())) == denied,
         "property failure does not downgrade to root process executable");
+    FixtureOwnerSource deniedProperty(token);
+    deniedProperty.application = denied;
+    Check(std::get<MetadataUnavailable>(QueryWindowOwnerMetadata(token, deniedProperty)) == denied &&
+        deniedProperty.processReads == 0 && deniedProperty.lifetimeReads == 2,
+        "property failure avoids root process lookup but still confirms the window lifetime");
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{L"bad"}, first.root)).reason ==
         UnavailableReason::OwnerUnverified, "non-package shell property on a frame host fails closed");
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(PackagedAumid{std::wstring(131, L'a')},
@@ -240,8 +245,11 @@ void WindowOwnerTests() {
     const auto packagedRoot = ResolveMetadata(PackagedAumid{Package().Key()},
         ExecutablePath{L"C:\\Packages\\Calculator.exe"});
     const auto agreed = ResolveWindowOwnerMetadata(PackagedAumid{Package().Key()}, packagedRoot);
-    Check(std::get<AppMetadata>(agreed).ExecutableAlias() == L"Calculator.exe",
-        "matching packaged process retains genuinely known executable alias");
+    const auto& agreedOwner = std::get<AppMetadata>(agreed);
+    Check(agreedOwner.Provenance() == MetadataProvenance::WindowApplicationId &&
+        agreedOwner.ExecutableAlias() == L"Calculator.exe" &&
+        agreedOwner.ExecutableSource() == L"C:\\Packages\\Calculator.exe",
+        "matching window identity retains alias and verified source from the same root lookup");
     Check(std::get<MetadataUnavailable>(ResolveWindowOwnerMetadata(
         PackagedAumid{L"Microsoft.WindowsCalculator_8wekyb3d8bbwe!Other"}, packagedRoot)).reason ==
         UnavailableReason::ConflictingOwner, "conflicting packaged process/window facts remain ambiguous");

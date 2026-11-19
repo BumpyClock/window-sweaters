@@ -313,8 +313,6 @@ Result<DecodedChart> DecodePng(std::span<const std::uint8_t> encoded) {
         auto hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
             IID_PPV_ARGS(&factory));
         if (FAILED(hr)) return DecodeError(hr, "WIC factory creation failed");
-        DecodedChart result;
-        result.encoded_.assign(encoded.begin(), encoded.end());
         auto codec_bytes = PixelOnlyPng(encoded);
         ComPtr<IWICStream> stream;
         hr = factory->CreateStream(&stream);
@@ -373,6 +371,7 @@ Result<DecodedChart> DecodePng(std::span<const std::uint8_t> encoded) {
         std::vector<std::uint8_t> rgba(static_cast<std::size_t>(count * 4));
         hr = converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(rgba.size()), rgba.data());
         if (FAILED(hr)) return DecodeError(hr, "WIC PNG pixels are truncated or malformed");
+        DecodedChart result;
         result.width_ = width; result.height_ = height;
         result.cells_.reserve(static_cast<std::size_t>(count));
         std::set<std::uint32_t> yarns;
@@ -388,6 +387,7 @@ Result<DecodedChart> DecodePng(std::span<const std::uint8_t> encoded) {
         }
         auto hash = detail::HashContent(width, height, result.cells_, {});
         if (const auto* error = std::get_if<Error>(&hash)) return *error;
+        result.encoded_.assign(encoded.begin(), encoded.end());
         result.content_hash_ = std::get<std::string>(std::move(hash));
         return result;
     });

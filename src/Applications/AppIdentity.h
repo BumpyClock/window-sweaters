@@ -76,7 +76,6 @@ public:
         if (identity_.Kind() == IdentityKind::NormalizedExecutablePath) return identity_.Key();
         return executableSource_ ? std::wstring_view(*executableSource_) : std::wstring_view{};
     }
-    AppMetadata WithVerifiedProcessSource(const AppMetadata& process) const;
     std::size_t RetainedBytes() const noexcept;
 
 private:
